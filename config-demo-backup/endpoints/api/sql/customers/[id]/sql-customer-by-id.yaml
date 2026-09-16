@@ -1,0 +1,26 @@
+id: sql-customer-by-id
+description: Fetch a single customer from the demo SQLite database.
+method: GET
+path: /api/sql/customers/:id
+input:
+  - name: id
+    in: path
+    required: true
+    type: string
+backend:
+  type: sql
+  gateway: demoDb
+  query: SELECT id, first_name, last_name, city, country, status FROM customers WHERE id = :id
+output:
+  fields:
+    - target: customerId
+      source: $[0].id
+    - target: name.first
+      source: $[0].first_name
+    - target: name.last
+      source: $[0].last_name
+    - target: location.city
+      source: $[0].city
+    - target: active
+      source: $[0].status
+      transform: toString

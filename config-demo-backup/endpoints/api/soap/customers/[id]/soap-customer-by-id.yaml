@@ -1,0 +1,26 @@
+id: soap-customer-by-id
+description: Fetch a single customer from the demo SOAP backend.
+method: GET
+path: /api/soap/customers/:id
+input:
+  - name: id
+    in: path
+    required: true
+    type: string
+backend:
+  type: soap
+  gateway: crmSoap
+  operation: GetCustomer
+  args:
+    CustomerId: '{id}'
+  timeoutMs: 15000
+output:
+  fields:
+    - target: customerId
+      source: $.CustomerId
+    - target: name.first
+      source: $.FirstName
+    - target: name.last
+      source: $.LastName
+    - target: location.city
+      source: $.City

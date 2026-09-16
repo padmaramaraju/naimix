@@ -1,0 +1,20 @@
+id: json-customers-list
+description: List all customers from the demo JSON REST backend.
+method: GET
+path: /api/json/customers
+input: []
+backend:
+  type: json
+  gateway: crmJson
+  url: /customers
+  method: GET
+  timeoutMs: 10000
+output:
+  root: $[*]
+  fields:
+    - target: id
+      source: $.id
+    - target: name
+      source: $.firstName
+    - target: city
+      source: $.city

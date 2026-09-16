@@ -1,0 +1,30 @@
+id: xml-customer-by-id
+description: Fetch a single customer from the demo XML backend.
+method: GET
+path: /api/xml/customers/:id
+input:
+  - name: id
+    in: path
+    required: true
+    type: string
+backend:
+  type: xml
+  gateway: crmXml
+  url: /customers/{id}/xml
+  method: GET
+  timeoutMs: 10000
+output:
+  fields:
+    - target: customerId
+      source: $.customer.id
+    - target: name.first
+      source: $.customer.firstName
+    - target: name.last
+      source: $.customer.lastName
+    - target: location.city
+      source: $.customer.address.city
+    - target: location.country
+      source: $.customer.address.country
+    - target: status
+      source: $.customer.status
+      transform: lower

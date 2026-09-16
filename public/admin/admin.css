@@ -1,0 +1,385 @@
+/* ------------------------------------------------------------------
+ * Theme
+ *
+ * Light palette lives on bare :root (the default, and also what a
+ * system with light mode gets). Dark overrides come in two layers:
+ *   1. prefers-color-scheme, guarded so it never fires once the user
+ *      has picked an explicit theme (:root:not([data-theme]))
+ *   2. an explicit [data-theme="dark"] override, so the in-page
+ *      toggle always wins over the OS setting either way.
+ * ------------------------------------------------------------------ */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --surface-raised: #ffffff;
+  --sidebar-bg: #eef0f4;
+  --border: #dfe3e9;
+  --border-strong: #c7cdd6;
+  --text: #1a1d23;
+  --muted: #6b7280;
+  --primary: #2f5fdb;
+  --primary-hover: #2549ab;
+  --primary-tint: #eaf0ff;
+  --danger: #c8342c;
+  --danger-bg: #fdeceb;
+  --success: #1e7a34;
+  --success-bg: #e6f4ea;
+  --code-bg: #f0f2f6;
+  --shadow: 0 8px 24px rgba(20, 24, 32, 0.10);
+  --radius: 10px;
+  --radius-sm: 7px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161a;
+    --surface: #1c1f26;
+    --surface-raised: #23262f;
+    --sidebar-bg: #191c22;
+    --border: #2c313b;
+    --border-strong: #3a404d;
+    --text: #e7e9ee;
+    --muted: #9aa1ac;
+    --primary: #729bff;
+    --primary-hover: #8fb0ff;
+    --primary-tint: #202a42;
+    --danger: #ff6b64;
+    --danger-bg: #3a2020;
+    --success: #6bd98a;
+    --success-bg: #123522;
+    --code-bg: #12141a;
+    --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1c1f26;
+  --surface-raised: #23262f;
+  --sidebar-bg: #191c22;
+  --border: #2c313b;
+  --border-strong: #3a404d;
+  --text: #e7e9ee;
+  --muted: #9aa1ac;
+  --primary: #729bff;
+  --primary-hover: #8fb0ff;
+  --primary-tint: #202a42;
+  --danger: #ff6b64;
+  --danger-bg: #3a2020;
+  --success: #6bd98a;
+  --success-bg: #123522;
+  --code-bg: #12141a;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  color-scheme: dark;
+}
+
+/* Must beat other same-specificity display rules (e.g. .login-screen, .app,
+   .drawer) in the cascade -- otherwise an element can keep the `hidden`
+   attribute set by JS and still render. */
+[hidden] { display: none !important; }
+
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+h1, h2, h3, h4 { margin: 0 0 8px; font-weight: 600; }
+.muted { color: var(--muted); }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+
+/* Login */
+.login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.login-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 32px; width: 320px; display: flex; flex-direction: column; gap: 12px;
+  box-shadow: var(--shadow);
+}
+.login-card input { padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+
+/* ------------------------------------------------------------------
+ * Overall app shell: topbar + workspace bar (fixed height), then a
+ * flex row of sidebar (list) + detail panel that fills the rest of
+ * the viewport and scrolls independently.
+ * ------------------------------------------------------------------ */
+.app { height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.topbar {
+  display: flex; align-items: center; gap: 24px; padding: 12px 20px; flex: 0 0 auto;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 600; flex: 1; }
+.topbar-actions { display: flex; align-items: center; gap: 8px; }
+
+.workspace-bar {
+  display: flex; align-items: center; gap: 10px; padding: 8px 20px; flex: 0 0 auto;
+  background: var(--code-bg); border-bottom: 1px solid var(--border); font-size: 12px;
+}
+.workspace-label { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.03em; }
+.workspace-path {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.workspace-bar .btn-sm { flex-shrink: 0; }
+
+.main-layout { flex: 1 1 auto; display: flex; min-height: 0; }
+
+/* Sidebar: the list panel on the left. Both endpoints and gateways live
+   here as separate scrollable sections, so either can be selected into
+   the detail panel on the right without switching views. */
+.sidebar {
+  flex: 0 0 360px; max-width: 44vw; overflow-y: auto;
+  background: var(--sidebar-bg); border-right: 1px solid var(--border);
+  padding: 16px; display: flex; flex-direction: column; gap: 22px;
+}
+.sidebar-section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+.sidebar-section-header h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0; }
+.sidebar-empty { font-size: 13px; padding: 10px 4px; }
+
+/* Detail panel: the right side. Shows a placeholder until something is
+   selected, then one of #endpoint-detail / #gateway-detail. */
+.detail-panel { flex: 1 1 auto; overflow-y: auto; padding: 28px 32px 60px; }
+.detail-empty { height: 100%; display: flex; align-items: center; justify-content: center; }
+.detail-empty-inner { max-width: 420px; text-align: center; }
+.detail-view { max-width: 900px; margin: 0 auto; }
+.detail-view-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+}
+.detail-view-header h2 { margin: 0; font-size: 20px; }
+.detail-view-header-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.detail-footer {
+  display: flex; justify-content: flex-end; gap: 8px; margin-top: 24px; padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+/* Buttons */
+button { font-family: inherit; cursor: pointer; }
+.btn-primary, .btn-secondary, .btn-danger {
+  padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid transparent; font-size: 13px; font-weight: 500;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: var(--surface); border-color: var(--border); color: var(--text); }
+.btn-secondary:hover { background: var(--code-bg); }
+.btn-secondary.active { background: var(--primary-tint); border-color: var(--primary); color: var(--primary); }
+.btn-danger { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
+.btn-danger:hover { filter: brightness(0.95); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+.icon-btn { background: none; border: none; font-size: 16px; color: var(--muted); padding: 4px 8px; border-radius: 6px; }
+.icon-btn:hover { background: var(--code-bg); }
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Theme toggle: a comfortably large tap target with a sliding sun/moon
+   icon, styled like a proper switch rather than a tiny text link. */
+.icon-btn-lg {
+  position: relative; width: 44px; height: 32px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--code-bg);
+  display: flex; align-items: center; justify-content: center; padding: 0;
+  flex-shrink: 0;
+}
+.icon-btn-lg:hover { border-color: var(--primary); }
+.icon-btn-lg .theme-icon { font-size: 15px; line-height: 1; transition: opacity 0.15s ease, transform 0.15s ease; }
+.icon-btn-lg .theme-icon-moon { position: absolute; opacity: 0; transform: scale(0.6); }
+/* JS keeps data-effective="light"|"dark" on the button in sync with the
+   theme that's actually showing (explicit choice, or system preference
+   when no explicit choice has been made) -- simpler and more reliable
+   than trying to mirror that logic a second time here in pure CSS. */
+#theme-toggle-btn[data-effective="dark"] .theme-icon-sun { opacity: 0; transform: scale(0.6); }
+#theme-toggle-btn[data-effective="dark"] .theme-icon-moon { position: static; opacity: 1; transform: scale(1); }
+
+/* Table (kept for any future tabular views) */
+.data-table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+.data-table th, .data-table td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--border); font-size: 13px; }
+.data-table th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; }
+.data-table tr:last-child td { border-bottom: none; }
+.data-table tbody tr:hover { background: var(--code-bg); }
+.method-badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; background: var(--code-bg); }
+.row-actions { display: flex; gap: 6px; justify-content: flex-end; }
+
+/* ------------------------------------------------------------------
+ * Expand/collapse chevron -- the endpoint-folder tree's fold/unfold
+ * control is a larger, clearly-clickable square button instead of a
+ * bare small glyph.
+ * ------------------------------------------------------------------ */
+.chevron-btn {
+  flex: 0 0 auto; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted);
+  padding: 0;
+}
+.chevron { display: inline-block; font-size: 15px; line-height: 1; transition: transform 0.15s ease; }
+.endpoint-folder-header:hover .chevron-btn { background: var(--code-bg); border-color: var(--border-strong); color: var(--text); }
+.endpoint-folder-header.is-collapsed .chevron { transform: rotate(-90deg); }
+
+/* Endpoints tree -- folders mirror each endpoint's path, same idea as config/endpoints/ on disk */
+.endpoint-tree { display: flex; flex-direction: column; gap: 2px; }
+.endpoint-folder-header {
+  display: flex; align-items: center; gap: 10px; padding: 6px 6px; border-radius: 8px;
+  cursor: pointer; user-select: none;
+}
+.endpoint-folder-header:hover { background: var(--code-bg); }
+.endpoint-folder-name { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+.endpoint-folder-count { font-size: 12px; }
+.endpoint-folder-body { margin: 2px 0 4px 13px; padding-left: 15px; border-left: 1px solid var(--border); }
+.endpoint-folder-body.collapsed { display: none; }
+.endpoint-row {
+  display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 8px; font-size: 13px;
+  cursor: pointer; border: 1px solid transparent;
+}
+.endpoint-row:hover { background: var(--surface); }
+.endpoint-row.selected { background: var(--primary-tint); border-color: var(--primary); }
+.endpoint-row-path { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.endpoint-row-id { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; font-size: 11px; }
+
+/* Gateways list, same row language as endpoints for a consistent list feel */
+.gateway-list { display: flex; flex-direction: column; gap: 4px; }
+.gateway-row {
+  display: flex; align-items: center; gap: 8px; padding: 9px 10px; border-radius: 8px; font-size: 13px;
+  cursor: pointer; border: 1px solid transparent; background: transparent;
+}
+.gateway-row:hover { background: var(--surface); }
+.gateway-row.selected { background: var(--primary-tint); border-color: var(--primary); }
+.gateway-row-kind { flex: 0 0 auto; text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; color: var(--muted); background: var(--code-bg); padding: 2px 6px; border-radius: 4px; }
+.gateway-row-name { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; flex: 0 0 auto; }
+.gateway-row-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+/* Forms */
+label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }
+label.block { margin-bottom: 14px; }
+/* A label's own children are each a separate flex item under its
+ * flex-direction: column above -- without this wrapper, a title word
+ * followed by an .info-icon <button> (an element, not text) would land on
+ * its own line below the title instead of right next to it. Grouping the
+ * title text + icon (+ any trailing muted qualifier) inside one plain
+ * inline .field-title span makes them a single flex item that lays out
+ * with normal inline text flow internally, wrapping naturally if long. */
+.field-title { font-weight: 600; }
+.field-title .muted { font-weight: 400; }
+input, select, textarea {
+  font-family: inherit; font-size: 13px; padding: 8px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+}
+textarea { resize: vertical; min-height: 60px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.field-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; margin-bottom: 8px; }
+.field-grid .span-2 { grid-column: span 2; }
+.inline-checkbox, .checkbox-field { flex-direction: row; align-items: center; gap: 8px; }
+input[readonly], select:disabled { background: var(--code-bg); color: var(--muted); cursor: not-allowed; }
+
+.editor-section { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
+.section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.section-header h3, .section-header h4 { flex: 1; margin: 0; }
+.section-count { font-weight: 400; color: var(--muted); font-size: 12px; }
+
+/* ------------------------------------------------------------------
+ * Endpoint editor tabs -- Basic / Backend / Parameters / Output / Test.
+ * Only one panel shows at a time, so the endpoint editor never shows
+ * more than one section's worth of fields at once.
+ * ------------------------------------------------------------------ */
+.editor-tabs {
+  display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 20px;
+  overflow-x: auto;
+}
+.editor-tab-btn {
+  background: none; border: none; border-bottom: 2px solid transparent; padding: 10px 4px;
+  margin-right: 22px; font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap;
+}
+.editor-tab-btn:hover { color: var(--text); }
+.editor-tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+.editor-tab-count { font-weight: 400; color: inherit; font-size: 12px; opacity: 0.8; }
+.tab-panel-toolbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.tab-panel-toolbar p, .tab-panel-toolbar-title { flex: 1; min-width: 0; margin: 0; }
+.tab-panel-toolbar-title { font-size: 14px; }
+.tab-panel-toolbar .btn-sm { flex-shrink: 0; }
+
+.repeatable-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+.repeatable-row { display: flex; gap: 8px; align-items: flex-start; background: var(--code-bg); padding: 8px; border-radius: 6px; }
+.repeatable-row > label { flex: 1; min-width: 0; }
+.repeatable-row .checkbox-field { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 6px; padding-top: 18px; }
+.repeatable-row .remove-btn { flex: 0 0 auto; margin-top: 18px; }
+
+.test-actions { display: flex; gap: 8px; margin: 10px 0; }
+.test-results { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.code-block {
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; white-space: pre-wrap;
+  word-break: break-word; max-height: 260px; overflow: auto; margin: 0;
+}
+
+.error-text { color: var(--danger); font-size: 13px; margin: 8px 0; }
+.test-result { font-size: 13px; padding: 8px 10px; border-radius: 6px; margin: 8px 0 0; background: var(--code-bg); }
+.test-result-ok { background: var(--success-bg); color: var(--success); }
+.test-result-error { background: var(--danger-bg); color: var(--danger); }
+
+/* Drawer (used only for the "change workspace" settings dialog) */
+.drawer { position: fixed; inset: 0; z-index: 50; }
+.drawer-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); }
+.drawer-panel {
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(560px, 100vw);
+  background: var(--surface); box-shadow: -8px 0 24px rgba(0,0,0,0.15);
+  display: flex; flex-direction: column;
+}
+.drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
+.drawer-body { padding: 20px; overflow-y: auto; flex: 1; }
+.drawer-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+
+.toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 6px; font-size: 13px; z-index: 100;
+  box-shadow: var(--shadow);
+}
+.toast.toast-error { background: var(--danger); color: white; }
+
+/* ------------------------------------------------------------------
+ * Field info icons -- a small "i" next to a label that pops up a short
+ * explanation of what the field is for. One popup element is reused for
+ * all of them (see admin.js), positioned next to whichever icon was
+ * clicked.
+ * ------------------------------------------------------------------ */
+.info-icon {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 15px; height: 15px; flex: 0 0 auto; padding: 0; margin: 0 0 0 2px;
+  border: 1px solid var(--border-strong); border-radius: 50%; background: var(--code-bg);
+  color: var(--muted); font-size: 10px; font-weight: 700; font-style: italic;
+  font-family: Georgia, "Times New Roman", serif; line-height: 1; cursor: pointer;
+  vertical-align: middle;
+}
+.info-icon:hover, .info-icon.active { background: var(--primary); border-color: var(--primary); color: #fff; }
+.info-popup {
+  position: fixed; z-index: 300; max-width: 280px; background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: var(--shadow); padding: 10px 12px; font-size: 12.5px; color: var(--text);
+  line-height: 1.45; font-weight: 400; text-transform: none; letter-spacing: normal;
+}
+
+/* ------------------------------------------------------------------
+ * Gateway quick-view -- the "View gateway" button next to the Backend
+ * tab's Gateway select opens the same shared popup, but with a wider,
+ * structured rendering of the gateway's actual definition instead of a
+ * plain sentence of help text (see admin.js buildGatewayPreview()).
+ * ------------------------------------------------------------------ */
+.gateway-select-row { display: flex; gap: 8px; align-items: center; }
+.gateway-select-row select { flex: 1; min-width: 0; }
+.gateway-select-row .btn-sm { flex: 0 0 auto; }
+.info-popup.gateway-preview { max-width: 320px; font-size: 12.5px; }
+.gw-preview-title { font-weight: 700; font-size: 13px; margin-bottom: 6px; color: var(--text); }
+.gw-preview-row { margin: 3px 0; }
+.gw-preview-row strong { font-weight: 600; color: var(--muted); }
+.gw-preview-list { margin: 2px 0 6px; padding-left: 16px; }
+.gw-preview-list li { margin: 1px 0; word-break: break-all; }
+.gw-preview-empty { color: var(--muted); font-style: italic; }
+
+@media (max-width: 900px) {
+  .main-layout { flex-direction: column; }
+  .sidebar { flex: 0 0 auto; max-width: none; max-height: 40vh; border-right: none; border-bottom: 1px solid var(--border); }
+  .detail-panel { padding: 20px; }
+}
+
+@media (max-width: 700px) {
+  .field-grid { grid-template-columns: 1fr; }
+  .field-grid .span-2 { grid-column: span 1; }
+  .test-results { grid-template-columns: 1fr; }
+  .drawer-panel { width: 100vw; }
+}

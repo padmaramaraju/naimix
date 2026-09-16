@@ -1,0 +1,31 @@
+id: json-customer-by-id
+description: Fetch a single customer from the demo JSON REST backend.
+method: GET
+path: /api/json/customers/:id
+input:
+  - name: id
+    in: path
+    required: true
+    type: string
+backend:
+  type: json
+  gateway: crmJson
+  url: /customers/{id}
+  method: GET
+  timeoutMs: 10000
+output:
+  fields:
+    - target: customerId
+      source: $.id
+    - target: name.first
+      source: $.firstName
+    - target: name.last
+      source: $.lastName
+    - target: location.city
+      source: $.city
+    - target: location.country
+      source: $.country
+      default: Unknown
+    - target: isActive
+      source: $.status
+      transform: toString

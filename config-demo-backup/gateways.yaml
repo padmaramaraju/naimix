@@ -1,0 +1,26 @@
+# Named backend gateways. Endpoint configs reference these by name so
+# credentials and base URLs live in one place instead of being repeated
+# (and duplicated by mistake) across every endpoint file.
+#
+# Secrets should never be hard-coded here -- use ${env.VAR_NAME} and set the
+# real value in your .env file (see .env.example).
+
+gateways:
+  crmJson:
+    kind: json
+    baseUrl: ${env.DEMO_JSON_BASE_URL}
+
+  crmXml:
+    kind: xml
+    baseUrl: ${env.DEMO_XML_BASE_URL}
+
+  crmSoap:
+    kind: soap
+    wsdl: ${env.DEMO_SOAP_WSDL_URL}
+
+  demoDb:
+    kind: sql
+    client: better-sqlite3
+    connection:
+      filename: ${env.DEMO_SQLITE_PATH}
+    useNullAsDefault: true

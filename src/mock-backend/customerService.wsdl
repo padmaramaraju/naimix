@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions name="CustomerService"
+    targetNamespace="http://naimix.example.com/customer"
+    xmlns:tns="http://naimix.example.com/customer"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+    xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/"
+    xmlns="http://schemas.xmlsoap.org/wsdl/">
+
+  <types>
+    <xsd:schema targetNamespace="http://naimix.example.com/customer">
+      <xsd:element name="GetCustomerRequest">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="CustomerId" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+      <xsd:element name="GetCustomerResponse">
+        <xsd:complexType>
+          <xsd:sequence>
+            <xsd:element name="CustomerId" type="xsd:string"/>
+            <xsd:element name="FirstName" type="xsd:string"/>
+            <xsd:element name="LastName" type="xsd:string"/>
+            <xsd:element name="City" type="xsd:string"/>
+          </xsd:sequence>
+        </xsd:complexType>
+      </xsd:element>
+    </xsd:schema>
+  </types>
+
+  <message name="GetCustomerInput">
+    <part name="parameters" element="tns:GetCustomerRequest"/>
+  </message>
+  <message name="GetCustomerOutput">
+    <part name="parameters" element="tns:GetCustomerResponse"/>
+  </message>
+
+  <portType name="CustomerServicePortType">
+    <operation name="GetCustomer">
+      <input message="tns:GetCustomerInput"/>
+      <output message="tns:GetCustomerOutput"/>
+    </operation>
+  </portType>
+
+  <binding name="CustomerServiceBinding" type="tns:CustomerServicePortType">
+    <soap:binding transport="http://schemas.xmlsoap.org/soap/http" style="document"/>
+    <operation name="GetCustomer">
+      <soap:operation soapAction="http://naimix.example.com/customer/GetCustomer"/>
+      <input><soap:body use="literal"/></input>
+      <output><soap:body use="literal"/></output>
+    </operation>
+  </binding>
+
+  <service name="CustomerService">
+    <port name="CustomerServicePort" binding="tns:CustomerServiceBinding">
+      <soap:address location="http://localhost:5000/soap"/>
+    </port>
+  </service>
+</definitions>

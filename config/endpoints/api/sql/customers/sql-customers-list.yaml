@@ -1,0 +1,18 @@
+id: sql-customers-list
+description: List all customers from the demo SQLite database.
+method: GET
+path: /api/sql/customers
+input: []
+backend:
+  type: sql
+  gateway: demoDb
+  query: SELECT id, first_name, last_name, status FROM customers ORDER BY id
+output:
+  root: $[*]
+  fields:
+    - target: id
+      source: $.id
+    - target: name
+      source: $.first_name
+    - target: status
+      source: $.status

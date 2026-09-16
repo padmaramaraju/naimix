@@ -1,0 +1,20 @@
+id: xml-customers-list
+description: List all customers from the demo XML backend.
+method: GET
+path: /api/xml/customers
+input: []
+backend:
+  type: xml
+  gateway: crmXml
+  url: /customers/xml
+  method: GET
+  timeoutMs: 10000
+output:
+  root: $.customers.customer[*]
+  fields:
+    - target: id
+      source: $.id
+    - target: name
+      source: $.firstName
+    - target: status
+      source: $.status

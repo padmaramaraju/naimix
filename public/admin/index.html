@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Naimix — Admin</title>
+<link rel="stylesheet" href="admin.css" />
+</head>
+<body>
+  <div id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card">
+      <h1>Naimix</h1>
+      <p class="muted">Enter the admin token to manage endpoints and gateways.</p>
+      <input id="login-token" type="password" placeholder="Admin token" autocomplete="off" required />
+      <button type="submit" class="btn-primary">Sign in</button>
+      <p id="login-error" class="error-text" hidden></p>
+    </form>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="brand">Naimix <span class="muted">/ admin</span></div>
+      <div class="topbar-actions">
+        <button id="theme-toggle-btn" class="icon-btn-lg" type="button" title="Toggle color theme" aria-label="Toggle color theme">
+          <span class="theme-icon theme-icon-sun" aria-hidden="true">☀️</span>
+          <span class="theme-icon theme-icon-moon" aria-hidden="true">🌙</span>
+        </button>
+        <button id="reload-btn" class="btn-secondary" title="Re-read config files from disk">Reload from disk</button>
+        <button id="logout-btn" class="btn-secondary">Sign out</button>
+      </div>
+    </header>
+
+    <div class="workspace-bar">
+      <span class="workspace-label">Workspace</span>
+      <code id="workspace-path" class="workspace-path">—</code>
+      <span id="workspace-counts" class="muted"></span>
+      <button id="change-workspace-btn" class="btn-secondary btn-sm">Change workspace…</button>
+    </div>
+
+    <div class="main-layout">
+      <aside class="sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <h2>Endpoints</h2>
+            <button id="new-endpoint-btn" class="btn-primary btn-sm" type="button">+ New</button>
+          </div>
+          <div id="endpoints-tree" class="endpoint-tree"></div>
+          <p id="endpoints-empty" class="muted sidebar-empty" hidden>No endpoints yet. Click "+ New" to create one.</p>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <h2>Gateways</h2>
+            <button id="new-gateway-btn" class="btn-primary btn-sm" type="button">+ New</button>
+          </div>
+          <div id="gateways-list" class="gateway-list"></div>
+          <p id="gateways-empty" class="muted sidebar-empty" hidden>No gateways yet. Click "+ New" to create one.</p>
+        </div>
+      </aside>
+
+      <main id="detail-panel" class="detail-panel">
+        <div id="detail-empty" class="detail-empty">
+          <div class="detail-empty-inner">
+            <h2>Nothing selected</h2>
+            <p class="muted">Pick an endpoint or gateway on the left to view and edit its definition here — or create a new one.</p>
+          </div>
+        </div>
+
+        <!-- Endpoint detail / editor -->
+        <section id="endpoint-detail" class="detail-view" hidden>
+          <div class="detail-view-header">
+            <h2 id="endpoint-editor-title">New endpoint</h2>
+            <div class="detail-view-header-actions">
+              <button id="endpoint-delete-btn" class="btn-danger btn-sm" type="button" hidden>Delete</button>
+              <button id="endpoint-close-btn" class="btn-secondary btn-sm" type="button">Close</button>
+            </div>
+          </div>
+
+          <form id="endpoint-form">
+            <div class="editor-tabs" role="tablist">
+              <button type="button" class="editor-tab-btn active" data-tab="basic">Basic</button>
+              <button type="button" class="editor-tab-btn" data-tab="backend">Backend <span class="editor-tab-count" id="count-backend"></span></button>
+              <button type="button" class="editor-tab-btn" data-tab="params">Parameters <span class="editor-tab-count" id="count-input"></span></button>
+              <button type="button" class="editor-tab-btn" data-tab="output">Output <span class="editor-tab-count" id="count-output"></span></button>
+              <button type="button" class="editor-tab-btn" data-tab="test">Test</button>
+            </div>
+
+            <div class="editor-tab-panel" data-tab-panel="basic">
+              <section class="field-grid">
+                <label><span class="field-title">Id <button type="button" class="info-icon" data-info-key="endpointId" aria-label="What is this?">i</button></span>
+                  <input name="id" required pattern="[A-Za-z0-9_\-]+" title="letters, digits, _ and - only" />
+                </label>
+                <label><span class="field-title">Method <button type="button" class="info-icon" data-info-key="endpointMethod" aria-label="What is this?">i</button></span>
+                  <select name="method"></select>
+                </label>
+                <label class="span-2 inline-checkbox">
+                  <input type="checkbox" name="pathAuto" />
+                  Auto-generate path from gateway + endpoint id
+                  <button type="button" class="info-icon" data-info-key="endpointPathAuto" aria-label="What is this?">i</button>
+                </label>
+                <label class="span-2"><span class="field-title">Path <button type="button" class="info-icon" data-info-key="endpointPath" aria-label="What is this?">i</button> <span class="muted">(the URL this middleware serves — not the backend's URL)</span></span>
+                  <input name="path" required placeholder="/api/customers/:id" pattern="/.*" title="Must start with / — this is the path callers hit on this middleware, e.g. /api/customers/:id" />
+                </label>
+                <label class="span-2" id="extra-path-row"><span class="field-title">Extra path <button type="button" class="info-icon" data-info-key="endpointExtraPath" aria-label="What is this?">i</button> <span class="muted">(appended after the auto-generated base — add path params here, e.g. /:id)</span></span>
+                  <input name="extraPath" placeholder="/:id" />
+                </label>
+                <label class="span-2"><span class="field-title">Description <button type="button" class="info-icon" data-info-key="endpointDescription" aria-label="What is this?">i</button></span>
+                  <input name="description" placeholder="optional" />
+                </label>
+              </section>
+            </div>
+
+            <div class="editor-tab-panel" data-tab-panel="backend" hidden>
+              <div class="field-grid">
+                <label><span class="field-title">Gateway <button type="button" class="info-icon" data-info-key="backendGateway" aria-label="What is this?">i</button></span>
+                  <div class="gateway-select-row">
+                    <select name="backendGateway"><option value="">(none)</option></select>
+                    <button type="button" class="btn-secondary btn-sm" id="view-gateway-btn" disabled>View gateway</button>
+                  </div>
+                </label>
+                <label><span class="field-title">Type <span class="muted" id="backend-type-hint" hidden>(set by the selected gateway)</span> <button type="button" class="info-icon" data-info-key="backendType" aria-label="What is this?">i</button></span>
+                  <select name="backendType"></select>
+                </label>
+              </div>
+              <div id="backend-fields"></div>
+            </div>
+
+            <div class="editor-tab-panel" data-tab-panel="params" hidden>
+              <div class="tab-panel-toolbar">
+                <p class="muted">These become <code>{name}</code> placeholders you can use in the backend config.</p>
+                <button type="button" class="btn-secondary btn-sm" id="add-input-btn">+ Add parameter</button>
+              </div>
+              <div id="input-params-list" class="repeatable-list"></div>
+            </div>
+
+            <div class="editor-tab-panel" data-tab-panel="output" hidden>
+              <div class="tab-panel-toolbar">
+                <h4 class="tab-panel-toolbar-title">Output fields</h4>
+                <button type="button" class="btn-secondary btn-sm" id="add-output-btn">+ Add field</button>
+              </div>
+              <label class="block">
+                <span class="field-title">Collection root <button type="button" class="info-icon" data-info-key="outputRoot" aria-label="What is this?">i</button> <span class="muted">(optional JSONPath — leave blank for a single-object response)</span></span>
+                <input name="outputRoot" placeholder="$.items[*]" />
+              </label>
+              <div id="output-fields-list" class="repeatable-list"></div>
+            </div>
+
+            <div class="editor-tab-panel" data-tab-panel="test" hidden>
+              <p class="muted">Fill in sample values for your input parameters, fetch a real backend response, then check how it maps.</p>
+              <p id="tryit-bulk-note" class="muted" hidden>
+                This is an auto-generated table endpoint (list/bulk-create/bulk-update/bulk-delete) -- it reads
+                its filters/rows/updates/keys from the real request's query string or JSON body, which this
+                panel doesn't have fields for. Test it directly with curl/Postman instead -- see the README
+                for the exact request shape.
+              </p>
+              <div id="test-params-list" class="repeatable-list"></div>
+              <div class="test-actions">
+                <button type="button" class="btn-secondary" id="fetch-sample-btn">Fetch sample response</button>
+                <button type="button" class="btn-secondary" id="apply-mapping-btn" disabled>Apply mapping to sample</button>
+              </div>
+              <div class="test-results">
+                <div>
+                  <h4>Raw backend response</h4>
+                  <pre id="test-raw-output" class="code-block">—</pre>
+                </div>
+                <div>
+                  <h4>Mapped output</h4>
+                  <pre id="test-mapped-output" class="code-block">—</pre>
+                </div>
+              </div>
+            </div>
+
+            <p id="endpoint-form-error" class="error-text" hidden></p>
+            <div class="detail-footer">
+              <button type="submit" class="btn-primary">Save endpoint</button>
+            </div>
+          </form>
+        </section>
+
+        <!-- Gateway detail / editor -->
+        <section id="gateway-detail" class="detail-view" hidden>
+          <div class="detail-view-header">
+            <h2 id="gateway-editor-title">New gateway</h2>
+            <div class="detail-view-header-actions">
+              <button id="gateway-delete-btn" class="btn-danger btn-sm" type="button" hidden>Delete</button>
+              <button id="gateway-close-btn" class="btn-secondary btn-sm" type="button">Close</button>
+            </div>
+          </div>
+
+          <form id="gateway-form">
+            <label class="block"><span class="field-title">Name <button type="button" class="info-icon" data-info-key="gatewayName" aria-label="What is this?">i</button></span>
+              <input name="name" required pattern="[A-Za-z0-9_\-]+" />
+            </label>
+            <label class="block"><span class="field-title">Kind <button type="button" class="info-icon" data-info-key="gatewayKind" aria-label="What is this?">i</button></span>
+              <select name="kind"></select>
+            </label>
+            <div id="gateway-fields"></div>
+
+            <section class="editor-section">
+              <div class="section-header">
+                <h3>Common parameters <button type="button" class="info-icon" data-info-key="gatewayCommonParams" aria-label="What is this?">i</button></h3>
+                <button type="button" class="btn-secondary btn-sm" id="add-common-param-btn">+ Add parameter</button>
+              </div>
+              <p class="muted">Available as <code>{name}</code> to every endpoint that uses this gateway
+                (values may reference <code>${env.VAR_NAME}</code>). An endpoint's own input parameter of the
+                same name takes precedence.</p>
+              <div id="gateway-common-params-list" class="repeatable-list"></div>
+            </section>
+
+            <p id="gateway-form-error" class="error-text" hidden></p>
+            <div class="detail-footer">
+              <button type="submit" class="btn-primary">Save gateway</button>
+            </div>
+          </form>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <!-- Change workspace -->
+  <div id="workspace-editor" class="drawer" hidden>
+    <div class="drawer-backdrop" data-close="workspace-editor"></div>
+    <div class="drawer-panel">
+      <div class="drawer-header">
+        <h2>Change workspace</h2>
+        <button class="icon-btn" data-close="workspace-editor">✕</button>
+      </div>
+      <div class="drawer-body">
+        <p class="muted">
+          Point this instance at a workspace on this machine — a folder containing (or that will
+          contain) an <code>endpoints/</code> folder and a <code>gateways.yaml</code> file — typically
+          your local checkout of a team Git repo. Endpoints and gateways you create here are written
+          straight into that folder; committing/pushing to Git is up to you, outside this app. This
+          setting only affects this machine.
+        </p>
+        <form id="workspace-form">
+          <label class="block">Workspace path
+            <input name="configDir" required placeholder="/Users/you/repos/team-config" />
+          </label>
+          <p id="workspace-form-error" class="error-text" hidden></p>
+          <div class="drawer-footer">
+            <button type="button" class="btn-secondary" data-close="workspace-editor">Cancel</button>
+            <button type="submit" class="btn-primary">Use this workspace</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="admin.js"></script>
+</body>
+</html>

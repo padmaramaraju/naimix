@@ -1,0 +1,6 @@
+.DS_Store
+/config/endpoints/api/events-api
+/config/endpoints/best-buy
+/node_modules
+setup.sh
+.env

@@ -753,12 +753,18 @@ exists specifically to prevent a real bug: the SQL backend field renderer used t
 render a raw-query textarea whose `_read()` always produced `{type:"sql", query: ...}` — opening a
 generated endpoint and clicking Save with zero edits would have silently replaced its
 table/operation/procedure config with an empty raw query. The read-only branch's `_read()` instead
-returns the original `backend` object untouched. A generated *table* endpoint also can't be exercised from
-the endpoint editor's "Try it" panel (that panel only has fields for scalar named params, and table-CRUD
-operations read a whole `rows`/`updates`/`keys` array from the raw body/query) — `#tryit-bulk-note`
-in `index.html`, toggled in `openEndpointEditor()`, tells the user to use curl/Postman instead. A generated
-*procedure* endpoint is unaffected by any of this, since its params flow through the ordinary declarative
-`input` pipeline.
+returns the original `backend` object untouched. A generated *table* endpoint can't be exercised from the
+endpoint editor's "Try it" panel using the normal per-parameter fields (table-CRUD operations read a whole
+`rows`/`updates`/`keys` array from the raw body, or filters from the raw query string, not scalar named
+`input` params) — instead `openEndpointEditor()` swaps in a raw JSON textarea for whichever of those this
+operation's `backend.operation` actually reads: `#test-raw-query-row` (→ `rawQuery`) for `list`,
+`#test-raw-body-row` (→ `rawBody`) for `bulkCreate`/`bulkUpdate`/`bulkDelete`, each pre-filled with a
+placeholder showing the exact expected shape (from `sql.ts`'s own validation messages, e.g.
+`{"rows": [...]}`). `fetchSample()` `JSON.parse`s whichever box is visible and non-empty and passes it
+through to `/admin/api/test-backend`, which already accepted `rawQuery`/`rawBody` (used by the live
+dispatcher the same way — see `dispatch.ts`) before the UI had any way to supply them. `#tryit-bulk-note`
+still explains why this endpoint doesn't use the normal parameter fields. A generated *procedure* endpoint
+is unaffected by any of this, since its params flow through the ordinary declarative `input` pipeline.
 
 ## Output mapping engine
 
@@ -944,9 +950,11 @@ a few hardcoded top-level fields.
   reopen in auto mode — an accepted heuristic ambiguity, since there's no separate persisted flag for
   "how was this path made" (deliberately, to avoid a schema change for a UI-only feature).
 - **"Try it" test panel** — `fetchSample()` calls `/admin/api/test-backend` with the form's current
-  (unsaved) input/backend config and caches the raw response (`LAST_RAW_SAMPLE`); `applyMappingToSample()`
-  then calls `/admin/api/test-mapping` against that cached sample as the output fields are edited,
-  without re-hitting the real backend each time.
+  (unsaved) input/backend config, plus `rawQuery`/`rawBody` parsed from the raw-query/raw-body textareas
+  when a generated table endpoint has one visible (see "Auto-generated CRUD + stored-procedure endpoints"
+  above), and caches the raw response (`LAST_RAW_SAMPLE`); `applyMappingToSample()` then calls
+  `/admin/api/test-mapping` against that cached sample as the output fields are edited, without re-hitting
+  the real backend each time.
 - **Gateway detail/editor** — `renderGatewayKindFields()` swaps in fields per `kind`; the SQL kind adds
   a "Test connection" button (`testDbConnection()`) and, only when editing an already-saved gateway,
   a "Generate CRUD + procedure endpoints" button (`generateCrudEndpoints()`). Saving keeps the panel open
@@ -1146,6 +1154,29 @@ reasoning and trade-offs.
 
 Newest first. Each entry names what changed, the key files, and links back to the relevant section
 above for the full technical detail.
+
+### 2026-09-16 (same day) — "Try it" panel can now test generated bulk table endpoints
+
+Padma reported that testing a POST endpoint from the admin UI's Test tab gave no way to enter a request
+body. Root cause: a generated table-CRUD endpoint (`list`/`bulkCreate`/`bulkUpdate`/`bulkDelete`, created
+by "Generate CRUD endpoints" on a gateway) doesn't use the normal declarative `input` params the Test tab
+already had fields for — it reads a whole `rows`/`updates`/`keys` array from the raw JSON body, or filters
+from the raw query string, straight off the real request (see `sql.ts`'s `listRows`/`bulkCreate`/
+`bulkUpdate`/`bulkDelete`). The Test tab used to just tell users to test these with curl/Postman instead
+(`#tryit-bulk-note`) — even though the server side (`/admin/api/test-backend`, `/admin/api/endpoints/:id/
+test`) already accepted optional `rawQuery`/`rawBody` fields and passed them straight to `callBackend()`,
+unused by the UI.
+
+Fixed by adding two JSON textareas to the Test tab (`#test-raw-query-row` / `#test-raw-body-row` in
+`index.html`), shown one at a time based on `endpoint.backend.operation` (`openEndpointEditor()`): Query
+params for `list`, Request body for the other three, each pre-filled with a placeholder showing the exact
+shape that operation's validation expects (e.g. `{"rows": [{"...": "..."}]}` for `bulkCreate`). `fetchSample()`
+`JSON.parse`s whichever box is visible and non-empty (with a friendly error naming which field failed, on
+bad JSON) and includes it as `rawQuery`/`rawBody` in the existing `/admin/api/test-backend` call. No server
+changes were needed — this only wires up a UI gap against an already-supported code path. Verified end to
+end with a generated `bulkCreate` endpoint against the demo SQLite database (a real row inserted via the
+Test tab's new Request body field) and confirmed `list` shows Query params instead while a normal
+(non-generated) endpoint shows neither field, unchanged from before.
 
 ### 2026-09-16 — Renamed the product from "Lohitas Middleware" to "Naimix"
 

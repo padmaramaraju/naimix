@@ -528,14 +528,18 @@ scheme automatically.
   change. See "Auto-generated CRUD + stored-procedure endpoints" above for the
   exact request/response shapes. A generated table endpoint shows as a
   read-only summary in the endpoint editor (not an editable SQL box) since
-  regenerating, not hand-editing, is how you pick up a schema change, and its
-  bulk request shape isn't something the "Try it" panel has fields for.
+  regenerating, not hand-editing, is how you pick up a schema change.
 - **Try it panel** (inside the endpoint editor) -- fill in sample values for
   your input parameters and click "Fetch sample response" to call the real
   backend right now and see its raw response, then "Apply mapping to sample"
   to see what your current `output` config produces from it -- without
   saving the endpoint first, and without re-calling the backend on every
-  mapping tweak.
+  mapping tweak. A generated table endpoint (list/bulk-create/bulk-update/
+  bulk-delete) reads straight from the real request's query string or JSON
+  body instead of declared input parameters, so the panel swaps in a
+  "Query params" or "Request body" JSON box for it instead -- whichever that
+  operation actually reads -- pre-filled with a placeholder showing the
+  exact shape expected (e.g. `{"rows": [...]}` for bulk-create).
 - **Gateways list** -- create/edit/delete named gateways. A field left
   blank on an existing gateway keeps its previously stored value (so
   editing one field of a SQL gateway doesn't require retyping the

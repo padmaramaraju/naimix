@@ -181,6 +181,8 @@ const FIELD_INFO = {
   gatewayConnection: "The database driver's own connection fields (e.g. host, port, user, password, database, or filename for SQLite) -- passed straight through to the driver.",
   gatewayUseNullAsDefault: "Required by SQLite (better-sqlite3/sqlite3) -- tells the query builder to use NULL for columns you didn't specify, instead of erroring.",
   gatewayCommonParams: "Default parameter values shared by every endpoint that uses this gateway, available as {name}. An endpoint's own input parameter of the same name takes precedence.",
+  testRawQuery: "For an auto-generated \"list\" endpoint: the query-string filters/sort/paging a real caller would send, as a JSON object, e.g. {\"status\": \"active\", \"limit\": \"20\"}. Ignored for the other table operations.",
+  testRawBody: "For an auto-generated bulk-create/bulk-update/bulk-delete endpoint: the exact JSON body a real caller would send. Ignored for \"list\", which reads Query params instead.",
 };
 
 let INFO_POPUP_EL = null;
@@ -949,6 +951,8 @@ function openEndpointEditor(endpointId) {
   showError("endpoint-form-error", "");
   document.getElementById("test-raw-output").textContent = "—";
   document.getElementById("test-mapped-output").textContent = "—";
+  document.getElementById("test-raw-query").value = "";
+  document.getElementById("test-raw-body").value = "";
   document.getElementById("apply-mapping-btn").disabled = true;
   HAS_RAW_SAMPLE = false;
 
@@ -998,12 +1002,30 @@ function openEndpointEditor(endpointId) {
 
   // Generated table-CRUD endpoints (list/bulkCreate/bulkUpdate/bulkDelete)
   // read straight from the raw query string / JSON body rather than
-  // declared `input` params -- the Try it panel only has fields for the
-  // latter, so point users at curl/the README instead of leaving it
-  // looking broken. A generated stored-procedure endpoint isn't affected:
-  // its params ARE declared `input` (in: "body"), so it works fine in this
-  // panel.
-  document.getElementById("tryit-bulk-note").hidden = !(endpoint?.backend?.type === "sql" && endpoint?.backend?.table);
+  // declared `input` params -- the Try it panel has no fields for the
+  // latter by default, so swap in a raw query-params or request-body
+  // textarea (whichever this operation actually reads) instead of leaving
+  // it looking broken. A generated stored-procedure endpoint isn't
+  // affected: its params ARE declared `input` (in: "body"), so it works
+  // fine with the normal per-parameter fields above.
+  const isBulkTableEndpoint = Boolean(endpoint?.backend?.type === "sql" && endpoint?.backend?.table);
+  document.getElementById("tryit-bulk-note").hidden = !isBulkTableEndpoint;
+  const rawQueryRow = document.getElementById("test-raw-query-row");
+  const rawBodyRow = document.getElementById("test-raw-body-row");
+  if (isBulkTableEndpoint) {
+    const op = endpoint.backend.operation;
+    rawQueryRow.hidden = op !== "list";
+    rawBodyRow.hidden = op === "list";
+    document.getElementById("test-raw-body").placeholder =
+      op === "bulkUpdate"
+        ? '{"updates": [ { "key": {"id": 1}, "fields": {"...": "..."} } ]}'
+        : op === "bulkDelete"
+          ? '{"keys": [ {"id": 1} ]}'
+          : '{"rows": [ {"...": "..."} ]}';
+  } else {
+    rawQueryRow.hidden = true;
+    rawBodyRow.hidden = true;
+  }
 
   showDetailView("endpoint");
   document.getElementById("detail-panel").scrollTop = 0;
@@ -1068,7 +1090,25 @@ async function fetchSample() {
       if (row._valueInput.value !== "") params[row._paramName] = row._valueInput.value;
     }
 
-    const { raw } = await api("POST", "/admin/api/test-backend", { input, backend, params });
+    let rawQuery, rawBody;
+    const rawQueryText = document.getElementById("test-raw-query").value.trim();
+    if (rawQueryText) {
+      try {
+        rawQuery = JSON.parse(rawQueryText);
+      } catch (err) {
+        throw new Error("Query params: invalid JSON -- " + err.message);
+      }
+    }
+    const rawBodyText = document.getElementById("test-raw-body").value.trim();
+    if (rawBodyText) {
+      try {
+        rawBody = JSON.parse(rawBodyText);
+      } catch (err) {
+        throw new Error("Request body: invalid JSON -- " + err.message);
+      }
+    }
+
+    const { raw } = await api("POST", "/admin/api/test-backend", { input, backend, params, rawQuery, rawBody });
     LAST_RAW_SAMPLE = raw;
     HAS_RAW_SAMPLE = true;
     document.getElementById("test-raw-output").textContent = JSON.stringify(raw, null, 2);

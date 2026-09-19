@@ -149,11 +149,20 @@
               <p class="muted">Fill in sample values for your input parameters, fetch a real backend response, then check how it maps.</p>
               <p id="tryit-bulk-note" class="muted" hidden>
                 This is an auto-generated table endpoint (list/bulk-create/bulk-update/bulk-delete) -- it reads
-                its filters/rows/updates/keys from the real request's query string or JSON body, which this
-                panel doesn't have fields for. Test it directly with curl/Postman instead -- see the README
-                for the exact request shape.
+                its filters/rows/updates/keys from the real request's query string or JSON body instead of the
+                Parameters tab. Fill in the field below to match what a real caller would send.
               </p>
               <div id="test-params-list" class="repeatable-list"></div>
+              <div id="tryit-bulk-fields">
+                <label class="block" id="test-raw-query-row" hidden>
+                  <span class="field-title">Query params <button type="button" class="info-icon" data-info-key="testRawQuery" aria-label="What is this?">i</button> <span class="muted">(JSON object -- what a caller would send as ?key=value)</span></span>
+                  <textarea id="test-raw-query" placeholder='{"status": "active", "limit": "20"}'></textarea>
+                </label>
+                <label class="block" id="test-raw-body-row" hidden>
+                  <span class="field-title">Request body <button type="button" class="info-icon" data-info-key="testRawBody" aria-label="What is this?">i</button> <span class="muted">(JSON -- exactly what a real caller's request body would be)</span></span>
+                  <textarea id="test-raw-body" placeholder='{"rows": [ {"...": "..."} ]}'></textarea>
+                </label>
+              </div>
               <div class="test-actions">
                 <button type="button" class="btn-secondary" id="fetch-sample-btn">Fetch sample response</button>
                 <button type="button" class="btn-secondary" id="apply-mapping-btn" disabled>Apply mapping to sample</button>

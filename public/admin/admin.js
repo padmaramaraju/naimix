@@ -8,12 +8,16 @@ const SENSITIVE_KEY = /pass|secret|token|apikey|api_key|credential/i;
 const THEME_KEY = "naimix-admin-theme";
 
 let TOKEN = null;
-let META = { methods: [], backendTypes: [], transforms: [], sqlClients: [], paramLocations: [], paramTypes: [] };
+let META = { methods: [], backendTypes: [], transforms: [], sqlClients: [], paramLocations: [], paramTypes: [], devMode: false };
 let ENDPOINTS = [];
 let GATEWAYS = {};
-let ACTIVE_DETAIL = null; // null | "endpoint" | "gateway" -- which panel is showing on the right
+let AUTH_PROVIDERS = {};
+let SESSIONS = [];
+let ACTIVE_DETAIL = null; // null | "endpoint" | "gateway" | "authProvider" | "session" -- which panel is showing on the right
 let EDITING_ENDPOINT_ID = null; // null = creating a new endpoint
 let EDITING_GATEWAY_NAME = null; // null = creating a new gateway
+let EDITING_AUTH_PROVIDER_NAME = null; // null = creating a new auth provider
+let SELECTED_SESSION_ID = null;
 let LAST_RAW_SAMPLE;
 let HAS_RAW_SAMPLE = false;
 let CURRENT_SETTINGS = { configDir: null };
@@ -181,6 +185,41 @@ const FIELD_INFO = {
   gatewayConnection: "The database driver's own connection fields (e.g. host, port, user, password, database, or filename for SQLite) -- passed straight through to the driver.",
   gatewayUseNullAsDefault: "Required by SQLite (better-sqlite3/sqlite3) -- tells the query builder to use NULL for columns you didn't specify, instead of erroring.",
   gatewayCommonParams: "Default parameter values shared by every endpoint that uses this gateway, available as {name}. An endpoint's own input parameter of the same name takes precedence.",
+  gatewayRequiresAuth: "Names an entry in the Auth providers list. When set, every endpoint that calls through this gateway requires a caller session obtained by logging in against that provider (POST /auth/login/<name>) -- the real backend token it holds is available to this gateway's config as {__authToken}.",
+  authProviderName: "A unique identifier for this auth provider (letters, digits, _ and - only). A gateway references it by this exact name in its Requires auth field, and callers log in against it at POST /auth/login/<name>.",
+  authProviderKind: "basicLogin authenticates against a bespoke backend login API (POST credentials, extract a token from the JSON response with JSONPath). oauth2 authenticates against a standard RFC 6749 token endpoint (password or client_credentials grant), and additionally supports automatic refresh. ldap authenticates against an LDAP/AD directory with a plain simple bind.",
+  authProviderLoginUrl: "The backend's login endpoint -- this provider POSTs the caller's credentials here.",
+  authProviderMethod: "The HTTP method used to call Login URL -- almost always POST.",
+  authProviderUsernameField: "The JSON field name the username is sent under. Defaults to \"username\" if left blank.",
+  authProviderPasswordField: "The JSON field name the password is sent under. Defaults to \"password\" if left blank.",
+  authProviderStaticFields: "Extra fixed fields sent with every login request alongside the caller's username/password (e.g. a fixed API key or client identifier the backend's login API expects).",
+  authProviderTokenPath: "A JSONPath into the login response that contains the real backend token this middleware should hold and inject into calls on the caller's behalf, e.g. $.accessToken.",
+  authProviderRefreshTokenPath: "An optional JSONPath into the login response for a refresh token. basicLogin doesn't refresh in this phase (an expired session just requires logging in again), so this is currently only stored for future use.",
+  authProviderExpiresInPath: "An optional JSONPath into the login response for how many seconds until the token expires, e.g. $.expiresIn. Used to know when a session needs attention.",
+  authProviderSubjectPath: "An optional JSONPath into the login response identifying the logged-in subject/user (e.g. $.sub or $.userId) -- stored on the session for reference.",
+  authProviderClaims: "Optional extra fields pulled out of the login response using the same JSONPath mapping as an endpoint's Output fields, e.g. exposing a display name or role from the login response.",
+  activeSessions: "Every caller session currently held in memory across all auth providers. This is a live view of the session store, showing enough to identify a session (provider, subject, claims, timestamps) and revoke it if needed. Outside production (NODE_ENV != \"production\"), opening a session also shows its real session/backend/refresh tokens for local debugging; a real deployment run with NODE_ENV=production always withholds them.",
+  authProviderTokenUrl: "The OAuth2 token endpoint this provider requests tokens from, per RFC 6749, e.g. https://api.example.com/oauth/token.",
+  authProviderGrantType: "password sends the caller's own username/password (a person logging in). client_credentials authenticates this middleware itself with no end-user credentials at all -- use it when callers shouldn't need individual backend accounts.",
+  authProviderClientId: "This middleware's own OAuth2 client identifier, issued by the backend's authorization server.",
+  authProviderClientSecret: "This middleware's own OAuth2 client secret. Leave blank when editing an existing provider to keep the currently stored value unchanged.",
+  authProviderScope: "An optional space-separated list of OAuth2 scopes to request.",
+  authProviderLdapUrl: "The LDAP/AD server URL, e.g. ldap://localhost:3389 or ldaps://ad.example.com:636.",
+  authProviderLdapTlsRejectUnauthorized: "Only meaningful for ldaps:// URLs. Leave on (verify the server's TLS certificate) unless connecting to a trusted internal test directory with a self-signed certificate.",
+  authProviderLdapBindMode: "Direct bind builds the DN to bind as directly from a predictable template. Search-then-bind uses a service account to look up the real user DN first, then binds as that user -- the realistic pattern for Active Directory and most enterprise directories where usernames don't map predictably to a DN.",
+  authProviderLdapUserDnTemplate: "Direct-bind mode: a DN template with a {username} placeholder, e.g. uid={username},ou=people,dc=example,dc=com. The substituted username is DN-escaped automatically.",
+  authProviderLdapBindDn: "Search-then-bind mode: the service account's DN, used only to search for the real user DN -- not to log the caller in.",
+  authProviderLdapBindPassword: "Search-then-bind mode: the service account's password. Leave blank when editing an existing provider to keep the currently stored value unchanged.",
+  authProviderLdapSearchBase: "Search-then-bind mode: the base DN to search under for the user entry, e.g. ou=people,dc=example,dc=com.",
+  authProviderLdapSearchFilter: "Search-then-bind mode: a filter with a {username} placeholder, e.g. (uid={username}) or (sAMAccountName={username}) for Active Directory. The substituted value is filter-escaped automatically.",
+  authProviderLdapGroupLookup: "Optional -- after a successful bind, looks up the user's group memberships and folds them into the session's claims.groups (and the signed backend token's own groups claim). Leave Group search base blank to skip this entirely.",
+  authProviderLdapGroupSearchBase: "Base DN to search under for group entries, e.g. ou=groups,dc=example,dc=com. Leave blank to skip group lookup.",
+  authProviderLdapGroupSearchFilter: "A filter with {dn} and/or {username} placeholders, e.g. (member={dn}). Required when Group search base is set.",
+  authProviderLdapGroupNameAttribute: "The attribute holding each matched group's display name. Defaults to \"cn\" if left blank.",
+  authProviderLdapAttributes: "Extra directory attributes to capture off the resolved user entry into claims.attributes, e.g. mail, title, departmentNumber.",
+  authProviderLdapTokenSecret: "LDAP/AD has no native token to relay to a backend, so this provider mints its own signed JWT as a stand-in \"backend token\" using this secret. Any backend that separately trusts this middleware (holds this same secret) can verify it. Leave blank when editing an existing provider to keep the currently stored value unchanged.",
+  authProviderLdapTokenTtlSeconds: "How many seconds until the minted backend token (and the session) expires. Defaults to 3600 (1 hour).",
+  authProviderTestLogin: "Sends the username/password below through provider.login() using the settings currently in this form -- including edits you haven't saved yet -- and reports whether it succeeds, without creating a session or exposing the resulting backend token.",
   testRawQuery: "For an auto-generated \"list\" endpoint: the query-string filters/sort/paging a real caller would send, as a JSON object, e.g. {\"status\": \"active\", \"limit\": \"20\"}. Ignored for the other table operations.",
   testRawBody: "For an auto-generated bulk-create/bulk-update/bulk-delete endpoint: the exact JSON body a real caller would send. Ignored for \"list\", which reads Query params instead.",
 };
@@ -357,18 +396,31 @@ function logout() {
  * Load + render
  * ------------------------------------------------------------------- */
 async function loadAll() {
-  const [meta, endpoints, gateways, settings] = await Promise.all([
+  const [meta, endpoints, gateways, authProviders, sessions, settings] = await Promise.all([
     api("GET", "/admin/api/meta"),
     api("GET", "/admin/api/endpoints"),
     api("GET", "/admin/api/gateways"),
+    api("GET", "/admin/api/auth-providers"),
+    api("GET", "/admin/api/sessions"),
     api("GET", "/admin/api/settings"),
   ]);
   META = meta;
   ENDPOINTS = endpoints;
   GATEWAYS = gateways;
+  AUTH_PROVIDERS = authProviders;
+  SESSIONS = sessions;
   renderEndpointsTree();
   renderGatewaysList();
+  renderAuthProvidersList();
+  renderSessionsList();
   renderWorkspaceBar(settings);
+}
+
+/** Re-fetches just the session list -- used by the sidebar's "Refresh"
+ * button and after a revoke, without re-loading every other section. */
+async function refreshSessions() {
+  SESSIONS = await api("GET", "/admin/api/sessions");
+  renderSessionsList();
 }
 
 /* ---------------------------------------------------------------------
@@ -413,22 +465,29 @@ async function saveWorkspace(ev) {
 }
 
 /* ---------------------------------------------------------------------
- * Detail panel (right side) -- shows a placeholder until an endpoint or
- * gateway is selected from the sidebar, then that item's inline
- * edit/test/save form. Only one of the three ever shows at a time.
+ * Detail panel (right side) -- shows a placeholder until an endpoint,
+ * gateway, auth provider, or session is selected from the sidebar, then
+ * that item's inline view (edit/test/save for the first three; read-only
+ * for a session). Only one of the four ever shows at a time.
  * ------------------------------------------------------------------- */
 function showDetailView(kind) {
   ACTIVE_DETAIL = kind;
   document.getElementById("detail-empty").hidden = kind !== null;
   document.getElementById("endpoint-detail").hidden = kind !== "endpoint";
   document.getElementById("gateway-detail").hidden = kind !== "gateway";
+  document.getElementById("auth-provider-detail").hidden = kind !== "authProvider";
+  document.getElementById("session-detail").hidden = kind !== "session";
   renderEndpointsTree();
   renderGatewaysList();
+  renderAuthProvidersList();
+  renderSessionsList();
 }
 
 function closeDetail() {
   EDITING_ENDPOINT_ID = null;
   EDITING_GATEWAY_NAME = null;
+  EDITING_AUTH_PROVIDER_NAME = null;
+  SELECTED_SESSION_ID = null;
   showDetailView(null);
   closeInfoPopup();
 }
@@ -548,6 +607,114 @@ function renderGatewaysList() {
   }
 }
 
+/* ---------------------------------------------------------------------
+ * Auth providers list (sidebar) -- same row language as gateways (reuses
+ * the .gateway-list/.gateway-row styles, since the shape is identical:
+ * kind badge, name, one-line summary).
+ * ------------------------------------------------------------------- */
+function renderAuthProvidersList() {
+  const container = document.getElementById("auth-providers-list");
+  container.innerHTML = "";
+  const names = Object.keys(AUTH_PROVIDERS);
+  document.getElementById("auth-providers-empty").hidden = names.length > 0;
+  for (const name of names) {
+    const provider = AUTH_PROVIDERS[name];
+    const summary = provider.kind === "oauth2" ? provider.tokenUrl || "" : provider.loginUrl || "";
+    const isSelected = ACTIVE_DETAIL === "authProvider" && EDITING_AUTH_PROVIDER_NAME === name;
+    container.appendChild(
+      el("div", { class: "gateway-row" + (isSelected ? " selected" : ""), onclick: () => openAuthProviderEditor(name) }, [
+        el("span", { class: "gateway-row-kind" }, [provider.kind || "basicLogin"]),
+        el("span", { class: "gateway-row-name" }, [name]),
+        el("span", { class: "gateway-row-summary" }, [summary]),
+      ])
+    );
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Active sessions (sidebar + read-only detail) -- what's actually held in
+ * the server's in-memory session store right now (see
+ * AuthService.listSessions()): every logged-in caller across every
+ * provider, for whoever runs this instance to see without a debugger.
+ * Never shows a session's real bearer token or the backend/refresh token
+ * it wraps -- the admin API itself never sends those out either.
+ * ------------------------------------------------------------------- */
+function formatSessionExpiry(expiresAt) {
+  if (expiresAt === undefined) return "No expiry";
+  const msLeft = expiresAt - Date.now();
+  if (msLeft <= 0) return "Expired";
+  const minutes = Math.round(msLeft / 60000);
+  if (minutes < 1) return "Expires <1m";
+  if (minutes < 60) return `Expires in ${minutes}m`;
+  return `Expires in ${Math.round(minutes / 60)}h`;
+}
+
+function renderSessionsList() {
+  const container = document.getElementById("sessions-list");
+  container.innerHTML = "";
+  document.getElementById("sessions-empty").hidden = SESSIONS.length > 0;
+  for (const session of SESSIONS) {
+    const isSelected = ACTIVE_DETAIL === "session" && SELECTED_SESSION_ID === session.id;
+    container.appendChild(
+      el("div", { class: "gateway-row" + (isSelected ? " selected" : ""), onclick: () => openSessionDetail(session.id) }, [
+        el("span", { class: "gateway-row-kind" }, [session.providerName]),
+        el("span", { class: "gateway-row-name" }, [session.subject || "(no subject)"]),
+        el("span", { class: "gateway-row-summary" }, [formatSessionExpiry(session.expiresAt)]),
+      ])
+    );
+  }
+}
+
+function openSessionDetail(id) {
+  closeInfoPopup();
+  const session = SESSIONS.find((s) => s.id === id);
+  if (!session) return; // e.g. it expired and was swept between render and click
+  SELECTED_SESSION_ID = id;
+
+  document.getElementById("session-detail-title").textContent = `Session — ${session.providerName}`;
+  document.getElementById("session-detail-provider").textContent = session.providerName;
+  document.getElementById("session-detail-subject").textContent = session.subject || "(none)";
+  document.getElementById("session-detail-created").textContent = new Date(session.createdAt).toLocaleString();
+  document.getElementById("session-detail-expires").textContent = session.expiresAt
+    ? `${new Date(session.expiresAt).toLocaleString()} (${formatSessionExpiry(session.expiresAt).toLowerCase()})`
+    : "No expiry";
+  document.getElementById("session-detail-refreshable").textContent = session.hasRefreshToken ? "Yes" : "No";
+  document.getElementById("session-detail-claims").textContent =
+    session.claims && Object.keys(session.claims).length > 0 ? JSON.stringify(session.claims, null, 2) : "—";
+  document.getElementById("session-revoke-btn").onclick = () => revokeSession(id);
+
+  // The server only ever includes these three fields outside production
+  // (AuthService.listSessions()'s isDevMode() gate) -- their presence here
+  // is the authoritative signal, not META.devMode, since it reflects what
+  // this particular response actually carried.
+  const devFieldsPresent = session.token !== undefined || session.backendToken !== undefined;
+  document.getElementById("session-detail-prod-note").hidden = devFieldsPresent;
+  document.getElementById("session-detail-dev-banner").hidden = !devFieldsPresent;
+  document.getElementById("session-detail-dev-fields").hidden = !devFieldsPresent;
+  if (devFieldsPresent) {
+    document.getElementById("session-detail-token").textContent = session.token || "—";
+    document.getElementById("session-detail-backend-token").textContent = session.backendToken || "—";
+    document.getElementById("session-detail-refresh-token").textContent = session.refreshToken || "(none)";
+  }
+
+  showDetailView("session");
+  document.getElementById("detail-panel").scrollTop = 0;
+}
+
+async function revokeSession(id) {
+  const session = SESSIONS.find((s) => s.id === id);
+  const label = session ? `${session.providerName} / ${session.subject || "(no subject)"}` : "this session";
+  if (!confirm(`Revoke ${label}? That caller's current session token will stop working immediately.`)) return;
+  try {
+    await api("DELETE", `/admin/api/sessions/${encodeURIComponent(id)}`);
+    toast("Session revoked");
+    closeDetail();
+    await refreshSessions();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 async function deleteEndpoint(id) {
   if (!confirm(`Delete endpoint "${id}"? This removes its config file too.`)) return;
   try {
@@ -565,6 +732,18 @@ async function deleteGateway(name) {
   try {
     await api("DELETE", `/admin/api/gateways/${encodeURIComponent(name)}`);
     toast(`Deleted gateway "${name}"`);
+    closeDetail();
+    await loadAll();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function deleteAuthProvider(name) {
+  if (!confirm(`Delete auth provider "${name}"?`)) return;
+  try {
+    await api("DELETE", `/admin/api/auth-providers/${encodeURIComponent(name)}`);
+    toast(`Deleted auth provider "${name}"`);
     closeDetail();
     await loadAll();
   } catch (err) {
@@ -1282,6 +1461,41 @@ async function testDbConnection() {
   }
 }
 
+/** Renders a test-login result the same way testDbConnection() renders a
+ * connection-test result, plus the extra bits a login carries: the
+ * resolved subject and any captured claims. Never shows the backend token
+ * (the admin API doesn't return one) -- just enough to confirm the config
+ * actually authenticates. */
+async function testAuthProviderLogin() {
+  const resultEl = document.getElementById("auth-provider-test-result");
+  resultEl.hidden = false;
+  resultEl.className = "test-result";
+  resultEl.textContent = "Testing…";
+  try {
+    const config = document.getElementById("auth-provider-fields")._read();
+    const credentials = {
+      username: document.getElementById("auth-provider-test-username").value,
+      password: document.getElementById("auth-provider-test-password").value,
+    };
+    const body = { config, credentials };
+    if (EDITING_AUTH_PROVIDER_NAME) body.name = EDITING_AUTH_PROVIDER_NAME;
+    const result = await api("POST", "/admin/api/auth-providers/test-login", body);
+    resultEl.classList.add(result.ok ? "test-result-ok" : "test-result-error");
+    if (!result.ok) {
+      resultEl.textContent = `✕ ${result.message}`;
+      return;
+    }
+    const bits = ["✓ Login succeeded"];
+    if (result.subject) bits.push(`subject: ${result.subject}`);
+    if (result.expiresAt) bits.push(`expires: ${new Date(result.expiresAt).toLocaleString()}`);
+    if (result.claims && Object.keys(result.claims).length > 0) bits.push(`claims: ${JSON.stringify(result.claims)}`);
+    resultEl.textContent = bits.join(" — ");
+  } catch (err) {
+    resultEl.classList.add("test-result-error");
+    resultEl.textContent = `✕ ${err.message}`;
+  }
+}
+
 function openGatewayEditor(name) {
   closeInfoPopup();
   EDITING_GATEWAY_NAME = name || null;
@@ -1301,6 +1515,9 @@ function openGatewayEditor(name) {
   renderGatewayKindFields(form.kind.value, gw);
   form.kind.onchange = () => renderGatewayKindFields(form.kind.value, {});
 
+  populateSelect(form.requiresAuth, Object.keys(AUTH_PROVIDERS), { includeBlank: true, blankLabel: "(none)" });
+  form.requiresAuth.value = gw?.requiresAuth || "";
+
   const commonParamsList = document.getElementById("gateway-common-params-list");
   renderKeyValueEditor(commonParamsList, gw?.commonParams, {});
 
@@ -1317,6 +1534,7 @@ async function saveGateway(ev) {
     const config = document.getElementById("gateway-fields")._read();
     const commonParams = readKeyValueEditor(document.getElementById("gateway-common-params-list"));
     if (Object.keys(commonParams).length > 0) config.commonParams = commonParams;
+    if (form.requiresAuth.value) config.requiresAuth = form.requiresAuth.value;
     if (EDITING_GATEWAY_NAME) {
       await api("PUT", `/admin/api/gateways/${encodeURIComponent(EDITING_GATEWAY_NAME)}`, { config });
     } else {
@@ -1327,6 +1545,324 @@ async function saveGateway(ev) {
     openGatewayEditor(name); // stay in the panel, now showing it as a saved gateway
   } catch (err) {
     showError("gateway-form-error", err.message);
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Auth provider editor -- same shape/conventions as the gateway editor
+ * above (name/kind + kind-specific fields, save via upsert, delete
+ * blocked server-side while a gateway still requires this provider).
+ * ------------------------------------------------------------------- */
+const AUTH_PROVIDER_KINDS = ["basicLogin", "oauth2", "ldap"];
+const OAUTH_GRANT_TYPES = ["password", "client_credentials"];
+const LDAP_BIND_MODES = ["search", "direct"];
+
+function renderAuthProviderKindFields(kind, provider) {
+  provider = provider || {};
+  const container = document.getElementById("auth-provider-fields");
+  container.innerHTML = "";
+
+  const claimsList = el("div", { class: "repeatable-list" });
+  for (const c of provider.claims || []) claimsList.appendChild(outputFieldRow(c));
+  const addClaimBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => claimsList.appendChild(outputFieldRow()) }, ["+ Add claim"]);
+  const claimsSectionNodes = [
+    el("div", { class: "section-header" }, [el("h4", {}, ["Claims ", infoIcon("authProviderClaims")]), addClaimBtn]),
+    el("p", { class: "muted" }, [
+      "Optional -- extracts extra fields from the login response using the same JSONPath mapping as an endpoint's Output fields (e.g. exposing a subject or display name from the login response).",
+    ]),
+    claimsList,
+  ];
+  const readClaims = () => {
+    const claims = [...claimsList.children].map((r) => r._read()).filter((c) => c.target && c.source);
+    return claims.length ? claims : undefined;
+  };
+
+  if (kind === "basicLogin") {
+    const loginUrlInput = el("input", { value: provider.loginUrl || "", required: true, placeholder: "https://api.example.com/login" });
+    const methodSelect = el("select", {}, []);
+    populateSelect(methodSelect, META.methods);
+    methodSelect.value = provider.method || "POST";
+    const headersContainer = el("div", { class: "repeatable-list" });
+    renderKeyValueEditor(headersContainer, provider.headers, {});
+    const addHeaderBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => headersContainer._addRow("", "") }, ["+ Add header"]);
+    const usernameFieldInput = el("input", { value: provider.usernameField || "", placeholder: 'defaults to "username"' });
+    const passwordFieldInput = el("input", { value: provider.passwordField || "", placeholder: 'defaults to "password"' });
+    const staticFieldsContainer = el("div", { class: "repeatable-list" });
+    renderKeyValueEditor(staticFieldsContainer, provider.staticFields, {});
+    const addStaticFieldBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => staticFieldsContainer._addRow("", "") }, ["+ Add field"]);
+    const tokenPathInput = el("input", { value: provider.tokenPath || "", required: true, placeholder: "$.accessToken" });
+    const refreshTokenPathInput = el("input", { value: provider.refreshTokenPath || "", placeholder: "$.refreshToken (optional)" });
+    const expiresInPathInput = el("input", { value: provider.expiresInPath || "", placeholder: "$.expiresIn (optional, seconds)" });
+    const subjectPathInput = el("input", { value: provider.subjectPath || "", placeholder: "$.sub (optional)" });
+
+    container.appendChild(
+      el("div", { class: "field-grid" }, [
+        el("label", { class: "span-2" }, [fieldTitle("Login URL ", infoIcon("authProviderLoginUrl")), loginUrlInput]),
+        el("label", {}, [fieldTitle("Method ", infoIcon("authProviderMethod")), methodSelect]),
+      ])
+    );
+    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Headers ", infoIcon("backendHeaders")]), addHeaderBtn]));
+    container.appendChild(headersContainer);
+    container.appendChild(
+      el("div", { class: "field-grid" }, [
+        el("label", {}, [fieldTitle("Username field ", infoIcon("authProviderUsernameField")), usernameFieldInput]),
+        el("label", {}, [fieldTitle("Password field ", infoIcon("authProviderPasswordField")), passwordFieldInput]),
+      ])
+    );
+    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Static fields ", infoIcon("authProviderStaticFields")]), addStaticFieldBtn]));
+    container.appendChild(staticFieldsContainer);
+    container.appendChild(
+      el("div", { class: "field-grid" }, [
+        el("label", { class: "span-2" }, [fieldTitle("Token path ", infoIcon("authProviderTokenPath"), " (JSONPath, required)"), tokenPathInput]),
+        el("label", {}, [fieldTitle("Refresh token path ", infoIcon("authProviderRefreshTokenPath")), refreshTokenPathInput]),
+        el("label", {}, [fieldTitle("Expires-in path ", infoIcon("authProviderExpiresInPath")), expiresInPathInput]),
+        el("label", { class: "span-2" }, [fieldTitle("Subject path ", infoIcon("authProviderSubjectPath")), subjectPathInput]),
+      ])
+    );
+    claimsSectionNodes.forEach((n) => container.appendChild(n));
+
+    container._read = () => {
+      const out = {
+        kind: "basicLogin",
+        loginUrl: loginUrlInput.value.trim(),
+        method: methodSelect.value,
+        headers: readKeyValueEditor(headersContainer),
+        staticFields: readKeyValueEditor(staticFieldsContainer),
+        tokenPath: tokenPathInput.value.trim(),
+      };
+      if (usernameFieldInput.value.trim()) out.usernameField = usernameFieldInput.value.trim();
+      if (passwordFieldInput.value.trim()) out.passwordField = passwordFieldInput.value.trim();
+      if (refreshTokenPathInput.value.trim()) out.refreshTokenPath = refreshTokenPathInput.value.trim();
+      if (expiresInPathInput.value.trim()) out.expiresInPath = expiresInPathInput.value.trim();
+      if (subjectPathInput.value.trim()) out.subjectPath = subjectPathInput.value.trim();
+      const claims = readClaims();
+      if (claims) out.claims = claims;
+      return out;
+    };
+  } else if (kind === "oauth2") {
+    const tokenUrlInput = el("input", { value: provider.tokenUrl || "", required: true, placeholder: "https://api.example.com/oauth/token" });
+    const grantTypeSelect = el("select", {}, []);
+    populateSelect(grantTypeSelect, OAUTH_GRANT_TYPES);
+    grantTypeSelect.value = provider.grantType || "password";
+    const clientIdInput = el("input", { value: provider.clientId || "", required: true, placeholder: "my-client-id" });
+    const isRedactedSecret = provider.clientSecret === REDACTED;
+    const clientSecretInput = el("input", {
+      type: "password",
+      value: isRedactedSecret ? "" : provider.clientSecret || "",
+      placeholder: isRedactedSecret ? "(unchanged — leave blank to keep)" : "required",
+      ...(EDITING_AUTH_PROVIDER_NAME ? {} : { required: true }),
+    });
+    const scopeInput = el("input", { value: provider.scope || "", placeholder: "optional" });
+    const headersContainer = el("div", { class: "repeatable-list" });
+    renderKeyValueEditor(headersContainer, provider.headers, {});
+    const addHeaderBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => headersContainer._addRow("", "") }, ["+ Add header"]);
+
+    container.appendChild(
+      el("div", { class: "field-grid" }, [
+        el("label", { class: "span-2" }, [fieldTitle("Token URL ", infoIcon("authProviderTokenUrl")), tokenUrlInput]),
+        el("label", {}, [fieldTitle("Grant type ", infoIcon("authProviderGrantType")), grantTypeSelect]),
+        el("label", {}, [fieldTitle("Client id ", infoIcon("authProviderClientId")), clientIdInput]),
+        el("label", {}, [fieldTitle("Client secret ", infoIcon("authProviderClientSecret")), clientSecretInput]),
+        el("label", { class: "span-2" }, [fieldTitle("Scope ", infoIcon("authProviderScope")), scopeInput]),
+      ])
+    );
+    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Headers ", infoIcon("backendHeaders")]), addHeaderBtn]));
+    container.appendChild(headersContainer);
+    claimsSectionNodes.forEach((n) => container.appendChild(n));
+
+    container._read = () => {
+      const out = {
+        kind: "oauth2",
+        tokenUrl: tokenUrlInput.value.trim(),
+        grantType: grantTypeSelect.value,
+        clientId: clientIdInput.value.trim(),
+        clientSecret: clientSecretInput.value,
+        headers: readKeyValueEditor(headersContainer),
+      };
+      if (scopeInput.value.trim()) out.scope = scopeInput.value.trim();
+      const claims = readClaims();
+      if (claims) out.claims = claims;
+      return out;
+    };
+  } else if (kind === "ldap") {
+    const urlInput = el("input", { value: provider.url || "", required: true, placeholder: "ldap://localhost:3389" });
+    const tlsRejectCheckbox = el("input", { type: "checkbox" });
+    tlsRejectCheckbox.checked = provider.tlsRejectUnauthorized !== false;
+
+    const initialMode = provider.userDnTemplate ? "direct" : "search";
+    const bindModeSelect = el("select", {}, []);
+    populateSelect(bindModeSelect, LDAP_BIND_MODES);
+    bindModeSelect.value = initialMode;
+
+    const userDnTemplateInput = el("input", {
+      value: provider.userDnTemplate || "",
+      placeholder: "uid={username},ou=people,dc=example,dc=com",
+    });
+
+    const bindDnInput = el("input", { value: provider.bindDn || "", placeholder: "cn=admin,dc=example,dc=com" });
+    const isRedactedBindPassword = provider.bindPassword === REDACTED;
+    const bindPasswordInput = el("input", {
+      type: "password",
+      value: isRedactedBindPassword ? "" : provider.bindPassword || "",
+      placeholder: isRedactedBindPassword ? "(unchanged — leave blank to keep)" : "",
+    });
+    const searchBaseInput = el("input", { value: provider.searchBase || "", placeholder: "ou=people,dc=example,dc=com" });
+    const searchFilterInput = el("input", { value: provider.searchFilter || "", placeholder: "(uid={username})" });
+
+    const directModeFields = el("div", { class: "field-grid" }, [
+      el("label", { class: "span-2" }, [
+        fieldTitle("User DN template ", infoIcon("authProviderLdapUserDnTemplate")),
+        userDnTemplateInput,
+      ]),
+    ]);
+    const searchModeFields = el("div", { class: "field-grid" }, [
+      el("label", {}, [fieldTitle("Bind DN ", infoIcon("authProviderLdapBindDn")), bindDnInput]),
+      el("label", {}, [fieldTitle("Bind password ", infoIcon("authProviderLdapBindPassword")), bindPasswordInput]),
+      el("label", { class: "span-2" }, [fieldTitle("Search base ", infoIcon("authProviderLdapSearchBase")), searchBaseInput]),
+      el("label", { class: "span-2" }, [fieldTitle("Search filter ", infoIcon("authProviderLdapSearchFilter")), searchFilterInput]),
+    ]);
+    const applyBindModeVisibility = () => {
+      const isDirect = bindModeSelect.value === "direct";
+      directModeFields.hidden = !isDirect;
+      searchModeFields.hidden = isDirect;
+    };
+    bindModeSelect.addEventListener("change", applyBindModeVisibility);
+
+    const groupSearchBaseInput = el("input", { value: provider.groupSearchBase || "", placeholder: "ou=groups,dc=example,dc=com (optional)" });
+    const groupSearchFilterInput = el("input", { value: provider.groupSearchFilter || "", placeholder: "(member={dn}) (required if Group search base is set)" });
+    const groupNameAttributeInput = el("input", { value: provider.groupNameAttribute || "", placeholder: 'defaults to "cn"' });
+    const attributesInput = el("input", {
+      value: (provider.attributes || []).join(", "),
+      placeholder: "mail, title, departmentNumber (optional)",
+    });
+    const isRedactedTokenSecret = provider.tokenSecret === REDACTED;
+    const tokenSecretInput = el("input", {
+      type: "password",
+      value: isRedactedTokenSecret ? "" : provider.tokenSecret || "",
+      placeholder: isRedactedTokenSecret ? "(unchanged — leave blank to keep)" : "required",
+      ...(EDITING_AUTH_PROVIDER_NAME ? {} : { required: true }),
+    });
+    const tokenTtlInput = el("input", { type: "number", min: "1", value: provider.tokenTtlSeconds ?? 3600 });
+
+    container.appendChild(
+      el("div", { class: "field-grid" }, [
+        el("label", { class: "span-2" }, [fieldTitle("URL ", infoIcon("authProviderLdapUrl")), urlInput]),
+        el("label", { class: "checkbox-field" }, [tlsRejectCheckbox, "Verify TLS certificate ", infoIcon("authProviderLdapTlsRejectUnauthorized")]),
+      ])
+    );
+    container.appendChild(el("div", { class: "field-grid" }, [el("label", {}, [fieldTitle("Bind mode ", infoIcon("authProviderLdapBindMode")), bindModeSelect])]));
+    container.appendChild(directModeFields);
+    container.appendChild(searchModeFields);
+    applyBindModeVisibility();
+
+    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Group lookup ", infoIcon("authProviderLdapGroupLookup")])]));
+    container.appendChild(
+      el("div", { class: "field-grid" }, [
+        el("label", { class: "span-2" }, [fieldTitle("Group search base ", infoIcon("authProviderLdapGroupSearchBase")), groupSearchBaseInput]),
+        el("label", { class: "span-2" }, [fieldTitle("Group search filter ", infoIcon("authProviderLdapGroupSearchFilter")), groupSearchFilterInput]),
+        el("label", {}, [fieldTitle("Group name attribute ", infoIcon("authProviderLdapGroupNameAttribute")), groupNameAttributeInput]),
+      ])
+    );
+    container.appendChild(
+      el("div", { class: "field-grid" }, [
+        el("label", { class: "span-2" }, [fieldTitle("Extra attributes ", infoIcon("authProviderLdapAttributes"), " (comma-separated)"), attributesInput]),
+      ])
+    );
+    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Stand-in backend token ", infoIcon("authProviderLdapTokenSecret")])]));
+    container.appendChild(
+      el("div", { class: "field-grid" }, [
+        el("label", {}, [fieldTitle("Token secret ", infoIcon("authProviderLdapTokenSecret")), tokenSecretInput]),
+        el("label", {}, [fieldTitle("Token TTL (seconds) ", infoIcon("authProviderLdapTokenTtlSeconds")), tokenTtlInput]),
+      ])
+    );
+
+    container._read = () => {
+      const out = {
+        kind: "ldap",
+        url: urlInput.value.trim(),
+        tlsRejectUnauthorized: tlsRejectCheckbox.checked,
+        tokenSecret: tokenSecretInput.value,
+        tokenTtlSeconds: tokenTtlInput.value ? Number(tokenTtlInput.value) : 3600,
+      };
+      if (bindModeSelect.value === "direct") {
+        out.userDnTemplate = userDnTemplateInput.value.trim();
+      } else {
+        out.bindDn = bindDnInput.value.trim();
+        out.bindPassword = bindPasswordInput.value;
+        out.searchBase = searchBaseInput.value.trim();
+        out.searchFilter = searchFilterInput.value.trim();
+      }
+      if (groupSearchBaseInput.value.trim()) {
+        out.groupSearchBase = groupSearchBaseInput.value.trim();
+        out.groupSearchFilter = groupSearchFilterInput.value.trim();
+        if (groupNameAttributeInput.value.trim()) out.groupNameAttribute = groupNameAttributeInput.value.trim();
+      }
+      const attributes = attributesInput.value
+        .split(",")
+        .map((a) => a.trim())
+        .filter(Boolean);
+      if (attributes.length) out.attributes = attributes;
+      return out;
+    };
+  }
+}
+
+/** Clears the test-login credentials/result -- switching provider, kind, or
+ * closing/reopening the editor shouldn't carry a stale result (or someone
+ * else's typed-in password) forward. */
+function resetAuthProviderTestPanel() {
+  document.getElementById("auth-provider-test-username").value = "";
+  document.getElementById("auth-provider-test-password").value = "";
+  const resultEl = document.getElementById("auth-provider-test-result");
+  resultEl.hidden = true;
+  resultEl.textContent = "";
+  resultEl.className = "test-result";
+}
+
+function openAuthProviderEditor(name) {
+  closeInfoPopup();
+  EDITING_AUTH_PROVIDER_NAME = name || null;
+  const provider = name ? AUTH_PROVIDERS[name] : null;
+  document.getElementById("auth-provider-editor-title").textContent = provider ? `Edit auth provider: ${name}` : "New auth provider";
+  const deleteBtn = document.getElementById("auth-provider-delete-btn");
+  deleteBtn.hidden = !provider;
+  deleteBtn.onclick = () => deleteAuthProvider(EDITING_AUTH_PROVIDER_NAME);
+  showError("auth-provider-form-error", "");
+
+  const form = document.getElementById("auth-provider-form");
+  form.name.value = name || "";
+  form.name.disabled = Boolean(name); // renaming would orphan the old entry; delete+recreate instead
+
+  populateSelect(form.kind, AUTH_PROVIDER_KINDS);
+  form.kind.value = provider?.kind || "basicLogin";
+  renderAuthProviderKindFields(form.kind.value, provider);
+  form.kind.onchange = () => {
+    renderAuthProviderKindFields(form.kind.value, {});
+    resetAuthProviderTestPanel();
+  };
+  resetAuthProviderTestPanel();
+
+  showDetailView("authProvider");
+  document.getElementById("detail-panel").scrollTop = 0;
+}
+
+async function saveAuthProvider(ev) {
+  ev.preventDefault();
+  showError("auth-provider-form-error", "");
+  const form = document.getElementById("auth-provider-form");
+  const name = form.name.value.trim();
+  try {
+    const config = document.getElementById("auth-provider-fields")._read();
+    if (EDITING_AUTH_PROVIDER_NAME) {
+      await api("PUT", `/admin/api/auth-providers/${encodeURIComponent(EDITING_AUTH_PROVIDER_NAME)}`, { config });
+    } else {
+      await api("POST", "/admin/api/auth-providers", { name, config });
+    }
+    toast(`Saved auth provider "${name}"`);
+    await loadAll();
+    openAuthProviderEditor(name); // stay in the panel, now showing it as a saved provider
+  } catch (err) {
+    showError("auth-provider-form-error", err.message);
   }
 }
 
@@ -1364,8 +1900,15 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("new-endpoint-btn").addEventListener("click", () => openEndpointEditor(null));
   document.getElementById("new-gateway-btn").addEventListener("click", () => openGatewayEditor(null));
+  document.getElementById("new-auth-provider-btn").addEventListener("click", () => openAuthProviderEditor(null));
   document.getElementById("endpoint-close-btn").addEventListener("click", closeDetail);
   document.getElementById("gateway-close-btn").addEventListener("click", closeDetail);
+  document.getElementById("auth-provider-close-btn").addEventListener("click", closeDetail);
+  document.getElementById("session-close-btn").addEventListener("click", closeDetail);
+  document.getElementById("refresh-sessions-btn").addEventListener("click", async () => {
+    await refreshSessions();
+    toast("Sessions refreshed");
+  });
   document.getElementById("change-workspace-btn").addEventListener("click", () => openWorkspaceEditor(CURRENT_SETTINGS.configDir));
   document.getElementById("workspace-form").addEventListener("submit", saveWorkspace);
 
@@ -1399,6 +1942,8 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("endpoint-form").addEventListener("submit", saveEndpoint);
   document.getElementById("gateway-form").addEventListener("submit", saveGateway);
+  document.getElementById("auth-provider-form").addEventListener("submit", saveAuthProvider);
+  document.getElementById("auth-provider-test-btn").addEventListener("click", testAuthProviderLogin);
   document.getElementById("fetch-sample-btn").addEventListener("click", fetchSample);
   document.getElementById("apply-mapping-btn").addEventListener("click", applyMappingToSample);
 

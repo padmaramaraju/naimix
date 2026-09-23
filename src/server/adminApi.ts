@@ -3,20 +3,24 @@ import path from "node:path";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
 import { endpointConfigSchema, backendSchema, outputSchema, inputParamSchema } from "../config/schema";
-import type { BackendConfig, InputParamDef } from "../types/config";
-import { callBackend, closeAllSqlConnections } from "../connectors";
+import type { InputParamDef } from "../types/config";
+import { callBackend, closeAllSqlConnections, getBackendGatewayName } from "../connectors";
 import { mapResponse } from "../transform/mapper";
 import { ValidationError } from "./errors";
 import { generateCrudEndpointsForGateway } from "./crudGenerator";
 import { resolveConfigDir, saveWorkspaceSettings } from "./workspaceSettings";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
+import type { AuthProvidersRegistry } from "./authProvidersRegistry";
+import type { AuthService } from "../auth/authService";
 import type { Logger } from "./logger";
 import type { ResolvedParams } from "../connectors/paramSubst";
 
 export interface AdminApiDeps {
   endpointRegistry: EndpointRegistry;
   gatewaysRegistry: GatewaysRegistry;
+  authProvidersRegistry: AuthProvidersRegistry;
+  authService: AuthService;
   logger: Logger;
   /** Mutable holder for "which workspace is this instance currently
    * pointed at" -- undefined when running in legacy mode (ENDPOINTS_DIR/
@@ -74,13 +78,11 @@ function buildTestParams(input: InputParamDef[], supplied: Record<string, unknow
   return result;
 }
 
-function getBackendGatewayName(backend: BackendConfig): string | undefined {
-  return "gateway" in backend ? backend.gateway : undefined;
-}
-
 export function createAdminApiRouter({
   endpointRegistry,
   gatewaysRegistry,
+  authProvidersRegistry,
+  authService,
   logger,
   workspace,
   settingsFile,
@@ -98,6 +100,13 @@ export function createAdminApiRouter({
       sqlClients: SQL_CLIENTS,
       paramLocations: ["path", "query", "header", "body", "env"],
       paramTypes: ["string", "number", "boolean"],
+      // Mirrors AuthService's own isDevMode() gate -- the admin UI reads
+      // this to decide whether to render the Active sessions panel's
+      // token/backend-token/refresh-token columns and its dev-only warning
+      // banner. The server-side gate in listSessions() is what actually
+      // withholds the data in production; this flag only controls whether
+      // the UI bothers asking for it.
+      devMode: process.env.NODE_ENV !== "production",
     });
   });
 
@@ -209,6 +218,7 @@ export function createAdminApiRouter({
     asyncHandler(async (_req, res) => {
       const { errors } = endpointRegistry.reloadFromDisk();
       gatewaysRegistry.reloadFromDisk();
+      authProvidersRegistry.reloadFromDisk();
       res.json({ endpointCount: endpointRegistry.list().length, errors });
     })
   );
@@ -225,8 +235,10 @@ export function createAdminApiRouter({
       configDir: workspace.configDir ?? null,
       endpointsDir: endpointRegistry.getDir(),
       gatewaysFile: gatewaysRegistry.getFilePath(),
+      authProvidersFile: authProvidersRegistry.getFilePath(),
       endpointCount: endpointRegistry.list().length,
       gatewayCount: Object.keys(gatewaysRegistry.listRaw()).length,
+      authProviderCount: Object.keys(authProvidersRegistry.listRaw()).length,
     });
   });
 
@@ -243,7 +255,7 @@ export function createAdminApiRouter({
         );
       }
 
-      const { endpointsDir, gatewaysFile } = resolveConfigDir(configDir);
+      const { endpointsDir, gatewaysFile, authProvidersFile } = resolveConfigDir(configDir);
 
       // Any SQL gateway pools opened for the OLD folder's gateways (e.g. an
       // open sqlite file handle, or a live pg/mysql pool) are no longer
@@ -253,6 +265,7 @@ export function createAdminApiRouter({
 
       const { errors: endpointErrors } = endpointRegistry.setDir(endpointsDir);
       gatewaysRegistry.setFilePath(gatewaysFile);
+      authProvidersRegistry.setFilePath(authProvidersFile);
       workspace.configDir = configDir;
       saveWorkspaceSettings(settingsFile, { configDir });
 
@@ -261,9 +274,11 @@ export function createAdminApiRouter({
         configDir,
         endpointsDir,
         gatewaysFile,
+        authProvidersFile,
         endpointCount: endpointRegistry.list().length,
         endpointErrors,
         gatewayCount: Object.keys(gatewaysRegistry.listRaw()).length,
+        authProviderCount: Object.keys(authProvidersRegistry.listRaw()).length,
       });
     })
   );
@@ -356,6 +371,113 @@ export function createAdminApiRouter({
     adminLogger.info(`Deleted gateway "${name}"`);
     res.status(204).end();
   });
+
+  // ---- Auth providers ----
+  // See AUTH_DESIGN_NOTES.md. A gateway's `requiresAuth` field names one of
+  // these by name (validated at call time, not at gateway-save time -- same
+  // "a name is just a name until something calls it" convention as a
+  // backend's own `gateway` reference).
+
+  router.get("/auth-providers", (_req, res) => {
+    res.json(authProvidersRegistry.listRedacted());
+  });
+
+  router.get("/auth-providers/:name", (req, res) => {
+    const provider = authProvidersRegistry.getRaw(req.params.name);
+    if (!provider) return res.status(404).json({ error: "NotFound", message: `No auth provider "${req.params.name}"` });
+    res.json(authProvidersRegistry.listRedacted()[req.params.name]);
+  });
+
+  router.post(
+    "/auth-providers",
+    asyncHandler(async (req, res) => {
+      const bodySchema = z.object({ name: z.string().min(1), config: z.unknown() });
+      const { name, config } = bodySchema.parse(req.body);
+      if (authProvidersRegistry.getRaw(name)) {
+        return res.status(409).json({ error: "Conflict", message: `Auth provider "${name}" already exists` });
+      }
+      authProvidersRegistry.upsert(name, config);
+      adminLogger.info(`Created auth provider "${name}"`);
+      res.status(201).json({ name });
+    })
+  );
+
+  router.put(
+    "/auth-providers/:name",
+    asyncHandler(async (req, res) => {
+      if (!authProvidersRegistry.getRaw(req.params.name)) {
+        return res.status(404).json({ error: "NotFound", message: `No auth provider "${req.params.name}"` });
+      }
+      authProvidersRegistry.upsert(req.params.name, req.body?.config ?? req.body);
+      adminLogger.info(`Updated auth provider "${req.params.name}"`);
+      res.json({ name: req.params.name });
+    })
+  );
+
+  // Attempts a real login against an auth provider's config (saved, via
+  // `name`, or a draft still being edited) without creating a session --
+  // the auth-provider counterpart to /gateways/test-connection. Useful for
+  // checking a bind DN, filter, or secret is right before saving, without
+  // resorting to a separate curl/POST-/auth/login round trip.
+  router.post(
+    "/auth-providers/test-login",
+    asyncHandler(async (req, res) => {
+      const bodySchema = z.object({
+        name: z.string().optional(),
+        config: z.unknown(),
+        credentials: z.record(z.unknown()).optional().default({}),
+      });
+      const { name, config, credentials } = bodySchema.parse(req.body);
+      const result = await authProvidersRegistry.testLogin(name, config, credentials);
+      res.json(result);
+    })
+  );
+
+  router.delete("/auth-providers/:name", (req, res) => {
+    const name = req.params.name;
+    const dependents = Object.entries(gatewaysRegistry.listRaw()).filter(
+      ([, gw]) => "requiresAuth" in gw && gw.requiresAuth === name
+    );
+    if (dependents.length > 0) {
+      return res.status(409).json({
+        error: "Conflict",
+        message: `Auth provider "${name}" is required by ${dependents.length} gateway(s)`,
+        gateways: dependents.map(([gwName]) => gwName),
+      });
+    }
+    const removed = authProvidersRegistry.remove(name);
+    if (!removed) return res.status(404).json({ error: "NotFound", message: `No auth provider "${name}"` });
+    adminLogger.info(`Deleted auth provider "${name}"`);
+    res.status(204).end();
+  });
+
+  // ---- Sessions ----
+  // What's actually held in the in-memory session store right now (see
+  // AUTH_DESIGN_NOTES.md's opaque-token design and sessionStore.ts) -- every
+  // caller session currently live across every provider, for whoever
+  // configures this instance to see without a debugger attached. Outside
+  // production, this also includes a session's real bearer token and the
+  // backend/refresh token it wraps, for local debugging -- see
+  // AuthService.listSessions()'s `isDevMode()` gate. Production always omits
+  // those three, whatever this route returns is decided server-side by
+  // listSessions() itself -- there's no separate check to bypass here.
+
+  router.get(
+    "/sessions",
+    asyncHandler(async (_req, res) => {
+      res.json(await authService.listSessions());
+    })
+  );
+
+  router.delete(
+    "/sessions/:id",
+    asyncHandler(async (req, res) => {
+      const revoked = await authService.revokeSession(req.params.id);
+      if (!revoked) return res.status(404).json({ error: "NotFound", message: `No active session "${req.params.id}"` });
+      adminLogger.info(`Revoked session "${req.params.id}"`);
+      res.status(204).end();
+    })
+  );
 
   // Zod validation errors -> 400 with details, instead of falling through
   // to the generic 500 handler in app.ts.

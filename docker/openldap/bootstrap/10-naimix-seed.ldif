@@ -1,0 +1,63 @@
+# Seed data for the local LDAP test directory (see ../docker-compose.yml).
+# The root "dc=naimix,dc=test" entry itself is created automatically by
+# the osixia/openldap image from LDAP_ORGANISATION/LDAP_DOMAIN -- this file
+# only adds what's below it, and is loaded once, on first container start.
+#
+# All test users share the password "password123" (see ../README.md).
+# This directory is for local testing only -- never point it at anything
+# real, and never reuse these credentials for anything that matters.
+
+dn: ou=people,dc=naimix,dc=test
+objectClass: organizationalUnit
+ou: people
+
+dn: ou=groups,dc=naimix,dc=test
+objectClass: organizationalUnit
+ou: groups
+
+dn: uid=jdoe,ou=people,dc=naimix,dc=test
+objectClass: inetOrgPerson
+uid: jdoe
+cn: Jane Doe
+sn: Doe
+mail: jdoe@naimix.test
+title: Software Engineer
+departmentNumber: Engineering
+userPassword: {SSHA}f2gG347b/XuB+77I1IygKtMdgUOR5KYv
+
+dn: uid=asmith,ou=people,dc=naimix,dc=test
+objectClass: inetOrgPerson
+uid: asmith
+cn: Alice Smith
+sn: Smith
+mail: asmith@naimix.test
+title: IT Administrator
+departmentNumber: IT
+userPassword: {SSHA}f2gG347b/XuB+77I1IygKtMdgUOR5KYv
+
+dn: uid=bwayne,ou=people,dc=naimix,dc=test
+objectClass: inetOrgPerson
+uid: bwayne
+cn: Bruce Wayne
+sn: Wayne
+mail: bwayne@naimix.test
+title: Account Executive
+departmentNumber: Sales
+userPassword: {SSHA}f2gG347b/XuB+77I1IygKtMdgUOR5KYv
+
+dn: cn=employees,ou=groups,dc=naimix,dc=test
+objectClass: groupOfNames
+cn: employees
+member: uid=jdoe,ou=people,dc=naimix,dc=test
+member: uid=asmith,ou=people,dc=naimix,dc=test
+member: uid=bwayne,ou=people,dc=naimix,dc=test
+
+dn: cn=engineers,ou=groups,dc=naimix,dc=test
+objectClass: groupOfNames
+cn: engineers
+member: uid=jdoe,ou=people,dc=naimix,dc=test
+
+dn: cn=admins,ou=groups,dc=naimix,dc=test
+objectClass: groupOfNames
+cn: admins
+member: uid=asmith,ou=people,dc=naimix,dc=test

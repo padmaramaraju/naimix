@@ -43,5 +43,13 @@ function withGatewayCommonParams(backend: BackendConfig, ctx: ConnectorContext):
   return { ...commonParams, ...ctx.params };
 }
 
+/** The gateway name a backend config references, if any (json/xml/soap have
+ * an optional `gateway`; sql requires one). Shared by dispatch.ts (to check
+ * a gateway's `requiresAuth`) and adminApi.ts (to check for dependent
+ * endpoints before deleting a gateway). */
+export function getBackendGatewayName(backend: BackendConfig): string | undefined {
+  return "gateway" in backend ? backend.gateway : undefined;
+}
+
 export { closeAllSqlConnections } from "./sql";
 export type { ConnectorContext, BackendResult } from "./types";

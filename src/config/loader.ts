@@ -4,8 +4,10 @@ import yaml from "js-yaml";
 import {
   gatewaysFileSchema,
   endpointConfigSchema,
+  authProvidersFileSchema,
   type EndpointConfigParsed,
   type GatewaysFileParsed,
+  type AuthProvidersFileParsed,
 } from "./schema";
 import { substituteEnv } from "./envSubst";
 
@@ -115,4 +117,25 @@ export function loadGateways(gatewaysFile: string): GatewaysFileParsed {
   }
   const raw = substituteEnv(readStructuredFile(gatewaysFile));
   return gatewaysFileSchema.parse(raw);
+}
+
+/** Loads authProviders.yaml WITHOUT resolving ${env.X} placeholders -- same
+ * "show/preserve an env reference, don't resolve it" convention as
+ * loadGatewaysRaw, for a future admin UI. */
+export function loadAuthProvidersRaw(file: string): AuthProvidersFileParsed {
+  if (!fs.existsSync(file)) {
+    return { authProviders: {} };
+  }
+  const raw = readStructuredFile(file);
+  return authProvidersFileSchema.parse(raw);
+}
+
+/** Loads authProviders.yaml WITH ${env.X} placeholders resolved -- used at
+ * request time to actually log a caller in against a provider. */
+export function loadAuthProviders(file: string): AuthProvidersFileParsed {
+  if (!fs.existsSync(file)) {
+    return { authProviders: {} };
+  }
+  const raw = substituteEnv(readStructuredFile(file));
+  return authProvidersFileSchema.parse(raw);
 }

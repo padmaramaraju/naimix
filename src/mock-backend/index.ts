@@ -26,6 +26,9 @@ export async function startMockBackend(port: number, sqlitePath: string): Promis
   const app = express();
   app.use(express.text({ type: ["application/xml", "text/xml"] }));
   app.use(express.json());
+  // Needed for the OAuth2 token endpoint below, which -- like every real
+  // OAuth2 token endpoint (RFC 6749) -- takes a form-encoded body, not JSON.
+  app.use(express.urlencoded({ extended: false }));
 
   // ---- Generic XML ----
   // Registered before the "/customers/:id" JSON route below: Express matches
@@ -48,6 +51,57 @@ export async function startMockBackend(port: number, sqlitePath: string): Promis
   // don't change what the fixed demo customer records look like.
   app.get("/echo", (req, res) => {
     res.json({ query: req.query, headers: req.headers });
+  });
+
+  // ---- Auth (test/dev helper) ----
+  // Exercises the "basicLogin" auth provider: a bespoke login API accepting
+  // { username, password } and returning a token payload with its own
+  // field names (not the OAuth2 standard ones -- that's the point of this
+  // one existing separately from /oauth/token below).
+  app.post("/login", (req, res) => {
+    const { username, password } = (req.body ?? {}) as Record<string, string>;
+    if (username === "demo" && password === "demo123") {
+      return res.json({
+        accessToken: `mock-backend-token-for-${username}`,
+        refreshToken: `mock-basic-refresh-${username}`,
+        expiresIn: 3600,
+      });
+    }
+    res.status(401).json({ error: "invalid_credentials" });
+  });
+
+  // Exercises the "oauth2" auth provider: a standard RFC 6749 token
+  // endpoint (form-encoded request, access_token/refresh_token/expires_in
+  // response) supporting the password, client_credentials, and
+  // refresh_token grants.
+  app.post("/oauth/token", (req, res) => {
+    const body = (req.body ?? {}) as Record<string, string>;
+    if (body.client_id !== "demo-client" || body.client_secret !== "demo-secret") {
+      return res.status(401).json({ error: "invalid_client" });
+    }
+
+    if (body.grant_type === "password") {
+      if (body.username !== "demo" || body.password !== "demo123") {
+        return res.status(400).json({ error: "invalid_grant" });
+      }
+    } else if (body.grant_type === "refresh_token") {
+      if (!body.refresh_token || !body.refresh_token.startsWith("mock-oauth-refresh-")) {
+        return res.status(400).json({ error: "invalid_grant" });
+      }
+    } else if (body.grant_type !== "client_credentials") {
+      return res.status(400).json({ error: "unsupported_grant_type" });
+    }
+
+    const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    res.json({
+      access_token: `mock-oauth-access-${suffix}`,
+      // A client_credentials grant authenticates the middleware itself, not
+      // an end user -- real providers commonly issue no refresh token for
+      // it, so this mirrors that instead of always returning one.
+      ...(body.grant_type === "client_credentials" ? {} : { refresh_token: `mock-oauth-refresh-${suffix}` }),
+      expires_in: 3600,
+      token_type: "Bearer",
+    });
   });
 
   // ---- JSON REST ----

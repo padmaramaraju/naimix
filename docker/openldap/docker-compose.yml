@@ -1,0 +1,51 @@
+# A free, self-hosted LDAP test directory -- for developing/testing the
+# upcoming LDAP/AD auth provider (see AUTH_DESIGN_NOTES.md's "Suggested
+# phased build order", step 2). Not part of the naimix app itself; nothing
+# here is started by `npm run dev` or any other app command.
+#
+# Quick start:
+#   docker compose -f docker/openldap/docker-compose.yml up
+#   (add -d to run in the background)
+#
+# Reset back to the seeded state (drops all data, including anything you
+# changed while testing):
+#   docker compose -f docker/openldap/docker-compose.yml down -v
+#
+# See ./README.md for connection details, test accounts, and example
+# ldapsearch commands.
+
+services:
+  openldap:
+    image: osixia/openldap:1.5.0
+    container_name: naimix-test-ldap
+    environment:
+      LDAP_ORGANISATION: "Naimix Test Directory"
+      LDAP_DOMAIN: "naimix.test"
+      LDAP_BASE_DN: "dc=naimix,dc=test"
+      LDAP_ADMIN_PASSWORD: "adminpw123"
+      LDAP_TLS: "false"
+      # By default, the image deletes its bootstrap config folder (this
+      # exact bootstrap-ldif directory, among others) once first-start setup
+      # finishes -- fine normally, but ours is a live bind mount to
+      # ./bootstrap, and the container can't rm its own mount point ("rm:
+      # ... Device or resource busy" / "startup/slapd failed with status
+      # 1"). Turning this off just means that folder is left in place
+      # inside the container after setup, which is harmless for a local
+      # dev/test fixture.
+      LDAP_REMOVE_CONFIG_AFTER_SETUP: "false"
+    ports:
+      - "3389:389"
+    volumes:
+      # Loaded automatically on first run only (i.e. when the container's
+      # own data volume is still empty) -- osixia/openldap's own bootstrap
+      # mechanism, not a naimix-specific script. See ./bootstrap/*.ldif.
+      #
+      # Deliberately NOT mounted :ro despite being just seed data: the
+      # image's own startup script chown's this directory to the openldap
+      # user before reading it, and that chown fails outright against a
+      # read-only bind mount (see the "Read-only file system" / "startup/
+      # slapd failed with status 1" error this caused). The container never
+      # writes anything meaningful back into it -- ./bootstrap/*.ldif itself
+      # is untouched by this beyond the ownership bits on the directory
+      # entry, so read-write here is safe.
+      - ./bootstrap:/container/service/slapd/assets/config/bootstrap/ldif/custom

@@ -56,6 +56,24 @@
           <div id="gateways-list" class="gateway-list"></div>
           <p id="gateways-empty" class="muted sidebar-empty" hidden>No gateways yet. Click "+ New" to create one.</p>
         </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <h2>Auth providers</h2>
+            <button id="new-auth-provider-btn" class="btn-primary btn-sm" type="button">+ New</button>
+          </div>
+          <div id="auth-providers-list" class="gateway-list"></div>
+          <p id="auth-providers-empty" class="muted sidebar-empty" hidden>No auth providers yet. Click "+ New" to create one.</p>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <h2>Active sessions <button type="button" class="info-icon" data-info-key="activeSessions" aria-label="What is this?">i</button></h2>
+            <button id="refresh-sessions-btn" class="btn-secondary btn-sm" type="button">Refresh</button>
+          </div>
+          <div id="sessions-list" class="gateway-list"></div>
+          <p id="sessions-empty" class="muted sidebar-empty" hidden>No one is currently logged in through any provider.</p>
+        </div>
       </aside>
 
       <main id="detail-panel" class="detail-panel">
@@ -205,6 +223,10 @@
             </label>
             <div id="gateway-fields"></div>
 
+            <label class="block"><span class="field-title">Requires auth <button type="button" class="info-icon" data-info-key="gatewayRequiresAuth" aria-label="What is this?">i</button> <span class="muted">(optional — every endpoint using this gateway will require a caller session from this provider)</span></span>
+              <select name="requiresAuth"><option value="">(none)</option></select>
+            </label>
+
             <section class="editor-section">
               <div class="section-header">
                 <h3>Common parameters <button type="button" class="info-icon" data-info-key="gatewayCommonParams" aria-label="What is this?">i</button></h3>
@@ -221,6 +243,115 @@
               <button type="submit" class="btn-primary">Save gateway</button>
             </div>
           </form>
+        </section>
+
+        <!-- Auth provider detail / editor -->
+        <section id="auth-provider-detail" class="detail-view" hidden>
+          <div class="detail-view-header">
+            <h2 id="auth-provider-editor-title">New auth provider</h2>
+            <div class="detail-view-header-actions">
+              <button id="auth-provider-delete-btn" class="btn-danger btn-sm" type="button" hidden>Delete</button>
+              <button id="auth-provider-close-btn" class="btn-secondary btn-sm" type="button">Close</button>
+            </div>
+          </div>
+
+          <form id="auth-provider-form">
+            <label class="block"><span class="field-title">Name <button type="button" class="info-icon" data-info-key="authProviderName" aria-label="What is this?">i</button></span>
+              <input name="name" required pattern="[A-Za-z0-9_\-]+" />
+            </label>
+            <label class="block"><span class="field-title">Kind <button type="button" class="info-icon" data-info-key="authProviderKind" aria-label="What is this?">i</button></span>
+              <select name="kind"></select>
+            </label>
+            <div id="auth-provider-fields"></div>
+
+            <section class="editor-section">
+              <div class="section-header">
+                <h3>Test login <button type="button" class="info-icon" data-info-key="authProviderTestLogin" aria-label="What is this?">i</button></h3>
+              </div>
+              <p class="muted">
+                Tries logging in through this provider's current settings above (including unsaved
+                edits) without creating a real session -- useful for checking a bind DN, filter, or
+                secret before saving.
+              </p>
+              <div class="field-grid">
+                <label class="block"><span class="field-title">Username</span>
+                  <input type="text" id="auth-provider-test-username" autocomplete="off" />
+                </label>
+                <label class="block"><span class="field-title">Password</span>
+                  <input type="password" id="auth-provider-test-password" autocomplete="off" />
+                </label>
+              </div>
+              <div class="test-actions">
+                <button type="button" class="btn-secondary btn-sm" id="auth-provider-test-btn">Test login</button>
+              </div>
+              <p id="auth-provider-test-result" class="test-result" hidden></p>
+            </section>
+
+            <p id="auth-provider-form-error" class="error-text" hidden></p>
+            <div class="detail-footer">
+              <button type="submit" class="btn-primary">Save auth provider</button>
+            </div>
+          </form>
+        </section>
+
+        <!-- Session detail (read-only -- nothing here is editable or saved) -->
+        <section id="session-detail" class="detail-view" hidden>
+          <div class="detail-view-header">
+            <h2 id="session-detail-title">Session</h2>
+            <div class="detail-view-header-actions">
+              <button id="session-revoke-btn" class="btn-danger btn-sm" type="button">Revoke session</button>
+              <button id="session-close-btn" class="btn-secondary btn-sm" type="button">Close</button>
+            </div>
+          </div>
+
+          <p class="muted">
+            What this middleware is actually holding in memory for this caller session -- see
+            <code>AUTH_DESIGN_NOTES.md</code>'s opaque-token design.
+            <span id="session-detail-prod-note">
+              The session's real bearer token and the backend token (or refresh token) it wraps are
+              never shown here, even to an admin -- only enough to identify and, if needed, revoke it.
+            </span>
+          </p>
+
+          <p id="session-detail-dev-banner" class="dev-mode-banner" hidden>
+            Development mode only -- this server is not running with <code>NODE_ENV=production</code>,
+            so the real session/backend/refresh tokens below are shown for local debugging. These fields
+            are always withheld once <code>NODE_ENV=production</code> is set; do not run a real,
+            internet-facing deployment without it.
+          </p>
+
+          <div class="field-grid">
+            <label class="block"><span class="field-title">Auth provider</span>
+              <p id="session-detail-provider" class="code-block">—</p>
+            </label>
+            <label class="block"><span class="field-title">Subject</span>
+              <p id="session-detail-subject" class="code-block">—</p>
+            </label>
+            <label class="block"><span class="field-title">Created</span>
+              <p id="session-detail-created" class="code-block">—</p>
+            </label>
+            <label class="block"><span class="field-title">Expires</span>
+              <p id="session-detail-expires" class="code-block">—</p>
+            </label>
+            <label class="block span-2"><span class="field-title">Auto-refreshable</span>
+              <p id="session-detail-refreshable" class="code-block">—</p>
+            </label>
+          </div>
+
+          <div id="session-detail-dev-fields" class="field-grid" hidden>
+            <label class="block span-2"><span class="field-title">Session token (dev only)</span>
+              <p id="session-detail-token" class="code-block">—</p>
+            </label>
+            <label class="block span-2"><span class="field-title">Backend token (dev only)</span>
+              <p id="session-detail-backend-token" class="code-block">—</p>
+            </label>
+            <label class="block span-2"><span class="field-title">Refresh token (dev only)</span>
+              <p id="session-detail-refresh-token" class="code-block">—</p>
+            </label>
+          </div>
+
+          <h4>Claims <button type="button" class="info-icon" data-info-key="authProviderClaims" aria-label="What is this?">i</button></h4>
+          <pre id="session-detail-claims" class="code-block">—</pre>
         </section>
       </main>
     </div>

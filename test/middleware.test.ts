@@ -4,9 +4,12 @@ import request from "supertest";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
+import jwt from "jsonwebtoken";
 import { startMockBackend, type MockBackendHandle } from "../src/mock-backend";
+import { startFakeLdapServer, type FakeLdapServerHandle } from "../src/mock-backend/ldapServer";
 import { EndpointRegistry } from "../src/server/endpointRegistry";
 import { GatewaysRegistry } from "../src/server/gatewaysRegistry";
+import { AuthProvidersRegistry } from "../src/server/authProvidersRegistry";
 import { createApp } from "../src/server/app";
 import { closeAllSqlConnections } from "../src/connectors";
 import { logger } from "../src/server/logger";
@@ -16,12 +19,18 @@ const ADMIN_TOKEN = "test-admin-token";
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "naimix-test-"));
 const TMP_ENDPOINTS_DIR = path.join(TMP_DIR, "endpoints");
 const TMP_GATEWAYS_FILE = path.join(TMP_DIR, "gateways.yaml");
+const TMP_AUTH_PROVIDERS_FILE = path.join(TMP_DIR, "authProviders.yaml");
 const SQLITE_PATH = path.join(TMP_DIR, "demo.sqlite");
+// Matches config/endpoints' real file count -- bump this alongside adding/
+// removing a fixture endpoint under config/endpoints/.
+const ENDPOINT_COUNT = 9;
 
 let mockBackend: MockBackendHandle;
+let fakeLdapServer: FakeLdapServerHandle;
 let app: Express;
 let endpointRegistry: EndpointRegistry;
 let gatewaysRegistry: GatewaysRegistry;
+let authProvidersRegistry: AuthProvidersRegistry;
 
 function authed(): Record<string, string> {
   return { Authorization: `Bearer ${ADMIN_TOKEN}` };
@@ -36,25 +45,38 @@ beforeAll(async () => {
   process.env.DEMO_XML_BASE_URL = `http://localhost:${MOCK_PORT}`;
   process.env.DEMO_SOAP_WSDL_URL = `http://localhost:${MOCK_PORT}/soap?wsdl`;
   process.env.DEMO_SQLITE_PATH = SQLITE_PATH;
+  process.env.DEMO_OAUTH_CLIENT_SECRET = "demo-secret";
 
   mockBackend = await startMockBackend(MOCK_PORT, SQLITE_PATH);
 
+  // In-process fake LDAP server (see src/mock-backend/ldapServer.ts) --
+  // the demoLdap auth provider's DEMO_LDAP_* env vars point at it, same
+  // convention as the JSON/XML/SOAP/SQL mock backend above.
+  fakeLdapServer = await startFakeLdapServer();
+  process.env.DEMO_LDAP_URL = fakeLdapServer.url;
+  process.env.DEMO_LDAP_BIND_PASSWORD = "adminpw123";
+  process.env.DEMO_LDAP_TOKEN_SECRET = "test-ldap-token-secret";
+
   // Work off a disposable COPY of the real config, never the project's own
-  // config/endpoints and config/gateways.yaml -- the admin API tests below
-  // create/edit/delete files, which must never touch the real project.
+  // config/endpoints, config/gateways.yaml and config/authProviders.yaml --
+  // the admin API tests below create/edit/delete files, which must never
+  // touch the real project.
   fs.cpSync(path.resolve(__dirname, "../config/endpoints"), TMP_ENDPOINTS_DIR, { recursive: true });
   fs.cpSync(path.resolve(__dirname, "../config/gateways.yaml"), TMP_GATEWAYS_FILE);
+  fs.cpSync(path.resolve(__dirname, "../config/authProviders.yaml"), TMP_AUTH_PROVIDERS_FILE);
 
   endpointRegistry = new EndpointRegistry(TMP_ENDPOINTS_DIR);
   gatewaysRegistry = new GatewaysRegistry(TMP_GATEWAYS_FILE);
+  authProvidersRegistry = new AuthProvidersRegistry(TMP_AUTH_PROVIDERS_FILE);
   const { errors } = endpointRegistry.reloadFromDisk();
   expect(errors, `endpoint config errors: ${JSON.stringify(errors)}`).toHaveLength(0);
 
-  app = createApp({ endpointRegistry, gatewaysRegistry, logger });
+  app = createApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger });
 });
 
 afterAll(async () => {
   await mockBackend.stop();
+  await fakeLdapServer.stop();
   await closeAllSqlConnections();
   fs.rmSync(TMP_DIR, { recursive: true, force: true });
 });
@@ -64,7 +86,7 @@ describe("health & introspection", () => {
     const res = await request(app).get("/healthz");
     expect(res.status).toBe(200);
     expect(res.body.status).toBe("ok");
-    expect(res.body.endpointCount).toBe(7);
+    expect(res.body.endpointCount).toBe(ENDPOINT_COUNT);
   });
 
   it("lists configured endpoints", async () => {
@@ -80,6 +102,8 @@ describe("health & introspection", () => {
         "soap-customer-by-id",
         "sql-customer-by-id",
         "sql-customers-list",
+        "json-authed-echo",
+        "ldap-authed-echo",
       ])
     );
   });
@@ -466,6 +490,423 @@ describe("admin API: gateway CRUD", () => {
   });
 });
 
+describe("caller auth: POST /auth/login + a gateway's requiresAuth", () => {
+  it("rejects a call to an authed endpoint with no token", async () => {
+    const res = await request(app).get("/api/authed/echo");
+    expect(res.status).toBe(401);
+  });
+
+  it("rejects a call with an unknown/garbage token", async () => {
+    const res = await request(app).get("/api/authed/echo").set("Authorization", "Bearer not-a-real-token");
+    expect(res.status).toBe(401);
+  });
+
+  it("400s a login attempt against an unknown provider", async () => {
+    const res = await request(app).post("/auth/login/doesNotExist").send({ username: "demo", password: "demo123" });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects login with the wrong password", async () => {
+    const res = await request(app).post("/auth/login/demoLogin").send({ username: "demo", password: "wrong" });
+    expect(res.status).toBe(401);
+  });
+
+  it("logs in via basicLogin and uses the session token to call the authed endpoint", async () => {
+    const login = await request(app)
+      .post("/auth/login/demoLogin")
+      .send({ username: "demo", password: "demo123" });
+    expect(login.status).toBe(200);
+    expect(typeof login.body.token).toBe("string");
+    expect(login.body.expiresAt).toEqual(expect.any(Number));
+
+    // The backend token demoLogin obtained (never seen by the caller) is
+    // what actually reached the backend, injected via {__authToken} into
+    // the gateway's own Authorization header config.
+    const called = await request(app).get("/api/authed/echo").set("Authorization", `Bearer ${login.body.token}`);
+    expect(called.status).toBe(200);
+    expect(called.body.authHeaderSeenByBackend).toBe("Bearer mock-backend-token-for-demo");
+  });
+
+  it("rejects a session token issued by a different auth provider than the gateway requires", async () => {
+    const login = await request(app)
+      .post("/auth/login/demoOAuth")
+      .send({ username: "demo", password: "demo123" });
+    expect(login.status).toBe(200);
+
+    // crmJsonAuthed's gateway requires "demoLogin", not "demoOAuth".
+    const called = await request(app).get("/api/authed/echo").set("Authorization", `Bearer ${login.body.token}`);
+    expect(called.status).toBe(401);
+  });
+
+  it("logs out, and the token stops working immediately (opaque tokens are instantly revocable)", async () => {
+    const login = await request(app)
+      .post("/auth/login/demoLogin")
+      .send({ username: "demo", password: "demo123" });
+    const logout = await request(app).post("/auth/logout").set("Authorization", `Bearer ${login.body.token}`);
+    expect(logout.status).toBe(204);
+
+    const called = await request(app).get("/api/authed/echo").set("Authorization", `Bearer ${login.body.token}`);
+    expect(called.status).toBe(401);
+  });
+
+  describe("oauth2 provider, end to end through a gateway", () => {
+    const gatewayName = "oauthTestGw";
+    const endpointId = "oauth-test-echo";
+
+    afterAll(async () => {
+      await request(app).delete(`/admin/api/endpoints/${endpointId}`).set(authed());
+      await request(app).delete(`/admin/api/gateways/${gatewayName}`).set(authed());
+    });
+
+    it("logs in via the password grant (real form-encoded RFC 6749 token exchange against the mock backend) and injects the resulting access token", async () => {
+      const gw = await request(app)
+        .post("/admin/api/gateways")
+        .set(authed())
+        .send({
+          name: gatewayName,
+          config: { kind: "json", baseUrl: "${env.DEMO_JSON_BASE_URL}", requiresAuth: "demoOAuth" },
+        });
+      expect(gw.status).toBe(201);
+
+      const endpoint = await request(app)
+        .post("/admin/api/endpoints")
+        .set(authed())
+        .send({
+          id: endpointId,
+          method: "GET",
+          path: `/api/${gatewayName}/echo`,
+          backend: {
+            type: "json",
+            gateway: gatewayName,
+            url: "/echo",
+            method: "GET",
+            headers: { Authorization: "Bearer {__authToken}" },
+          },
+          output: { fields: [{ target: "authHeader", source: "$.headers.authorization" }] },
+        });
+      expect(endpoint.status).toBe(201);
+
+      const login = await request(app)
+        .post("/auth/login/demoOAuth")
+        .send({ username: "demo", password: "demo123" });
+      expect(login.status).toBe(200);
+
+      const called = await request(app)
+        .get(`/api/${gatewayName}/echo`)
+        .set("Authorization", `Bearer ${login.body.token}`);
+      expect(called.status).toBe(200);
+      expect(called.body.authHeader).toMatch(/^Bearer mock-oauth-access-/);
+    });
+  });
+
+  describe("ldap provider (search-then-bind), end to end through a gateway", () => {
+    it("rejects login with the wrong password", async () => {
+      const res = await request(app).post("/auth/login/demoLdap").send({ username: "jdoe", password: "wrong" });
+      expect(res.status).toBe(401);
+    });
+
+    it("rejects login for a username not in the directory", async () => {
+      const res = await request(app)
+        .post("/auth/login/demoLdap")
+        .send({ username: "nobody", password: "password123" });
+      expect(res.status).toBe(401);
+    });
+
+    it("logs in via LDAP search-then-bind and uses the session token (the middleware's own signed stand-in JWT) to call the authed endpoint", async () => {
+      const login = await request(app)
+        .post("/auth/login/demoLdap")
+        .send({ username: "jdoe", password: "password123" });
+      expect(login.status).toBe(200);
+      expect(typeof login.body.token).toBe("string");
+      expect(login.body.expiresAt).toEqual(expect.any(Number));
+
+      const called = await request(app)
+        .get("/api/authed/ldap-echo")
+        .set("Authorization", `Bearer ${login.body.token}`);
+      expect(called.status).toBe(200);
+      expect(called.body.authHeaderSeenByBackend).toMatch(/^Bearer /);
+
+      // LDAP has no native token to relay, so the provider mints its own
+      // signed JWT as the stand-in backend token -- decode it (this test
+      // holds the same DEMO_LDAP_TOKEN_SECRET set in beforeAll) to check
+      // the claims it's supposed to populate: subject DN, username, and
+      // (via the demo provider's groupSearchBase/groupSearchFilter) group
+      // membership resolved from the fake LDAP server's seed data.
+      const backendToken = called.body.authHeaderSeenByBackend.replace(/^Bearer /, "");
+      const decoded = jwt.verify(backendToken, "test-ldap-token-secret") as jwt.JwtPayload;
+      expect(decoded.sub).toBe("uid=jdoe,ou=people,dc=naimix,dc=test");
+      expect(decoded.username).toBe("jdoe");
+      expect(decoded.groups).toEqual(expect.arrayContaining(["employees", "engineers"]));
+    });
+
+    it("rejects a session token issued by demoLdap against a gateway requiring a different provider", async () => {
+      const login = await request(app)
+        .post("/auth/login/demoLdap")
+        .send({ username: "jdoe", password: "password123" });
+      expect(login.status).toBe(200);
+
+      // crmJsonAuthed's gateway requires "demoLogin", not "demoLdap".
+      const called = await request(app).get("/api/authed/echo").set("Authorization", `Bearer ${login.body.token}`);
+      expect(called.status).toBe(401);
+    });
+  });
+});
+
+describe("admin API: sessions (live view of the in-memory session store)", () => {
+  it("lists no sessions when nobody is logged in", async () => {
+    const res = await request(app).get("/admin/api/sessions").set(authed());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual([]);
+  });
+
+  it("shows a session after login, with provider/subject/claims plus its real session/backend token outside production (this suite's own NODE_ENV)", async () => {
+    const login = await request(app)
+      .post("/auth/login/demoLogin")
+      .send({ username: "demo", password: "demo123" });
+    expect(login.status).toBe(200);
+
+    const res = await request(app).get("/admin/api/sessions").set(authed());
+    expect(res.status).toBe(200);
+    const session = res.body.find((s: { providerName: string }) => s.providerName === "demoLogin");
+    expect(session).toBeDefined();
+    expect(session.subject).toBeTruthy();
+    expect(typeof session.id).toBe("string");
+    expect(session.id).not.toBe(login.body.token);
+    expect(session.createdAt).toEqual(expect.any(Number));
+
+    // vitest runs with NODE_ENV=test, not "production" -- AuthService's
+    // isDevMode() gate (see authService.ts) treats that as non-production,
+    // same as an ordinary local `npm run dev`, so these dev-only fields are
+    // expected to be present here.
+    expect(session.token).toBe(login.body.token);
+    expect(session.backendToken).toBe("mock-backend-token-for-demo");
+
+    // Clean up so this session doesn't leak into later tests in this block.
+    await request(app).delete(`/admin/api/sessions/${session.id}`).set(authed());
+  });
+
+  it("withholds the session/backend/refresh tokens once NODE_ENV is exactly \"production\"", async () => {
+    const login = await request(app)
+      .post("/auth/login/demoLogin")
+      .send({ username: "demo", password: "demo123" });
+    expect(login.status).toBe(200);
+
+    const previousNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = "production";
+    let res;
+    try {
+      res = await request(app).get("/admin/api/sessions").set(authed());
+    } finally {
+      // Restore immediately so no later test in this file runs against a
+      // "production" NODE_ENV by accident.
+      process.env.NODE_ENV = previousNodeEnv;
+    }
+    expect(res.status).toBe(200);
+    const session = res.body.find((s: { providerName: string }) => s.providerName === "demoLogin");
+    expect(session).toBeDefined();
+    // Still enough to identify and revoke the session...
+    expect(session.subject).toBeTruthy();
+    expect(typeof session.id).toBe("string");
+    // ...but never the values a real production deployment must never leak.
+    expect(session.token).toBeUndefined();
+    expect(session.backendToken).toBeUndefined();
+    expect(session.refreshToken).toBeUndefined();
+    expect(JSON.stringify(session)).not.toContain(login.body.token);
+    expect(JSON.stringify(session)).not.toContain("mock-backend-token-for-demo");
+
+    await request(app).delete(`/admin/api/sessions/${session.id}`).set(authed());
+  });
+
+  it("revokes a session by id, and the caller's own token stops working immediately", async () => {
+    const login = await request(app)
+      .post("/auth/login/demoLogin")
+      .send({ username: "demo", password: "demo123" });
+    expect(login.status).toBe(200);
+
+    const list = await request(app).get("/admin/api/sessions").set(authed());
+    const session = list.body.find((s: { providerName: string }) => s.providerName === "demoLogin");
+    expect(session).toBeDefined();
+
+    const revoke = await request(app).delete(`/admin/api/sessions/${session.id}`).set(authed());
+    expect(revoke.status).toBe(204);
+
+    const called = await request(app).get("/api/authed/echo").set("Authorization", `Bearer ${login.body.token}`);
+    expect(called.status).toBe(401);
+  });
+
+  it("404s revoking a session id that doesn't exist", async () => {
+    const res = await request(app).delete("/admin/api/sessions/does-not-exist").set(authed());
+    expect(res.status).toBe(404);
+  });
+
+  it("requires admin auth for both the list and revoke routes", async () => {
+    const list = await request(app).get("/admin/api/sessions");
+    expect(list.status).toBe(401);
+    const revoke = await request(app).delete("/admin/api/sessions/whatever");
+    expect(revoke.status).toBe(401);
+  });
+});
+
+describe("admin API: auth-provider CRUD", () => {
+  it("lists the demo auth providers", async () => {
+    const res = await request(app).get("/admin/api/auth-providers").set(authed());
+    expect(res.status).toBe(200);
+    expect(res.body.demoLogin.kind).toBe("basicLogin");
+    expect(res.body.demoOAuth.kind).toBe("oauth2");
+    // demoOAuth's clientSecret is an ${env.X} reference, not a literal
+    // value -- shown as-is, same convention as a gateway's own secrets (see
+    // "redacts a sensitive-looking literal field" below for the literal case).
+    expect(res.body.demoOAuth.clientSecret).toBe("${env.DEMO_OAUTH_CLIENT_SECRET}");
+    // Regression check: a field ending in "Path" is a JSONPath expression,
+    // not a secret, even though "tokenPath"/"refreshTokenPath" contain the
+    // substring "token" that would otherwise trip the redaction pattern.
+    expect(res.body.demoLogin.tokenPath).toBe("$.accessToken");
+    expect(res.body.demoLogin.refreshTokenPath).toBe("$.refreshToken");
+  });
+
+  it("redacts a sensitive-looking literal field (a literal, non-${env.X} client secret)", async () => {
+    await request(app)
+      .post("/admin/api/auth-providers")
+      .set(authed())
+      .send({
+        name: "literalSecretProvider",
+        config: {
+          kind: "oauth2",
+          tokenUrl: "http://example.test/oauth/token",
+          grantType: "client_credentials",
+          clientId: "abc",
+          clientSecret: "literal-secret-value",
+        },
+      });
+    const res = await request(app).get("/admin/api/auth-providers").set(authed());
+    expect(res.body.literalSecretProvider.clientSecret).toBe("••••••••");
+    await request(app).delete("/admin/api/auth-providers/literalSecretProvider").set(authed());
+  });
+
+  it("creates an auth provider", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers")
+      .set(authed())
+      .send({
+        name: "testProvider",
+        config: { kind: "basicLogin", loginUrl: "http://example.test/login", tokenPath: "$.token" },
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it("rejects a second provider reusing the same name", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers")
+      .set(authed())
+      .send({
+        name: "testProvider",
+        config: { kind: "basicLogin", loginUrl: "http://example.test/login", tokenPath: "$.token" },
+      });
+    expect(res.status).toBe(409);
+  });
+
+  it("rejects an oauth2 provider missing required fields, naming them", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers")
+      .set(authed())
+      .send({ name: "badOAuth", config: { kind: "oauth2", grantType: "client_credentials" } });
+    expect(res.status).toBe(400);
+    const paths = res.body.issues.map((i: { path: string[] }) => i.path.join("."));
+    expect(paths).toEqual(expect.arrayContaining(["tokenUrl", "clientId", "clientSecret"]));
+  });
+
+  it("rejects an ldap provider with neither bind mode fully configured", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers")
+      .set(authed())
+      .send({ name: "badLdap", config: { kind: "ldap", url: "ldap://localhost:3389", tokenSecret: "s" } });
+    expect(res.status).toBe(400);
+    const paths = res.body.issues.map((i: { path: string[] }) => i.path.join("."));
+    expect(paths).toContain("userDnTemplate");
+  });
+
+  it("rejects an ldap provider with both bind modes configured (ambiguous)", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers")
+      .set(authed())
+      .send({
+        name: "badLdap2",
+        config: {
+          kind: "ldap",
+          url: "ldap://localhost:3389",
+          userDnTemplate: "uid={username},ou=people,dc=naimix,dc=test",
+          bindDn: "cn=admin,dc=naimix,dc=test",
+          bindPassword: "adminpw123",
+          searchBase: "ou=people,dc=naimix,dc=test",
+          searchFilter: "(uid={username})",
+          tokenSecret: "s",
+        },
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it("creates, updates and deletes an ldap provider (direct-bind mode)", async () => {
+    const create = await request(app)
+      .post("/admin/api/auth-providers")
+      .set(authed())
+      .send({
+        name: "testLdapProvider",
+        config: {
+          kind: "ldap",
+          url: "ldap://localhost:3389",
+          userDnTemplate: "uid={username},ou=people,dc=naimix,dc=test",
+          tokenSecret: "s",
+        },
+      });
+    expect(create.status).toBe(201);
+
+    const got = await request(app).get("/admin/api/auth-providers/testLdapProvider").set(authed());
+    expect(got.body.kind).toBe("ldap");
+    // Defaults filled in by the schema.
+    expect(got.body.tlsRejectUnauthorized).toBe(true);
+    expect(got.body.tokenTtlSeconds).toBe(3600);
+
+    const update = await request(app)
+      .put("/admin/api/auth-providers/testLdapProvider")
+      .set(authed())
+      .send({
+        config: {
+          kind: "ldap",
+          url: "ldap://localhost:3389",
+          userDnTemplate: "uid={username},ou=people,dc=naimix,dc=test",
+          tokenSecret: "s",
+          tokenTtlSeconds: 120,
+        },
+      });
+    expect(update.status).toBe(200);
+
+    const deleted = await request(app).delete("/admin/api/auth-providers/testLdapProvider").set(authed());
+    expect(deleted.status).toBe(204);
+  });
+
+  it("updates an existing provider", async () => {
+    const res = await request(app)
+      .put("/admin/api/auth-providers/testProvider")
+      .set(authed())
+      .send({ config: { kind: "basicLogin", loginUrl: "http://example.test/login-v2", tokenPath: "$.token" } });
+    expect(res.status).toBe(200);
+
+    const got = await request(app).get("/admin/api/auth-providers/testProvider").set(authed());
+    expect(got.body.loginUrl).toBe("http://example.test/login-v2");
+  });
+
+  it("refuses to delete a provider a gateway still requires", async () => {
+    const res = await request(app).delete("/admin/api/auth-providers/demoLogin").set(authed());
+    expect(res.status).toBe(409);
+    expect(res.body.gateways).toContain("crmJsonAuthed");
+  });
+
+  it("deletes an unused provider", async () => {
+    const res = await request(app).delete("/admin/api/auth-providers/testProvider").set(authed());
+    expect(res.status).toBe(204);
+  });
+});
+
 describe("admin API: test-connection (DB)", () => {
   it("reports ok for a reachable database", async () => {
     const res = await request(app)
@@ -507,6 +948,117 @@ describe("admin API: test-connection (DB)", () => {
       .send({ config: { kind: "json", baseUrl: "http://example.test" } });
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ ok: false, message: expect.stringMatching(/SQL|database/i) });
+  });
+});
+
+describe("admin API: auth-providers test-login", () => {
+  // The admin UI always submits the FULL config the form currently shows
+  // (built by the kind-specific _read(), same as Save would send) --
+  // never a partial object -- so these mirror that: the real demoLogin/
+  // demoLdap shape, with any sensitive field left blank standing in for
+  // "the admin UI shows this field redacted/blank and didn't touch it".
+  const demoLoginConfig = {
+    kind: "basicLogin",
+    loginUrl: "${env.DEMO_JSON_BASE_URL}/login",
+    tokenPath: "$.accessToken",
+    refreshTokenPath: "$.refreshToken",
+    expiresInPath: "$.expiresIn",
+  };
+  const demoLdapConfig = {
+    kind: "ldap",
+    url: "${env.DEMO_LDAP_URL}",
+    bindDn: "cn=admin,dc=naimix,dc=test",
+    bindPassword: "", // blank -- should fall back to the stored ${env.DEMO_LDAP_BIND_PASSWORD} reference
+    searchBase: "ou=people,dc=naimix,dc=test",
+    searchFilter: "(uid={username})",
+    groupSearchBase: "ou=groups,dc=naimix,dc=test",
+    groupSearchFilter: "(member={dn})",
+    attributes: ["mail", "title", "departmentNumber"],
+    tokenSecret: "", // blank -- should fall back to the stored ${env.DEMO_LDAP_TOKEN_SECRET} reference
+  };
+
+  it("reports ok for a saved basicLogin provider, given the real demo credentials", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers/test-login")
+      .set(authed())
+      .send({ name: "demoLogin", config: demoLoginConfig, credentials: { username: "demo", password: "demo123" } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+  });
+
+  it("reports a failure message (not a 500) for wrong credentials against a saved provider", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers/test-login")
+      .set(authed())
+      .send({ name: "demoLogin", config: demoLoginConfig, credentials: { username: "demo", password: "wrong" } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(typeof res.body.message).toBe("string");
+  });
+
+  it("reuses the saved bindPassword and tokenSecret when a draft edit of demoLdap leaves them blank", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers/test-login")
+      .set(authed())
+      .send({ name: "demoLdap", config: demoLdapConfig, credentials: { username: "jdoe", password: "password123" } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.subject).toBe("uid=jdoe,ou=people,dc=naimix,dc=test");
+    expect(res.body.claims.groups).toEqual(expect.arrayContaining(["employees", "engineers"]));
+  });
+
+  it("tests an unsaved draft config directly, with no `name` and full (non-blank) fields", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers/test-login")
+      .set(authed())
+      .send({
+        config: {
+          kind: "ldap",
+          url: fakeLdapServer.url,
+          bindDn: "cn=admin,dc=naimix,dc=test",
+          bindPassword: "adminpw123",
+          searchBase: "ou=people,dc=naimix,dc=test",
+          searchFilter: "(uid={username})",
+          tokenSecret: "draft-token-secret",
+        },
+        credentials: { username: "jdoe", password: "password123" },
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.subject).toBe("uid=jdoe,ou=people,dc=naimix,dc=test");
+  });
+
+  it("reports a failure message for an unknown username against demoLdap", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers/test-login")
+      .set(authed())
+      .send({ name: "demoLdap", config: demoLdapConfig, credentials: { username: "nobody", password: "password123" } });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(typeof res.body.message).toBe("string");
+  });
+
+  it("never creates a session -- the response carries no token a caller could use", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers/test-login")
+      .set(authed())
+      .send({ name: "demoLdap", config: demoLdapConfig, credentials: { username: "jdoe", password: "password123" } });
+    expect(res.body.ok).toBe(true);
+    // A real /auth/login call would have returned a bearer token; test-login
+    // never does, since it's not meant to produce anything a caller could
+    // use to reach an authed endpoint.
+    expect(res.body.token).toBeUndefined();
+    expect(res.body.backendToken).toBeUndefined();
+  });
+
+  it("rejects a malformed draft config the same way saving would (400 with field issues)", async () => {
+    const res = await request(app)
+      .post("/admin/api/auth-providers/test-login")
+      .set(authed())
+      .send({ config: { kind: "ldap", url: "ldap://localhost:3389", tokenSecret: "s" }, credentials: {} });
+    expect(res.status).toBe(400);
+    const paths = res.body.issues.map((i: { path: string[] }) => i.path.join("."));
+    expect(paths).toContain("userDnTemplate");
   });
 });
 
@@ -792,21 +1344,25 @@ describe("admin API: workspace switching", () => {
   let wsApp: Express;
   let wsEndpointRegistry: EndpointRegistry;
   let wsGatewaysRegistry: GatewaysRegistry;
+  let wsAuthProvidersRegistry: AuthProvidersRegistry;
   const wsWorkspace: { configDir?: string } = { configDir: FOLDER_A };
 
   beforeAll(() => {
     fs.mkdirSync(path.join(FOLDER_A, "endpoints"), { recursive: true });
     fs.cpSync(path.resolve(__dirname, "../config/endpoints"), path.join(FOLDER_A, "endpoints"), { recursive: true });
     fs.cpSync(path.resolve(__dirname, "../config/gateways.yaml"), path.join(FOLDER_A, "gateways.yaml"));
+    fs.cpSync(path.resolve(__dirname, "../config/authProviders.yaml"), path.join(FOLDER_A, "authProviders.yaml"));
     fs.mkdirSync(FOLDER_B, { recursive: true }); // no endpoints/ or gateways.yaml inside yet, on purpose
 
     wsEndpointRegistry = new EndpointRegistry(path.join(FOLDER_A, "endpoints"));
     wsGatewaysRegistry = new GatewaysRegistry(path.join(FOLDER_A, "gateways.yaml"));
+    wsAuthProvidersRegistry = new AuthProvidersRegistry(path.join(FOLDER_A, "authProviders.yaml"));
     wsEndpointRegistry.reloadFromDisk();
 
     wsApp = createApp({
       endpointRegistry: wsEndpointRegistry,
       gatewaysRegistry: wsGatewaysRegistry,
+      authProvidersRegistry: wsAuthProvidersRegistry,
       logger,
       workspace: wsWorkspace,
       settingsFile: WS_SETTINGS_FILE,
@@ -821,7 +1377,7 @@ describe("admin API: workspace switching", () => {
     const res = await request(wsApp).get("/admin/api/settings").set(authed());
     expect(res.status).toBe(200);
     expect(res.body.configDir).toBe(FOLDER_A);
-    expect(res.body.endpointCount).toBe(7);
+    expect(res.body.endpointCount).toBe(ENDPOINT_COUNT);
     expect(res.body.gatewayCount).toBeGreaterThan(0);
   });
 
@@ -852,13 +1408,13 @@ describe("admin API: workspace switching", () => {
     expect(persisted.configDir).toBe(FOLDER_B);
   });
 
-  it("switches back to folder A and the original 7 endpoints reappear", async () => {
+  it("switches back to folder A and the original endpoints reappear", async () => {
     const res = await request(wsApp).put("/admin/api/settings").set(authed()).send({ configDir: FOLDER_A });
     expect(res.status).toBe(200);
-    expect(res.body.endpointCount).toBe(7);
+    expect(res.body.endpointCount).toBe(ENDPOINT_COUNT);
 
     const endpointsRes = await request(wsApp).get("/__endpoints");
-    expect(endpointsRes.body).toHaveLength(7);
+    expect(endpointsRes.body).toHaveLength(ENDPOINT_COUNT);
   });
 
   it("an endpoint saved while pointed at folder B is written under folder B, not folder A", async () => {

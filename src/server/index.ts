@@ -2,6 +2,7 @@ import "dotenv/config";
 import path from "node:path";
 import { EndpointRegistry } from "./endpointRegistry";
 import { GatewaysRegistry } from "./gatewaysRegistry";
+import { AuthProvidersRegistry } from "./authProvidersRegistry";
 import { closeAllSqlConnections } from "../connectors";
 import { createApp } from "./app";
 import { logger } from "./logger";
@@ -33,7 +34,12 @@ const SETTINGS_FILE = path.resolve(process.cwd(), process.env.SETTINGS_FILE ?? "
  *     kept for anyone who wants endpoints and gateways stored in unrelated
  *     places rather than one shared folder.
  */
-function resolveStartupPaths(): { endpointsDir: string; gatewaysFile: string; configDir?: string } {
+function resolveStartupPaths(): {
+  endpointsDir: string;
+  gatewaysFile: string;
+  authProvidersFile: string;
+  configDir?: string;
+} {
   const persisted = loadWorkspaceSettings(SETTINGS_FILE);
   if (persisted) {
     const configDir = path.resolve(process.cwd(), persisted.configDir);
@@ -46,15 +52,17 @@ function resolveStartupPaths(): { endpointsDir: string; gatewaysFile: string; co
   return {
     endpointsDir: path.resolve(process.cwd(), process.env.ENDPOINTS_DIR ?? "config/endpoints"),
     gatewaysFile: path.resolve(process.cwd(), process.env.GATEWAYS_FILE ?? "config/gateways.yaml"),
+    authProvidersFile: path.resolve(process.cwd(), process.env.AUTH_PROVIDERS_FILE ?? "config/authProviders.yaml"),
   };
 }
 
 function main() {
-  const { endpointsDir, gatewaysFile, configDir } = resolveStartupPaths();
+  const { endpointsDir, gatewaysFile, authProvidersFile, configDir } = resolveStartupPaths();
   const workspace: { configDir?: string } = { configDir };
 
   const endpointRegistry = new EndpointRegistry(endpointsDir);
   const gatewaysRegistry = new GatewaysRegistry(gatewaysFile);
+  const authProvidersRegistry = new AuthProvidersRegistry(authProvidersFile);
 
   const { errors } = endpointRegistry.reloadFromDisk();
   for (const e of errors) {
@@ -67,6 +75,7 @@ function main() {
   const app = createApp({
     endpointRegistry,
     gatewaysRegistry,
+    authProvidersRegistry,
     logger,
     adminUiDir: ADMIN_UI_DIR,
     workspace,

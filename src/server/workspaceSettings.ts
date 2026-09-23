@@ -55,17 +55,20 @@ export function saveWorkspaceSettings(settingsFile: string, settings: WorkspaceS
 }
 
 /**
- * A workspace is expected to contain an `endpoints/` subfolder and a
- * `gateways.yaml` file, mirroring this project's own `config/` layout --
- * so pointing the app at one folder resolves both paths from a single
- * choice. Neither has to exist yet: `EndpointRegistry`/`GatewaysRegistry`
- * already tolerate a missing endpoints dir or gateways file (loading as
- * empty), and create them on first save -- useful for a brand-new, still-
- * empty team repo.
+ * A workspace is expected to contain an `endpoints/` subfolder, a
+ * `gateways.yaml` file, and an `authProviders.yaml` file, mirroring this
+ * project's own `config/` layout -- so pointing the app at one folder
+ * resolves all three paths from a single choice. None has to exist yet:
+ * `EndpointRegistry`/`GatewaysRegistry`/`AuthProvidersRegistry` all tolerate
+ * a missing file (loading as empty), and create them on first save --
+ * useful for a brand-new, still-empty team repo.
  */
-export function resolveConfigDir(configDir: string): { endpointsDir: string; gatewaysFile: string } {
+export function resolveConfigDir(
+  configDir: string
+): { endpointsDir: string; gatewaysFile: string; authProvidersFile: string } {
   return {
     endpointsDir: path.join(configDir, "endpoints"),
     gatewaysFile: path.join(configDir, "gateways.yaml"),
+    authProvidersFile: path.join(configDir, "authProviders.yaml"),
   };
 }

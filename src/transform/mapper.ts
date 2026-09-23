@@ -47,15 +47,24 @@ function applyTransform(value: unknown, transform?: FieldTransform): unknown {
   }
 }
 
-function extractSource(json: unknown, source: string): unknown {
+/** Evaluates a single JSONPath expression against `json`, returning the
+ * first match (or undefined). Exported for reuse anywhere else that needs
+ * the same "pull one field out of an arbitrary JSON response" primitive --
+ * e.g. src/auth/providers/basicLogin.ts, extracting a token/expiry/subject
+ * out of a login response using the same engine as endpoint output.fields. */
+export function extractJsonPath(json: unknown, source: string): unknown {
   const matches = JSONPath({ path: source, json: json as object, wrap: true }) as unknown[];
   return matches.length > 0 ? matches[0] : undefined;
 }
 
-function mapItem(item: unknown, fields: OutputFieldDef[]): Record<string, unknown> {
+/** Applies a list of OutputFieldDef extractions to a single JSON value,
+ * producing one plain object. Exported for reuse by the auth providers'
+ * `claims` extraction (see src/types/config.ts), which uses the identical
+ * shape as an endpoint's output.fields. */
+export function mapItem(item: unknown, fields: OutputFieldDef[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const field of fields) {
-    let value = extractSource(item, field.source);
+    let value = extractJsonPath(item, field.source);
     if (value === undefined) {
       value = field.default;
     } else {

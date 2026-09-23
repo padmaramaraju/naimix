@@ -12,6 +12,7 @@ import { substituteEnv } from "../config/envSubst";
 import { testSqlConnection } from "../connectors/sql";
 import type { SqlGatewayConfig, GatewayConfig } from "../types/config";
 import { ValidationError } from "./errors";
+import { redact, mergeUnchangedSecrets } from "./secretRedaction";
 
 /**
  * Parses a gateway config, translating a failure into a clear,
@@ -39,13 +40,6 @@ function parseGatewayConfig(input: unknown): GatewayConfig {
   }
   throw new ValidationError(`Invalid gateway config${kind ? ` for kind "${kind}"` : ""}`);
 }
-
-/** Field names treated as sensitive: redacted in API responses, and an
- * empty submitted value means "leave the stored value unchanged" rather
- * than "clear it". Matched case-insensitively against object keys. */
-const SENSITIVE_KEY_PATTERN = /pass|secret|token|apikey|api_key|credential/i;
-
-export const REDACTED = "••••••••";
 
 /**
  * Holds the current set of named backend gateways in memory, backed by
@@ -158,44 +152,4 @@ export class GatewaysRegistry {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
     fs.writeFileSync(this.filePath, yaml.dump(this.raw, { lineWidth: 100, noRefs: true }), "utf8");
   }
-}
-
-function redact(value: unknown, keyHint = ""): unknown {
-  if (typeof value === "string") {
-    if (value.startsWith("${env.")) return value; // env references are safe to show as-is
-    return SENSITIVE_KEY_PATTERN.test(keyHint) ? REDACTED : value;
-  }
-  if (Array.isArray(value)) return value.map((v) => redact(v));
-  if (value && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = redact(v, k);
-    }
-    return out;
-  }
-  return value;
-}
-
-/** Recursively replaces an empty-string leaf at a sensitive key with the
- * previous value at the same path, so leaving a password field blank in
- * the UI means "unchanged" rather than "set to empty". */
-function mergeUnchangedSecrets(input: unknown, previous: unknown, keyHint = ""): unknown {
-  if (typeof input === "string") {
-    if (input === "" && SENSITIVE_KEY_PATTERN.test(keyHint) && typeof previous === "string") {
-      return previous;
-    }
-    return input;
-  }
-  if (Array.isArray(input)) {
-    return input.map((v, i) => mergeUnchangedSecrets(v, Array.isArray(previous) ? previous[i] : undefined));
-  }
-  if (input && typeof input === "object") {
-    const prevObj = previous && typeof previous === "object" ? (previous as Record<string, unknown>) : {};
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(input as Record<string, unknown>)) {
-      out[k] = mergeUnchangedSecrets(v, prevObj[k], k);
-    }
-    return out;
-  }
-  return input;
 }

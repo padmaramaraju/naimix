@@ -1,0 +1,31 @@
+authProviders:
+  demoLogin:
+    kind: basicLogin
+    loginUrl: ${env.DEMO_JSON_BASE_URL}/login
+    method: POST
+    tokenPath: $.accessToken
+    refreshTokenPath: $.refreshToken
+    expiresInPath: $.expiresIn
+  demoOAuth:
+    kind: oauth2
+    tokenUrl: ${env.DEMO_JSON_BASE_URL}/oauth/token
+    grantType: password
+    clientId: demo-client
+    clientSecret: ${env.DEMO_OAUTH_CLIENT_SECRET}
+  demoLdap:
+    kind: ldap
+    url: ${env.DEMO_LDAP_URL}
+    tlsRejectUnauthorized: true
+    bindDn: cn=admin,dc=naimix,dc=test
+    bindPassword: ${env.DEMO_LDAP_BIND_PASSWORD}
+    searchBase: ou=people,dc=naimix,dc=test
+    searchFilter: (uid={username})
+    groupSearchBase: ou=groups,dc=naimix,dc=test
+    groupSearchFilter: (member={dn})
+    groupNameAttribute: cn
+    attributes:
+      - mail
+      - title
+      - departmentNumber
+    tokenSecret: ${env.DEMO_LDAP_TOKEN_SECRET}
+    tokenTtlSeconds: 3600

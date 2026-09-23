@@ -141,12 +141,17 @@ export type EndpointConfigParsed = z.infer<typeof endpointConfigSchema>;
 // any other gateway field. An endpoint's own `input` param of the same
 // name wins if both are present (see connectors/index.ts).
 const commonParamsField = { commonParams: z.record(z.string()).optional() };
+// Name of an authProviders entry this gateway requires a caller session for
+// -- see the matching note on GatewayConfig in src/types/config.ts and
+// AUTH_DESIGN_NOTES.md.
+const requiresAuthField = { requiresAuth: z.string().min(1).optional() };
 
 const jsonGatewaySchema = z.object({
   kind: z.literal("json").optional(),
   baseUrl: z.string().min(1, "baseUrl is required"),
   headers: z.record(z.string()).optional(),
   ...commonParamsField,
+  ...requiresAuthField,
 });
 
 const xmlGatewaySchema = z.object({
@@ -154,12 +159,14 @@ const xmlGatewaySchema = z.object({
   baseUrl: z.string().min(1, "baseUrl is required"),
   headers: z.record(z.string()).optional(),
   ...commonParamsField,
+  ...requiresAuthField,
 });
 
 const soapGatewaySchema = z.object({
   kind: z.literal("soap").optional(),
   wsdl: z.string().min(1, "wsdl is required"),
   ...commonParamsField,
+  ...requiresAuthField,
 });
 
 const sqlGatewaySchema = z.object({
@@ -174,6 +181,7 @@ const sqlGatewaySchema = z.object({
   useNullAsDefault: z.boolean().optional(),
   pool: z.record(z.unknown()).optional(),
   ...commonParamsField,
+  ...requiresAuthField,
 });
 
 export const gatewayConfigSchema = z.union([
@@ -188,3 +196,92 @@ export const gatewaysFileSchema = z.object({
 });
 
 export type GatewaysFileParsed = z.infer<typeof gatewaysFileSchema>;
+
+// ---- Auth providers ----
+// See AUTH_DESIGN_NOTES.md and the matching types in src/types/config.ts.
+
+const basicLoginProviderSchema = z.object({
+  kind: z.literal("basicLogin"),
+  loginUrl: z.string().min(1),
+  method: httpMethodSchema.optional().default("POST"),
+  headers: z.record(z.string()).optional(),
+  usernameField: z.string().optional(),
+  passwordField: z.string().optional(),
+  staticFields: z.record(z.string()).optional(),
+  tokenPath: z.string().min(1),
+  refreshTokenPath: z.string().optional(),
+  expiresInPath: z.string().optional(),
+  subjectPath: z.string().optional(),
+  claims: z.array(outputFieldSchema).optional(),
+});
+
+const oauth2ProviderSchema = z.object({
+  kind: z.literal("oauth2"),
+  tokenUrl: z.string().min(1),
+  grantType: z.enum(["password", "client_credentials"]),
+  clientId: z.string().min(1),
+  clientSecret: z.string().min(1),
+  scope: z.string().optional(),
+  headers: z.record(z.string()).optional(),
+  claims: z.array(outputFieldSchema).optional(),
+});
+
+// LDAP/AD plain simple-bind provider -- see the matching LdapProviderConfig
+// doc comment in src/types/config.ts for the two bind modes. The "exactly
+// one mode must be fully configured" rule is a cross-field check, which a
+// discriminatedUnion member can't express on its own (every branch must be a
+// plain ZodObject, not a .refine()-wrapped ZodEffects) -- so it's applied as
+// a .superRefine() on the whole union below instead, after the branch shape
+// itself is validated here.
+const ldapProviderSchema = z.object({
+  kind: z.literal("ldap"),
+  url: z.string().min(1),
+  tlsRejectUnauthorized: z.boolean().optional().default(true),
+  userDnTemplate: z.string().min(1).optional(),
+  bindDn: z.string().min(1).optional(),
+  bindPassword: z.string().min(1).optional(),
+  searchBase: z.string().min(1).optional(),
+  searchFilter: z.string().min(1).optional(),
+  groupSearchBase: z.string().min(1).optional(),
+  groupSearchFilter: z.string().min(1).optional(),
+  groupNameAttribute: z.string().min(1).optional().default("cn"),
+  attributes: z.array(z.string().min(1)).optional(),
+  tokenSecret: z.string().min(1),
+  tokenTtlSeconds: z.number().int().positive().optional().default(3600),
+});
+
+// A real discriminated union (unlike gatewayConfigSchema): `kind` is
+// required on every branch here, so zod can attribute a validation failure
+// to the right branch's fields without the special-casing gatewaysRegistry
+// needs for its own union (see parseGatewayConfig there).
+export const authProviderConfigSchema = z
+  .discriminatedUnion("kind", [basicLoginProviderSchema, oauth2ProviderSchema, ldapProviderSchema])
+  .superRefine((p, ctx) => {
+    if (p.kind !== "ldap") return;
+    const hasDirectBind = !!p.userDnTemplate;
+    const hasSearchThenBind = !!p.bindDn && !!p.bindPassword && !!p.searchBase && !!p.searchFilter;
+    if (hasDirectBind === hasSearchThenBind) {
+      // Either neither mode is configured, or both are (ambiguous) --
+      // exactly one must be fully specified.
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["userDnTemplate"],
+        message:
+          "An ldap provider needs exactly one bind mode: either `userDnTemplate` (direct bind), " +
+          "or all of `bindDn`, `bindPassword`, `searchBase` and `searchFilter` (search-then-bind)",
+      });
+    }
+    if (p.groupSearchBase && !p.groupSearchFilter) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["groupSearchFilter"],
+        message: "`groupSearchBase` requires `groupSearchFilter`",
+      });
+    }
+  });
+
+export const authProvidersFileSchema = z.object({
+  authProviders: z.record(authProviderConfigSchema).default({}),
+});
+
+export type AuthProvidersFileParsed = z.infer<typeof authProvidersFileSchema>;

@@ -24,19 +24,21 @@ gateways:
     connection:
       filename: ${env.DEMO_SQLITE_PATH}
     useNullAsDefault: true
-  best-buy:
-    kind: xml
-    baseUrl: https://api.bestbuy.com/v1
-    headers: {}
-    commonParams:
-      BEST_BUY_API_KEY: ${env.BEST_BUY_API_KEY}
-  events-api:
-    kind: sql
-    client: mysql2
-    connection:
-      host: rds-1904e888-5661-481b-b7d6-c57662ec9feb-technohub.cdxa6pu27zvm.us-east-1.rds.amazonaws.com
-      port: 3306
-      user: readwrite
-      password: 9lKGGU2C0W2Hsc8OD3ek
-      database: event_management
-    useNullAsDefault: true
+
+  # Same demo backend as crmJson, but requires a caller session -- demoes
+  # the auth feature (see AUTH_DESIGN_NOTES.md and config/authProviders.yaml).
+  # A caller must first POST /auth/login/demoLogin, then send the opaque
+  # token it gets back as "Authorization: Bearer <token>" on any endpoint
+  # that calls through this gateway.
+  crmJsonAuthed:
+    kind: json
+    baseUrl: ${env.DEMO_JSON_BASE_URL}
+    requiresAuth: demoLogin
+
+  # Same demo backend again, but behind the LDAP/AD auth provider instead --
+  # demoes step 2 of AUTH_DESIGN_NOTES.md's phased build order. Log in via
+  # POST /auth/login/demoLdap (jdoe/asmith/bwayne, password "password123").
+  crmJsonAuthedLdap:
+    kind: json
+    baseUrl: ${env.DEMO_JSON_BASE_URL}
+    requiresAuth: demoLdap

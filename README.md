@@ -54,6 +54,12 @@ curl http://localhost:4000/api/sql/customers/1
 curl http://localhost:4000/api/sql/customers
 curl http://localhost:4000/__endpoints      # what's currently registered
 curl http://localhost:4000/healthz       # status + endpoint count
+
+# A demo endpoint requiring caller authentication (see "Caller authentication" below)
+curl -X POST http://localhost:4000/auth/login/demoLogin \
+  -H 'Content-Type: application/json' -d '{"username":"demo","password":"demo123"}'
+# -> {"token":"<opaque session token>","expiresAt":1234567890000}
+curl http://localhost:4000/api/authed/echo -H 'Authorization: Bearer <token from above>'
 ```
 
 Run `npm run build && npm start` for a production-style run of the compiled
@@ -303,6 +309,11 @@ gateways:
       user: ${env.DB_USER}
       password: ${env.DB_PASSWORD}
       database: ${env.DB_NAME}
+
+  crmJsonAuthed:
+    kind: json
+    baseUrl: ${env.CRM_BASE_URL}
+    requiresAuth: myProvider      # see "Caller authentication" below
 ```
 
 `${env.VAR_NAME}` is resolved once at startup against `process.env` (loaded
@@ -322,6 +333,121 @@ the same gateway still gets the shared default. This is the place for
 something every endpoint on a gateway needs -- a tenant id, a region, an
 account key -- as opposed to `in: env` on a specific endpoint's own `input`,
 which is scoped to just that one endpoint.
+
+## Caller authentication (`config/authProviders.yaml`)
+
+**Status: phases 1-2 of a larger design.** This covers a bespoke backend
+login API (`basicLogin`), a standard OAuth2 token endpoint's password/
+client_credentials grants (`oauth2`), and LDAP/Active Directory plain simple
+bind (`ldap`). SAML and the OAuth Authorization Code (browser redirect) flow
+are designed but not yet implemented -- see `AUTH_DESIGN_NOTES.md` for the
+full design and what's still ahead.
+
+This is authentication for the middleware's *own data endpoints* (the ones
+under `/api/...` you define) -- a separate, independent system from
+`ADMIN_TOKEN`, which only ever gates `/admin/api/*` (configuring this
+instance). A caller here never sees or handles the real backend credential;
+this middleware logs in on their behalf, holds the resulting backend token
+server-side, and hands the caller its own opaque session token instead.
+
+**How it fits together:**
+
+1. Define one or more named providers in `config/authProviders.yaml`:
+
+   ```yaml
+   authProviders:
+     myProvider:
+       kind: basicLogin                       # a bespoke login API
+       loginUrl: ${env.BACKEND_LOGIN_URL}
+       tokenPath: $.accessToken                # JSONPath into the login response
+       refreshTokenPath: $.refreshToken        # optional
+       expiresInPath: $.expiresIn              # optional (seconds until expiry)
+
+     myOAuthProvider:
+       kind: oauth2                            # a standard RFC 6749 token endpoint
+       tokenUrl: ${env.BACKEND_TOKEN_URL}
+       grantType: password                     # or client_credentials
+       clientId: ${env.BACKEND_CLIENT_ID}
+       clientSecret: ${env.BACKEND_CLIENT_SECRET}
+
+     myLdapProvider:
+       kind: ldap                              # LDAP/AD plain simple bind
+       url: ${env.LDAP_URL}                    # e.g. ldap://localhost:3389 or ldaps://ad.example.com:636
+       # Search-then-bind mode (the realistic AD/enterprise pattern): a
+       # service account searches for the real user DN, then binds as that
+       # user with their own password. See LdapProviderConfig in
+       # src/types/config.ts for the alternative direct-bind mode
+       # (userDnTemplate), used instead when usernames map predictably to a
+       # DN -- exactly one of the two modes may be configured.
+       bindDn: cn=admin,dc=example,dc=com
+       bindPassword: ${env.LDAP_BIND_PASSWORD}
+       searchBase: ou=people,dc=example,dc=com
+       searchFilter: (uid={username})          # (sAMAccountName={username}) for Active Directory
+       groupSearchBase: ou=groups,dc=example,dc=com   # optional -- omit to skip group lookup
+       groupSearchFilter: (member={dn})
+       attributes: [mail, title]                # optional extra directory attributes -> claims.attributes
+       tokenSecret: ${env.LDAP_TOKEN_SECRET}   # signs the stand-in backend token -- see below
+   ```
+
+   LDAP/AD has no native token to hand a downstream backend, so on a
+   successful bind `ldap` mints its own signed JWT (HS256, via `tokenSecret`)
+   as the stand-in backend token -- containing `sub` (the resolved user DN),
+   `username`, and `groups` (when group lookup is configured) -- and injects
+   it via `{__authToken}` exactly like any other provider's real token. Any
+   backend that separately trusts this middleware (i.e. is configured with
+   the same secret) can verify that JWT itself. There's no `refresh`: LDAP
+   has no refresh concept, so an expired `ldap` session just means a clean
+   401 asking the caller to log in again, same as `basicLogin`. See
+   `docker/openldap/README.md` for a free local test directory to develop
+   and try this against (seeded with users `jdoe`/`asmith`/`bwayne`,
+   password `password123`).
+
+2. Add `requiresAuth: myProvider` to any gateway (see "Gateways config
+   reference" above) -- every endpoint that calls through it now requires a
+   caller session issued by exactly that provider.
+
+3. A caller logs in once: `POST /auth/login/myProvider` with
+   `{ "username": "...", "password": "..." }` (the `password` grant and
+   `basicLogin` both take these; `client_credentials` takes no end-user
+   credentials at all, since it authenticates the middleware itself, not a
+   person). The response is `{ "token": "<opaque token>", "expiresAt": ... }`
+   -- this token is meaningless outside this middleware; store it and send
+   it as `Authorization: Bearer <token>` on every subsequent call to an
+   endpoint whose gateway requires that same provider.
+
+4. Behind the scenes, the middleware injects the real backend token it
+   obtained as a reserved `{__authToken}` param -- reference it in the
+   gateway's own config exactly like any other `{param}`, e.g.:
+
+   ```yaml
+   gateways:
+     crmJsonAuthed:
+       kind: json
+       baseUrl: ${env.CRM_BASE_URL}
+       requiresAuth: myProvider
+       headers:
+         Authorization: "Bearer {__authToken}"
+   ```
+
+5. `POST /auth/logout` (with the same bearer token) invalidates the session
+   immediately -- opaque tokens are a server-side lookup, so revocation is
+   instant, no waiting for a JWT to expire.
+
+A session past its provider-reported expiry is refreshed automatically
+(a little before expiry, not after) when the provider supports it --
+`oauth2` does, via the standard `refresh_token` grant; `basicLogin` doesn't
+in this phase, so an expired `basicLogin` session just means a clean 401
+asking the caller to log in again. Sessions live in this process's own
+memory (fine for one instance; see `AUTH_DESIGN_NOTES.md` for why a
+multi-instance production deployment needs a shared store instead).
+
+Manage providers the same way as gateways -- an **Auth providers** section in
+the admin UI's sidebar (list/create/edit/delete, with the same "blank field
+means unchanged" convention for `clientSecret`), or directly via
+`/admin/api/auth-providers` (`GET`/`POST`/`PUT`/`DELETE`). A gateway's own
+editor has a **Requires auth** dropdown, populated from this list, that sets
+its `requiresAuth` field. Deleting a provider still required by a gateway is
+refused (409), same as deleting a gateway an endpoint still uses.
 
 ## Auto-generated CRUD + stored-procedure endpoints
 
@@ -579,16 +705,16 @@ scheme automatically.
 ## Workspace
 
 Each person runs their **own instance** of this middleware on their **own
-machine** -- there's no login system and no server shared between users.
-Where teams share things is their **Git repo of `endpoints/` +
-`gateways.yaml`**: everyone keeps their own local checkout of it, points
-their own instance at that checkout's folder (their **workspace**), and
-commits/pushes changes to Git themselves, entirely outside this app (it
-never runs `git` for you).
+machine** -- there's no login system (for configuring the instance) and no
+server shared between users. Where teams share things is their **Git repo of
+`endpoints/` + `gateways.yaml` + `authProviders.yaml`**: everyone keeps their
+own local checkout of it, points their own instance at that checkout's
+folder (their **workspace**), and commits/pushes changes to Git themselves,
+entirely outside this app (it never runs `git` for you).
 
 A workspace is any folder containing (or that will contain) an `endpoints/`
-subfolder and a `gateways.yaml` file -- exactly this project's own `config/`
-layout. Point an instance at one:
+subfolder, a `gateways.yaml` file, and an `authProviders.yaml` file --
+exactly this project's own `config/` layout. Point an instance at one:
 
 - **Admin UI** -- click "Change workspace…" in the bar under the header,
   enter the folder's path, and save. The folder must already exist (it's
@@ -646,6 +772,7 @@ See `.env.example`. The important ones:
 | `CONFIG_DIR`         | Folder containing both `endpoints/` and `gateways.yaml` (see "Workspace" above). Overridden by a workspace chosen through the admin UI, once one has been saved. |
 | `ENDPOINTS_DIR`       | Directory of endpoint config files (default `config/endpoints`). Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. |
 | `GATEWAYS_FILE`      | Path to the gateways file (default `config/gateways.yaml`). Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. |
+| `AUTH_PROVIDERS_FILE` | Path to the auth providers file (default `config/authProviders.yaml`). Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. See "Caller authentication" above. |
 | `SETTINGS_FILE`      | Where the UI-chosen workspace is remembered (default `data/settings.json`) -- a per-machine preference file, not meant to be checked into Git. |
 | `LOG_LEVEL`          | `fatal`\|`error`\|`warn`\|`info`\|`debug`\|`trace`  |
 | `ADMIN_TOKEN`        | Enables the admin UI/API at `/admin` when set; required bearer token for `/admin/api/*`. Unset = admin disabled. |
@@ -661,12 +788,16 @@ src/
   config/       # zod schemas, YAML/JSON loader, ${env.X} substitution
   connectors/   # json / xml / soap / sql backend connectors + {param} substitution
   transform/    # JSONPath-based declarative output mapper
+  auth/         # AuthProvider abstraction (basicLogin/oauth2), session store, AuthService -- see AUTH_DESIGN_NOTES.md
   server/
     endpointRegistry.ts        # in-memory endpoint table + file persistence (hot-swappable, folder repointable)
     gatewaysRegistry.ts  # in-memory gateways table + file persistence (same)
+    authProvidersRegistry.ts   # in-memory auth-providers table + file persistence (same)
     workspaceSettings.ts    # "which workspace is this instance pointed at" -- see Workspace
-    dispatch.ts              # one dynamic handler that serves every configured endpoint
+    dispatch.ts              # one dynamic handler that serves every configured endpoint (enforces requiresAuth)
+    authRoutes.ts            # POST /auth/login/{provider}, POST /auth/logout
     adminApi.ts, adminAuth.ts  # /admin/api/* REST API + bearer-token auth
+    secretRedaction.ts       # shared "mask secrets, blank-means-unchanged" helpers (gateways + auth providers)
     app.ts, index.ts, paramExtractor.ts, errors.ts, logger.ts
   mock-backend/ # standalone demo backend (JSON+XML+SOAP+SQLite) used by dev & tests
   types/        # shared TypeScript types
@@ -674,6 +805,7 @@ public/admin/   # the admin UI (static HTML/CSS/JS, no build step)
 config/
   endpoints/*.yaml       # one file per endpoint
   gateways.yaml    # named backend gateways
+  authProviders.yaml  # named auth providers -- see "Caller authentication"
 test/           # vitest + supertest test suite
 ```
 
@@ -695,10 +827,21 @@ test/           # vitest + supertest test suite
   (e.g. `fullName = firstName + " " + lastName"`) or conditionals. A
   JSONata/JMESPath expression mode would be the natural extension if you
   need that.
-- No built-in auth on the middleware's own *data* endpoints (the endpoints you
-  define under `/api/...`) -- only `/admin/api/*` is token-gated. Put the
-  data endpoints behind a gateway/reverse proxy or add middleware in
-  `src/server/app.ts` if you need to authenticate callers.
+- Caller authentication (see "Caller authentication" above) currently covers
+  a bespoke login API, an OAuth2 password/client_credentials grant, and
+  LDAP/Active Directory plain simple bind -- a gateway with no `requiresAuth`
+  is still unauthenticated, same as before. SAML and the OAuth Authorization
+  Code (browser redirect) flow are designed but not implemented -- see
+  `AUTH_DESIGN_NOTES.md`. The `ldap` provider is plain simple-bind only
+  (no Kerberos/SPNEGO SSO, which `AUTH_DESIGN_NOTES.md` defers to a later
+  phase); a free, self-hosted local LDAP test directory (seeded users/
+  groups, no external dependency) is available to develop and try it
+  against -- see `docker/openldap/README.md` (`npm run test-ldap`), or the
+  in-process fake LDAP server the automated test suite uses
+  (`src/mock-backend/ldapServer.ts`), seeded identically. Sessions live in
+  one process's memory, so this doesn't yet work behind a load-balanced
+  multi-instance deployment -- see `AUTH_DESIGN_NOTES.md`'s "Multi-instance /
+  load balancing" and `DEPLOYMENT_ARCHITECTURE_NOTES.md`.
 - The SOAP connector caches one client per WSDL URL and calls
   `client.setEndpoint()` per request; if you truly need multiple concurrent
   endpoints behind the *same* WSDL URL, split them into separate WSDL

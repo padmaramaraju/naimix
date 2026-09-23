@@ -1,0 +1,20 @@
+id: json-authed-echo
+description: >-
+  Demo endpoint requiring authentication. Calls through crmJsonAuthed
+  (requiresAuth: demoLogin) -- log in first via POST /auth/login/demoLogin
+  and send the token back as "Authorization: Bearer <token>". Echoes the
+  backend token the middleware injected on your behalf, so you can see the
+  whole flow work end-to-end without a real backend to point at.
+method: GET
+path: /api/authed/echo
+backend:
+  type: json
+  gateway: crmJsonAuthed
+  url: /echo
+  method: GET
+  headers:
+    Authorization: "Bearer {__authToken}"
+output:
+  fields:
+    - target: authHeaderSeenByBackend
+      source: $.headers.authorization

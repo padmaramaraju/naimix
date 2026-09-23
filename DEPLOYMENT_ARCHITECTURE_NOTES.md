@@ -1,0 +1,106 @@
+# Production Deployment Topology — Design Notes
+
+**Status: brainstorm only — nothing described here has been implemented.** Captured for reference before any of this gets built.
+
+This document grew out of the authentication brainstorm (see `AUTH_DESIGN_NOTES.md`) but is broader than auth: it's about how *any* admin-made change — endpoints, gateways, auth providers, the client-app registry — reaches every running instance in a real production deployment. Auth/Redis is what surfaced the gap, but the gap applies to this app's whole configuration model.
+
+## The problem
+
+Today, one process does both jobs: `createApp()` mounts the admin UI/API (`/admin/*`, gated by `ADMIN_TOKEN`) and the business dispatcher side by side, in the same Express app. Endpoint and gateway config is read from a local folder on that same instance's disk — the "workspace," typically a local Git checkout — and the only propagation mechanism that exists is the "Reload from disk" button, which re-reads *that instance's own local files*.
+
+The target production topology is different: the admin console runs as its own separate deployment, not co-located with the fleet of instances that actually serve API traffic behind a load balancer. The moment that split happens, "Reload from disk" stops meaning anything useful — a data-plane instance was never the one that received the admin's write, so it has no local copy of the change to reload in the first place. This is true of everything an admin can change, not just Redis-related settings: endpoints, gateways, auth provider configs, and the client-app registry all have the identical "how does instance #7 find out" problem.
+
+## Naming the pattern
+
+This is the classic **control plane / data plane split**: one place where configuration is authored (the admin console), and a fleet of instances that execute against whatever the current configuration says (the ones behind the load balancer). It's how API gateways and service meshes are commonly built (Kong, Envoy/xDS-style systems, Istio), so this is a well-trodden direction, not something unusual to invent from scratch.
+
+## Where the source of truth lives — decided: shared network volume, populated via Git branch promotion
+
+**Decided**: the existing file-based config model stays exactly as it is — no database, no move away from the Git-shared "workspace" concept. What changes in production is only *how a file gets onto the volume every instance reads from*, and the answer is the promotion pipeline the team already uses for code:
+
+1. A developer makes a change through the admin console, running in a development environment. The admin console writes it to the workspace files, as it does today.
+2. The workspace is a Git repo, so the change is committed and tested in development and QA the same way any other change would be.
+3. When the team decides it's ready, the change is merged/pushed to a `Production` branch.
+4. Ops pulls that `Production` branch onto the shared network volume that the production data-plane instances mount.
+5. Instances are restarted in a rolling manner to pick up the new files.
+
+This is a clean fit for the config-as-files model this app already has — it slots into a promotion workflow (dev → QA → Production branch → deploy) that's already familiar from ordinary code changes, rather than inventing a parallel, config-specific promotion mechanism. A small database for config storage isn't needed under this model and would arguably fight it, since the whole flow depends on config being diffable, reviewable, and branchable the way files in Git are.
+
+## How the change actually reaches every instance — decided: manual restart
+
+**Decided**: no live propagation. An admin-console change takes effect on the data plane only when the running instances are restarted — a deliberate, fully separate manual ops step at the end of the promotion pipeline above (pull `Production` branch onto the shared volume, then roll the restart), not something that happens automatically as a side effect of saving a change in the console.
+
+This is a real, considered alternative to push/poll, not just a simpler fallback, and it's worth being explicit about why it holds up well for production:
+
+- **It reuses infrastructure you already operate and trust.** Every deployment already has a rolling-restart/redeploy mechanism with health checks, sequencing, and rollback — that's the same mechanism now used to apply a config change. No new distributed-systems machinery (a pub/sub channel, a poll loop, eventual-consistency reasoning) has to be built, tested, and kept correct.
+- **It makes "config went live" an explicit, auditable action.** With auto-propagation, behavior can change fleet-wide within a poll interval of someone clicking Save, with no corresponding "deploy" for anyone to point to later. With manual restart, "this config is now live" corresponds to a real, loggable operational event — closer to how most teams already want to reason about production changes.
+- **Rollback is symmetric with rollout.** Reverting a bad config change is "roll the restart again against the previous config," the identical mechanism used to roll it forward — no separate "broadcast a revert" path to build or trust under pressure.
+- **The consistency window isn't actually worse.** Auto-propagation only gets to "eventually consistent," with a window where some instances have the new config and others don't (the push might land before the poll, or an instance mid-restart misses the push). A rolling restart has that same kind of transition window — it's just the one your team's deploy tooling already handles and already has intuition for.
+
+The one thing this decision does *not* remove is the "where's the source of truth" question above — a restarted instance still needs to read the current config from *somewhere* centrally reachable at boot, so the shared-volume (or database) recommendation still stands. What collapses is only the "notice a change while already running" mechanism: instances simply don't watch for changes at all; they pick up whatever's current the next time they start.
+
+One thing this decision does *not* touch: session data (tokens, the refresh lock, OAuth pending-flow state) already lives centrally in Redis by construction, so it's already shared across instances in real time regardless of this decision — "manual restart to pick up changes" applies only to file-based config (endpoints, gateways, auth providers, the client registry), not to live auth state.
+
+## Full restart in production; "apply without restart" is a development-only convenience — decided
+
+**Decided**: full process restart is the *only* update mechanism in production. No fast path, no in-place config swap on a running production fleet — the blast-radius and validate-before-swap concerns that a live reload would raise across N production instances are exactly why this app doesn't need to solve them: production only ever moves config forward via the promotion pipeline + rolling restart above.
+
+**"Apply without restart" turns out to already exist, for the audience it's actually meant to serve.** The motivating use case for this feature isn't a production ops action at all — it's a developer, running the admin console locally, wanting to see the effect of a config change immediately without bouncing their own dev process. That's precisely what the existing "Reload from disk" button in the admin console already does today: re-read the local workspace files into the running (local, single-developer) process's in-memory registries. Nothing new needs to be built for this.
+
+It's also worth noting *why* the earlier concerns (validate-before-swap, blast radius) don't need to gate this the way they would in production: a bad reload here only affects one developer's own local instance while they're iterating — there's no fleet to poison and no live production traffic at stake, so the lightweight, un-guarded version that already exists is genuinely fine for this purpose, not just fine because no one's built the safer version yet.
+
+## Actually separating the two processes — decided: admin console is dev-only
+
+**Decided, and sharper than what was first proposed**: the admin console isn't just deployed separately from the data plane in production — it doesn't run in QA or Production at all. It's a development-only tool. QA and Production run data-plane instances exclusively, reading whatever config the promotion pipeline above placed on the shared volume; there is no live admin UI/API anywhere near those environments.
+
+This resolves a couple of things cleanly:
+
+- **The run-mode split is still the right implementation detail** — a build/boot flag so a data-plane instance never mounts `/admin/*` at all, not just gates it behind `ADMIN_TOKEN`. Since admin console code has no reason to even be present in a QA/Production deployment, this can be enforced structurally (a separate entry point or build target), not just by configuration that could be gotten wrong.
+- **It's a stronger security posture than "same process, gated by a token,"** consistent with `adminAuth.ts`'s own reasoning for why that gate is strict — the admin API can configure endpoints that call arbitrary backend URLs and run arbitrary SQL. In this model, that capability doesn't exist as reachable code in Production or QA at all, not merely something authenticated away.
+- **Admin console availability stops being a production concern.** One of the original open questions was whether the (likely single-instance) admin console needs its own failover story. Under "dev-only," the answer is no — it going down affects a developer's ability to author changes, not anything running in QA or Production.
+
+## What needs to propagate — and what doesn't
+
+Worth drawing a line between two categories of settings, since they call for different treatment:
+
+- **Business configuration** — endpoints, gateways, auth provider configs, the client-app registry. This is what the admin console is *for*; it reaches production via the promotion pipeline above (workspace → Git → `Production` branch → shared volume → rolling restart).
+- **Infrastructure configuration** — which Redis to talk to, `ADMIN_TOKEN`, an encryption key for tokens at rest, `PORT`. Recommend treating these as deployment-owned: provisioned identically to every instance at startup through normal deployment tooling (env vars, a Kubernetes ConfigMap/secret, Terraform, etc.) — the same way `ADMIN_TOKEN` already works today. Under this framing, repointing Redis (a failover, a migration) is a deploy-time change rolled out to every instance together via normal infra tooling, not something an admin clicks in the UI and waits to propagate.
+
+This distinction still matters even with manual restart as the propagation model: since `REDIS_URL`/`ADMIN_TOKEN`/encryption keys are provisioned identically to every instance at deploy time regardless (same as today), changing them already goes through the normal deploy/restart path everyone understands — there's no separate question of "does this need admin-console propagation," because infrastructure config was never going through the admin console in the first place.
+
+## Installation: how development differs from QA/Production
+
+Everything decided above has concrete consequences for what actually gets installed and run in each environment — worth laying out explicitly rather than leaving it implied.
+
+**What gets installed — decided: separate build targets.** A developer installs and runs the *full* app — admin console and business dispatcher together, exactly as the codebase works today (`createApp()` mounting both) — against their own local machine, most likely run straight from source (`npm run dev`) rather than a formally built artifact, since it never leaves the developer's machine. QA and Production install a genuinely separate data-plane build target: its own entry point and build output, with the admin UI/API code not merely disabled at runtime but not present in that artifact at all — the stronger, structural version of the separation, matching the earlier "enforced structurally, not just by configuration" decision literally rather than just in spirit. The practical implication: structure the codebase as a shared core (connectors, dispatch, config loading — everything both modes need) with two thin entry points on top, so business-logic fixes apply once rather than needing to be made in two places.
+
+**Where config comes from.** A developer works against their own local Git clone of the workspace folder, editing it through the locally-running admin console and using "Reload from disk" to see changes instantly. QA and Production instances have no local Git checkout at all — they mount the shared network volume read-only and never touch Git directly; Git only enters the picture upstream, at the point where ops pulls the `Production`-designated branch onto that volume. Installing a QA/Production instance means provisioning the volume mount, not cloning a repo.
+
+**Secrets and environment provisioning.** A developer uses a local `.env` file, typically with sandbox/test credentials, the existing pattern this app already has. QA and Production should provision equivalent settings through real infrastructure tooling (a secrets manager, container-platform environment injection, etc.) rather than a checked-in file — consistent with treating infrastructure config as deploy-owned, decided earlier. One concrete simplification falls out of the admin-console-is-dev-only decision: **`ADMIN_TOKEN` no longer needs to exist in QA or Production at all** — there's no admin subsystem there to gate, so it becomes a development-only secret. `REDIS_URL`, gateway/database credentials, and any token-encryption key remain necessary in QA/Production and should be provisioned identically across every instance there.
+
+**Topology — decided: QA mirrors Production, including its Redis choice.** Development is naturally a single process, single instance, in-memory session store — a lone developer doesn't need a distributed lock or shared session store. QA runs multiple instances against the shared volume, the same as Production, so the promotion pipeline and rolling restart are actually exercised before Production sees them, not just business logic in isolation. Redis specifically follows whatever the team decides for Production: since it's a configurable, non-mandatory server-level toggle (not every deployment necessarily needs cross-instance session sharing — e.g. one with little or no auth-gated traffic), QA matches Production's *actual* choice on that toggle rather than defaulting to always-on or always-off. If Production enables Redis, QA does too, so the fail-closed behavior, refresh-lock, and OAuth pending-flow state get validated for real; if Production runs without it, QA mirrors that as well.
+
+**Process supervision and health checks.** Rolling restarts in QA/Production imply some supervisor or orchestrator (systemd, a container platform, etc.) sequencing instance replacement — and it needs a readiness/health check to know when a newly-restarted instance is actually up before retiring the old one. This is also where the earlier "malformed config should fail fast, not poison the fleet" concern gets its real teeth: if a bad config change makes an instance fail to start or fail its readiness check, a properly configured rolling restart stops there instead of proceeding through the rest of the fleet. Development has no equivalent — a developer just watches their own console.
+
+**Code artifact promotion, alongside config promotion — decided: build once and promote.** The config-promotion pipeline (workspace → Git → `Production` branch → shared volume) is one half of what reaches Production; the other half is the *code* itself, and it follows the same philosophy: CI builds the data-plane artifact once, and that exact artifact is promoted unchanged from QA to Production, rather than being rebuilt from source at each stage. What passed QA is then byte-identical to what reaches Production — the rolling restart in Production is pulling something already vetted as-is, not a fresh rebuild that could subtly differ. This applies specifically to the data-plane build target; the admin-console target is dev-only and doesn't need a promotion pipeline of its own, since it never leaves a developer's machine. QA and Production each end up combining the one promoted code artifact with config pulled from their own respective location (QA's branch/volume, Production's).
+
+## Decided
+
+- **Config source of truth: a shared network volume**, not a database — the existing file-based config model is unchanged.
+- **Promotion pipeline**: admin console (dev-only) writes to workspace files → committed to Git → tested in dev/QA → merged to a `Production` branch → ops pulls that branch onto the shared network volume → rolling restart. Config promotion rides the same Git-based workflow already used for code.
+- **Admin console is development-only.** It does not run in QA or Production at all — those environments run data-plane instances exclusively. This is enforced structurally (a separate build/entry point), not just by configuration or a token gate.
+- **Applying a change to production is a fully separate manual ops step** — someone deliberately pulls the `Production` branch onto the volume and triggers the rolling restart. No pub/sub, no polling, no auto-propagation, and no "Apply Changes" button in the admin console (since the admin console isn't present in Production to have one).
+- **Full process restart is the only production update mechanism** — no in-place/no-restart fast path in production, full stop.
+- **"Apply without restart" is a development-only convenience, already covered by the existing "Reload from disk" admin-console feature.** No new endpoint needs to be built; this need doesn't extend to production, where it isn't wanted at all.
+- **Triggering the rolling restart is owned by the production deployment team**, at their discretion — a manual step, or their own scripted automation. This app doesn't need to build or own that trigger itself; it's an operational responsibility outside this design's scope.
+- **Session/auth state is unaffected.** Redis-backed session, refresh-lock, and OAuth pending-flow data already propagate in real time by construction (every instance reads/writes the same Redis) — everything above concerns file-based business config only.
+- **Admin console availability is a development concern only**, not a production one, given it doesn't run in Production or QA.
+- **`ADMIN_TOKEN` becomes a development-only secret.** QA and Production have no admin subsystem to gate, so it's no longer part of their environment provisioning at all.
+- **Development installs the full app against a local Git checkout**; QA and Production install the data-plane-only build against the shared volume, with no local Git checkout on those instances at all — Git only appears upstream, where ops promotes the `Production` branch onto the volume.
+- **Admin console and data-plane are separate build targets**, not a single codebase switched by a runtime flag — a shared core (connectors, dispatch, config loading) with two thin entry points, so the admin code is structurally absent from what QA/Production run, not just disabled.
+- **QA mirrors Production's topology**: multiple instances, the shared volume, and the same Redis on/off choice the team makes for Production — not a fixed assumption that Redis is always on or off in QA.
+- **Code is built once and promoted**: CI produces the data-plane artifact a single time, and that exact artifact moves unchanged from QA to Production. The admin-console build target isn't part of this pipeline, since it's dev-only and never leaves a developer's machine.
+
+## Open questions still needing a decision
+
+None remaining — this topic is fully worked through for now.

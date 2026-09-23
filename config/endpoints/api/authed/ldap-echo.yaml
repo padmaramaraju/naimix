@@ -1,0 +1,21 @@
+id: ldap-authed-echo
+description: >-
+  Demo endpoint requiring authentication via the LDAP/AD provider. Calls
+  through crmJsonAuthedLdap (requiresAuth: demoLdap) -- log in first via
+  POST /auth/login/demoLdap (jdoe/asmith/bwayne, password "password123")
+  and send the token back as "Authorization: Bearer <token>". Echoes the
+  signed stand-in backend token the middleware minted and injected on your
+  behalf, so you can see the whole flow work end-to-end.
+method: GET
+path: /api/authed/ldap-echo
+backend:
+  type: json
+  gateway: crmJsonAuthedLdap
+  url: /echo
+  method: GET
+  headers:
+    Authorization: "Bearer {__authToken}"
+output:
+  fields:
+    - target: authHeaderSeenByBackend
+      source: $.headers.authorization

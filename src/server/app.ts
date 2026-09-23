@@ -1,15 +1,21 @@
 import path from "node:path";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
+import cors from "cors";
 import { createDynamicDispatcher } from "./dispatch";
 import { createAdminApiRouter } from "./adminApi";
+import { createAuthRouter } from "./authRoutes";
 import { requireAdminAuth } from "./adminAuth";
+import { AuthService } from "../auth/authService";
+import { InMemorySessionStore } from "../auth/sessionStore";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
+import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 import type { Logger } from "./logger";
 
 export interface CreateAppOptions {
   endpointRegistry: EndpointRegistry;
   gatewaysRegistry: GatewaysRegistry;
+  authProvidersRegistry: AuthProvidersRegistry;
   logger: Logger;
   /** Directory containing the admin UI's static files (index.html, etc). */
   adminUiDir?: string;
@@ -25,12 +31,19 @@ export interface CreateAppOptions {
 export function createApp({
   endpointRegistry,
   gatewaysRegistry,
+  authProvidersRegistry,
   logger,
   adminUiDir,
   workspace,
   settingsFile,
 }: CreateAppOptions): Express {
+  // In-memory only in this phase -- see sessionStore.ts and
+  // AUTH_DESIGN_NOTES.md's "Multi-instance / load balancing" for why a
+  // multi-instance production deployment needs a shared (e.g. Redis) store
+  // behind this same SessionStore interface instead.
+  const authService = new AuthService(authProvidersRegistry, new InMemorySessionStore());
   const app = express();
+  app.use(cors());
   // body-parser's own default (used when no `limit` is given) is a hard
   // 100kb -- too small for a real XML/SOAP payload or a bulk SQL write with
   // many rows, and the cause of a bare "request entity too large" error with
@@ -72,16 +85,23 @@ export function createApp({
     createAdminApiRouter({
       endpointRegistry,
       gatewaysRegistry,
+      authProvidersRegistry,
+      authService,
       logger,
       workspace: workspace ?? {},
       settingsFile: settingsFile ?? path.resolve(process.cwd(), "data/settings.json"),
     })
   );
 
+  // Caller-facing login/logout -- a different audience from /admin/api
+  // (whoever configures this instance) and from the business endpoints
+  // below. See AUTH_DESIGN_NOTES.md.
+  app.use("/auth", createAuthRouter(authService, logger));
+
   // Every configured endpoint is served by one dynamic handler that reads the
   // registry fresh per request (see dispatch.ts) -- this is what lets
   // endpoints created/edited via the admin API go live without a restart.
-  app.use(createDynamicDispatcher(endpointRegistry, gatewaysRegistry, logger));
+  app.use(createDynamicDispatcher(endpointRegistry, gatewaysRegistry, authService, logger));
 
   app.use((req: Request, res: Response) => {
     res.status(404).json({ error: "Not Found", path: req.path });

@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Post JSON Example</title>
+</head>
+<body>
+
+    <button id="sendBtn">Send LDAP Request</button>
+    <pre id="response"></pre>
+
+    <script>
+        document.getElementById('sendBtn').addEventListener('click', async () => {
+            const url = 'http://localhost:4000/auth/login/demoLdap'; // Replace with your target URL
+            const data = {
+                username: 'jdoe',
+                password: 'password123'
+            };
+
+            try {
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Accept': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+                document.getElementById('response').textContent = JSON.stringify(result, null, 2);
+            } catch (error) {
+                console.error('Error:', error);
+                document.getElementById('response').textContent = 'Request failed: ' + error;
+            }
+        });
+    </script>
+
+</body>
+</html>

@@ -92,7 +92,23 @@ src/
     types.ts          ConnectorContext / BackendResult shared types.
   transform/
     mapper.ts         Applies an endpoint's declarative `output` config (JSONPath in, dot-path out) to a
-                       raw backend response.
+                       raw backend response. Also exports extractJsonPath()/mapItem(), the same JSONPath
+                       extraction primitives, reused by src/auth/ to pull a token/claims out of a login
+                       response.
+  auth/
+    types.ts          AuthProvider / AuthResult / SessionRecord -- the auth equivalent of connectors/types.ts.
+    providerFactory.ts  createAuthProvider() -- dispatches to a provider implementation by config.kind.
+    providers/
+      basicLogin.ts    Generic "POST credentials, extract a token via JSONPath" provider for a bespoke
+                       backend login API. No refresh() in this phase.
+      oauth2.ts         Standard RFC 6749 token endpoint (password/client_credentials grants), form-encoded
+                       request. Implements refresh() via the standard refresh_token grant.
+    sessionStore.ts   SessionStore interface + InMemorySessionStore (the only implementation so far --
+                       see AUTH_DESIGN_NOTES.md for why a multi-instance deployment needs a Redis-backed one
+                       behind this same interface).
+    authService.ts    AuthService -- login/logout, and resolveSession() (looks up + proactively refreshes,
+                       with in-process de-duplication for the refresh-stampede case). The one thing
+                       dispatch.ts and authRoutes.ts both depend on.
   server/
     index.ts          Process entry point: resolves which workspace to start from (persisted
                        setting > CONFIG_DIR > legacy ENDPOINTS_DIR/GATEWAYS_FILE), builds the
@@ -106,14 +122,22 @@ src/
                        its URL path).
     gatewaysRegistry.ts  In-memory table of named gateways, backed by a (mutable, repointable)
                        gateways.yaml, with redaction and hot create/update/delete.
+    authProvidersRegistry.ts  Same shape as gatewaysRegistry.ts, for authProviders.yaml -- see
+                       [Caller authentication](#caller-authentication).
+    secretRedaction.ts  redact()/mergeUnchangedSecrets()/SENSITIVE_KEY_PATTERN, shared by
+                       gatewaysRegistry.ts and authProvidersRegistry.ts (both have the exact same
+                       "mask secrets, blank field on edit means unchanged" requirement).
     workspaceSettings.ts  "Which workspace is this instance pointed at" -- resolves a folder into
-                       {endpointsDir, gatewaysFile}, and persists/reads the admin-UI-chosen workspace to/
-                       from a local settings file so it survives a restart. See Workspace.
+                       {endpointsDir, gatewaysFile, authProvidersFile}, and persists/reads the
+                       admin-UI-chosen workspace to/from a local settings file so it survives a
+                       restart. See Workspace.
     crudGenerator.ts  Generates table-CRUD + stored-procedure endpoints for a SQL gateway.
     paramExtractor.ts Extracts+validates an endpoint's declared `input` params from an incoming request.
+    authRoutes.ts     POST /auth/login/{provider}, POST /auth/logout -- caller-facing, separate from
+                       both /admin/api/* and the business dispatcher. See [Caller authentication](#caller-authentication).
     adminApi.ts       The /admin/api/* REST API.
     adminAuth.ts      Bearer-token auth gate in front of the admin API.
-    errors.ts         ValidationError (400) / BackendError (502 by default) error classes.
+    errors.ts         ValidationError (400) / BackendError (502 by default) / AuthError (401) error classes.
     logger.ts         pino logger setup.
   mock-backend/
     index.ts          Standalone demo backend exposing the same dataset as JSON + XML + SOAP, used
@@ -135,6 +159,7 @@ config/
   endpoints/             One YAML file per endpoint, nested into folders mirroring each endpoint's own path
                        (see "Folder layout mirrors each endpoint's path" below).
   gateways.yaml    Named backend gateways (URLs, WSDLs, DB credentials -- via ${env.X}).
+  authProviders.yaml  Named auth providers (see [Caller authentication](#caller-authentication)).
 
 test/
   middleware.test.ts  Integration tests: every backend type end-to-end against the mock backend, the
@@ -331,6 +356,12 @@ request, or an `in: env` param) of the same name overrides the gateway default f
 other endpoints on the same gateway keep getting the shared default. Useful for a value every endpoint on
 a gateway should share (an API version header, a tenant id) without redeclaring it as an `input` on
 every endpoint.
+
+**`requiresAuth`** (any gateway kind, optional): names an entry in `authProviders.yaml`. When set,
+`dispatch.ts` requires a caller-presented `Authorization: Bearer <session token>` (issued by
+`POST /auth/login/{that exact provider}`) before calling through this gateway, and injects the real
+backend token that session holds as a reserved `{__authToken}` param. See
+[Caller authentication](#caller-authentication).
 
 ### Environment variable substitution
 
@@ -822,6 +853,121 @@ not a value going quietly wrong. If one of these turns out to matter for a real 
 response is still available via `LOG_LEVEL=debug` (see the connector notes above) to see exactly what
 the parser was handed.
 
+## Caller authentication
+
+**Status: phases 1-2 of the design in `AUTH_DESIGN_NOTES.md`.** `basicLogin`, `oauth2`
+(password/client_credentials grants), and `ldap` (LDAP/AD plain simple-bind) are implemented; SAML
+and the OAuth Authorization Code flow are designed but not built. A production, multi-instance
+deployment topology (shared config volume, rolling restart to apply changes, admin console as a
+separate dev-only build) is designed in `DEPLOYMENT_ARCHITECTURE_NOTES.md` but likewise not built --
+this phase runs as a single process with an in-memory session store, same as everything else in this
+app today.
+
+This is authentication for the endpoints an endpoint config's own `path` serves (`/api/...` or
+wherever), completely independent of `adminAuth.ts`'s `ADMIN_TOKEN` gate on `/admin/api/*` -- different
+audience (whoever calls the business endpoints vs. whoever configures this instance), different
+lifecycle, and neither should be confused with the other in code or in config.
+
+**Architecture**, parallel to how `callBackend()` dispatches to a connector per `backend.type`:
+
+- **`AuthProvider`** (`src/auth/types.ts`) -- one implementation per `authProviders.yaml` entry's
+  `kind`. `login(credentials)` returns an `AuthResult` (backend token + optional refresh token/expiry/
+  subject/claims); an optional `refresh(session)` renews it. `src/auth/providerFactory.ts`'s
+  `createAuthProvider()` builds one fresh from the *current* resolved config on every call (not
+  cached), so an `authProviders.yaml` edit or reload takes effect on the very next login/refresh, same
+  as every other config in this app.
+- **`basicLogin`** (`src/auth/providers/basicLogin.ts`) -- POSTs credentials as JSON to `loginUrl`,
+  then pulls the token/refreshToken/expiresIn/subject/claims out of the JSON response via
+  `extractJsonPath()`/`mapItem()` (re-exported from `transform/mapper.ts` -- the exact same JSONPath
+  engine `output.fields` uses, applied to a login response instead of a data response). No `refresh()`
+  in this phase -- a bespoke backend's refresh mechanism (if any) varies too much to generalize, so an
+  expired `basicLogin` session just 401s, asking the caller to log in again.
+- **`oauth2`** (`src/auth/providers/oauth2.ts`) -- a standard RFC 6749 token endpoint. Sends a real
+  form-encoded body (`application/x-www-form-urlencoded`, not JSON -- this matters for interoperating
+  with a real OAuth server) and reads the spec's own field names (`access_token`/`refresh_token`/
+  `expires_in`) directly, so unlike `basicLogin` there's no per-field path configuration. Implements
+  `refresh()` via the standard `refresh_token` grant.
+- **`ldap`** (`src/auth/providers/ldap.ts`) -- LDAP/AD plain simple-bind via `ldapts` (chosen over the
+  older, callback-based `ldapjs` for production use -- promise-native, TypeScript-first, actively
+  maintained). Supports two mutually-exclusive ways of resolving the DN to bind as, enforced by a
+  `.superRefine()` in `schema.ts` (see below): **direct bind** (`userDnTemplate`, a DN string with a
+  `{username}` placeholder -- simple, but needs a predictable DN shape) or **search-then-bind**
+  (`bindDn`/`bindPassword` binds a service account, searches `searchBase`/`searchFilter` for the real
+  user DN, then binds as *that* DN with the caller's password -- the realistic pattern for Active
+  Directory and most enterprise directories, where usernames don't map predictably to a DN). Untrusted
+  input is escaped before going anywhere near LDAP syntax: a `{username}` substituted into
+  `userDnTemplate` gets RFC 4514 DN-value escaping via a small `escapeDnValue()` helper (`ldapts`
+  exposes this escaping only through its `DN`/`RDN` builder classes, not as a standalone function --
+  the helper builds a throwaway single-attribute RDN via `new DN().addPairRDN("x", value)` and strips
+  the `"x="` prefix, reusing `ldapts`'s own real escaping rather than reimplementing RFC 4514 by hand);
+  a value substituted into `searchFilter`/`groupSearchFilter` uses `ldapts`'s exported `Filter.escape()`
+  (RFC 2254/4515). Optional group-membership lookup (`groupSearchBase`/`groupSearchFilter` with
+  `{dn}`/`{username}` placeholders, `groupNameAttribute` defaulting to `"cn"`) runs after a successful
+  bind and folds into `claims.groups`; optional `attributes` capture extra directory attributes
+  (e.g. `mail`, `title`) into `claims.attributes` by re-searching the now-bound-as user's own entry
+  (reading your own entry is universally permitted, so no extra privilege is needed for this).
+  **No native backend token to relay** -- see `AUTH_DESIGN_NOTES.md`'s "LDAP / Active Directory --
+  decided" -- so a successful bind mints the middleware's own signed JWT (HS256, via `jsonwebtoken` and
+  a per-provider `tokenSecret`) as the stand-in backend token, carrying `sub` (the resolved DN),
+  `username`, and `groups` (when resolved); `tokenTtlSeconds` (default 3600) drives both the JWT's
+  `expiresIn` and the session's own `expiresAt`. No `refresh()`: LDAP has no refresh concept, so an
+  expired `ldap` session 401s for a clean re-login, same as `basicLogin`.
+- **`SessionStore`** (`src/auth/sessionStore.ts`) -- `get`/`set`/`delete` keyed by the opaque token
+  handed to the caller. `InMemorySessionStore` is the only implementation: a `Map` with a periodic
+  sweep for dead (expired, non-refreshable) entries. Deliberately behind an interface so a
+  Redis-backed implementation can be dropped in later (see `AUTH_DESIGN_NOTES.md`'s "Multi-instance /
+  load balancing") without touching `AuthService` or anything upstream of it.
+- **`AuthService`** (`src/auth/authService.ts`) -- the one thing both `authRoutes.ts` and
+  `dispatch.ts` depend on. `login()`/`logout()` are direct passthroughs to a provider + the store.
+  `resolveSession(token, requiredProvider)` is the more involved one: it 401s (`AuthError`) if the
+  token is unknown or was issued by a *different* provider than the gateway requires, then calls
+  `ensureFresh()`, which proactively refreshes a session within `REFRESH_MARGIN_MS` (30s) of its
+  `expiresAt` -- via an in-process `Map<token, Promise<SessionRecord>>` so concurrent requests for the
+  same about-to-expire session share one refresh call rather than firing N of them (the
+  "concurrent-refresh stampede" problem from `AUTH_DESIGN_NOTES.md`; this de-duplication is
+  single-process only, matching the in-memory store). A refresh that fails is tolerated gracefully
+  when the old token is technically still valid (returns the stale record, lets the request through,
+  tries again next time) and only hard-fails once the session has actually expired.
+- **`dispatch.ts`** integration: after extracting an endpoint's `input` params, it resolves the
+  gateway `endpoint.backend` references (via `getBackendGatewayName()`, exported from
+  `connectors/index.ts` and also used by `adminApi.ts`'s gateway-delete dependency check), and if that
+  gateway has `requiresAuth`, requires and resolves a bearer token before calling `callBackend()`,
+  injecting the resolved session's real backend token as `params.__authToken` -- a plain reserved
+  param name flowing through the exact same `{param}` substitution (`paramSubst.ts`) every other param
+  already uses, so a gateway config just writes `headers: { Authorization: "Bearer {__authToken}" }`
+  with zero connector-specific code.
+- **`authRoutes.ts`** -- `POST /auth/login/:provider` and `POST /auth/logout`, mounted at `/auth` in
+  `app.ts` before the dynamic dispatcher. Neither route is behind `requireAdminAuth` or any bearer-
+  token gate of its own (logging in is how you *get* a token in the first place).
+
+**Token model**: opaque, not JWT -- a `crypto.randomBytes(32)` hex string with no meaning outside a
+`SessionStore` lookup. See `AUTH_DESIGN_NOTES.md`'s "Token model: opaque vs JWT" for the reasoning
+(the deciding factor: a server-side lookup for the real backend token is unavoidable regardless, so a
+JWT's main advantage -- skipping that lookup -- doesn't apply, while instant revocability of a live
+backend credential does matter).
+
+**`authProvidersRegistry.ts`** mirrors `gatewaysRegistry.ts` closely (raw vs. `${env.X}`-resolved
+views, redaction, "blank field on edit means unchanged", hot create/update/delete via
+`/admin/api/auth-providers`), sharing the actual redaction logic with it via the new
+`secretRedaction.ts` rather than duplicating it. One difference worth knowing:
+`authProviderConfigSchema` is a *true* discriminated union (`kind` required on every branch), unlike
+`gatewayConfigSchema` (`kind` optional on 3 of 4 branches) -- so unlike `gatewaysRegistry.ts`'s
+`parseGatewayConfig()`, there's no branch-picking workaround needed here; zod's own discriminated-union
+error reporting already attributes a validation failure to the right field on the right branch. The
+`ldap` branch's "exactly one bind mode must be fully configured" rule is a cross-field check that a
+single discriminated-union member can't express on its own (zod requires every branch to be a plain
+`ZodObject`, not a `.refine()`-wrapped `ZodEffects`) -- it's applied instead as a `.superRefine()` on
+the *whole* `authProviderConfigSchema` union, after `z.discriminatedUnion(...)`. This preserves every
+branch's own field-level errors while adding the one extra cross-field issue, and doesn't change the
+inferred TypeScript type (`z.infer` of a `ZodEffects` is still its wrapped type's output), so
+`authProvidersRegistry.upsert()`'s existing "no cast needed" pattern keeps working unchanged.
+
+One redaction subtlety worth knowing if you touch `secretRedaction.ts`: a field *ending in* `"Path"`
+(`tokenPath`, `refreshTokenPath`, etc.) is excluded from the sensitive-key match even though its name
+contains the substring `"token"` -- by this codebase's convention, a `*Path` field is always a
+JSONPath expression, never a literal secret, and redacting it would show `••••••••` in place of a
+perfectly non-sensitive value like `$.accessToken`.
+
 ## Admin UI and Admin API
 
 **Auth** (`src/server/adminAuth.ts`): every `/admin/api/*` request must carry
@@ -1013,22 +1159,25 @@ a few hardcoded top-level fields.
 | `CONFIG_DIR` | Folder containing both `endpoints/` and `gateways.yaml` (see [Workspace](#workspace)). Only used when no workspace has yet been saved through the admin UI. | unset |
 | `ENDPOINTS_DIR` | Directory of endpoint config files, scanned recursively. Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. | `config/endpoints` |
 | `GATEWAYS_FILE` | Path to the gateways config file. Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. | `config/gateways.yaml` |
+| `AUTH_PROVIDERS_FILE` | Path to the auth providers config file. Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. See [Caller authentication](#caller-authentication). | `config/authProviders.yaml` |
 | `SETTINGS_FILE` | Where the admin-UI-chosen workspace is persisted. Per-machine preference file, not meant for Git. | `data/settings.json` |
 | `LOG_LEVEL` | pino log level (`fatal|error|warn|info|debug|trace`). | `info` |
 | `ADMIN_TOKEN` | Bearer token required for `/admin/api/*`. **Unset disables the admin API entirely** (503), it does not run unauthenticated. | unset |
 | `MAX_REQUEST_BODY_SIZE` | `limit` passed to both `express.json()` and `express.urlencoded()` in `app.ts` -- a string the `bytes` package parses (`"500kb"`, `"1gb"`, …) or a raw byte count. Read directly from `process.env` inside `app.ts` (not threaded through `CreateAppOptions`), same as `ADMIN_TOKEN`/`LOG_LEVEL`. | `10mb` |
 | `NODE_ENV` | When `production`, disables the `pino-pretty` dev transport (structured JSON logs instead). | unset |
-| `DEMO_JSON_BASE_URL`, `DEMO_XML_BASE_URL`, `DEMO_SOAP_WSDL_URL`, `DEMO_SQLITE_PATH` | Referenced via `${env.X}` by the shipped example `config/gateways.yaml`, pointing at the mock backend. Not meaningful once real gateways replace the demo ones. | see `.env.example` |
+| `DEMO_JSON_BASE_URL`, `DEMO_XML_BASE_URL`, `DEMO_SOAP_WSDL_URL`, `DEMO_SQLITE_PATH`, `DEMO_OAUTH_CLIENT_SECRET` | Referenced via `${env.X}` by the shipped example `config/gateways.yaml` and `config/authProviders.yaml`, pointing at the mock backend (which also serves `/login` and `/oauth/token` for the auth demo -- see [Caller authentication](#caller-authentication)). Not meaningful once real gateways/providers replace the demo ones. | see `.env.example` |
+| `DEMO_LDAP_URL`, `DEMO_LDAP_BIND_PASSWORD`, `DEMO_LDAP_TOKEN_SECRET` | Referenced via `${env.X}` by the shipped `demoLdap` entry in `config/authProviders.yaml` -- point `DEMO_LDAP_URL` at a real local OpenLDAP test directory (`docker/openldap/README.md`, `npm run test-ldap`) or the automated test suite's in-process fake server. See [Caller authentication](#caller-authentication). | see `.env.example` |
 
 Any other `${env.X}` an endpoint or gateway config references must also be set, or config loading fails
 fast with a clear error naming the missing variable (`envSubst.ts`).
 
 ## Testing strategy
 
-`npx vitest run` — 64 tests across three files as of this writing (`npm test` runs the same thing).
+`npx vitest run` — 88 tests across three files as of this writing (`npm test` runs the same thing).
 
 - **`test/middleware.test.ts`** (the integration suite, one real Express `app` + a real mock backend +
-  a disposable temp copy of `config/`) — grouped by `describe` block:
+  an in-process fake LDAP server (`src/mock-backend/ldapServer.ts`, started/stopped alongside the mock
+  backend) + a disposable temp copy of `config/`) — grouped by `describe` block:
   - `health & introspection` — `/healthz`, `/__endpoints`.
   - `JSON backend`, `XML backend`, `SOAP backend`, `SQL backend` — each shipped example endpoint, called
     end-to-end against the real mock backend/SQLite file.
@@ -1061,9 +1210,22 @@ fast with a clear error naming the missing variable (`envSubst.ts`).
     copy of the real project config, one starting empty. Covers `GET /settings` reporting the current
     workspace/counts, `PUT /settings` rejecting a folder that doesn't exist on disk, switching to the empty
     folder loading zero endpoints/gateways without error and updating the live dispatcher immediately,
-    switching back restoring the original 7 endpoints, the choice being persisted to `SETTINGS_FILE` (read
+    switching back restoring the original endpoints, the choice being persisted to `SETTINGS_FILE` (read
     back and asserted directly, not just inferred from behavior), and an endpoint saved while pointed at the
     second folder landing under *that* folder's `endpoints/`, not the first one's.
+  - `caller auth: POST /auth/login + a gateway's requiresAuth` — missing/garbage/wrong-provider token
+    rejection, a full `basicLogin` login-through-`{__authToken}`-injection-to-backend round trip, logout
+    revoking a token immediately, a nested `oauth2 provider, end to end through a gateway` block (real
+    form-encoded RFC 6749 password-grant exchange against the mock backend), and a nested
+    `ldap provider (search-then-bind), end to end through a gateway` block -- wrong password and
+    unknown-username rejection, a full login-through-injection round trip against the in-process fake
+    LDAP server asserting the injected token really is the signed stand-in JWT (decoded and checked for
+    `sub`/`username`/`groups`), and the same wrong-provider-token rejection as the other two providers.
+  - `admin API: auth-provider CRUD` — list/redaction (including the `*Path`-is-never-a-secret
+    regression check), create/update/delete, the 409 conflict deleting a provider a gateway still
+    requires, field-attributed 400s for a missing-required-field `oauth2` provider and for an `ldap`
+    provider with neither bind mode (or both, ambiguously) fully configured, and a full ldap-provider
+    create/update/delete round trip.
 - **`test/mapper.test.ts`** — unit tests for `mapResponse()`: single-object mapping, `default` on a
   missing source, every `transform`, `output.root` array mapping, and indexing into a top-level array
   with no `root`.
@@ -1110,6 +1272,14 @@ reasoning and trade-offs.
   `source`/`root` expressions), `pino`/`pino-pretty` (structured logging), `express` (HTTP server).
   Dev-only: `vitest` (test runner), `supertest` (HTTP assertions against the Express app without a real
   listening socket), `tsx` (TypeScript execution for `dev`/local scripts), `typescript`.
+- **`ldapts`** is the production LDAP client behind the `ldap` auth provider -- chosen over the older,
+  callback-based `ldapjs` for actual directory binds/searches (promise-native, TypeScript-first,
+  actively maintained). **`jsonwebtoken`** signs that provider's stand-in backend token (previously
+  only present as a nested transitive dependency via `mssql`; now an explicit direct one). Dev-only:
+  **`ldapjs`** builds the in-process fake LDAP server (`src/mock-backend/ldapServer.ts`) the test suite
+  uses via its `createServer()` server-side API -- deliberately a different package from `ldapts`,
+  since a test *server* and a production *client* have very different API surfaces even for the same
+  protocol.
 
 ## Known limitations
 
@@ -1117,10 +1287,14 @@ reasoning and trade-offs.
   a 1:1 JSONPath-source-to-dot-path-target mapping with a small fixed `transform` set; there's no way
   to combine two source fields into one output field, or apply arbitrary logic, without a schema
   extension (e.g. a JSONata-style expression field).
-- **Data endpoints under `/api/...` (or wherever an endpoint's own `path` points) have no built-in
-  authentication of their own** — only `/admin/api/*` is token-gated. Anything an endpoint serves is public
-  to whoever can reach the middleware, unless fronted by something else (a reverse proxy, network
-  policy, etc.).
+- **Caller authentication (see [Caller authentication](#caller-authentication)) only covers a gateway
+  opting in via `requiresAuth`** — a gateway with none set is still fully public to whoever can reach
+  the middleware, exactly as before this feature existed. `basicLogin`, the `oauth2`
+  password/client_credentials grants, and `ldap` (plain simple-bind only — no Kerberos/SPNEGO SSO) are
+  implemented; SAML and the OAuth Authorization Code (browser redirect) flow are designed in
+  `AUTH_DESIGN_NOTES.md` but not built. Sessions live in one process's memory, so this doesn't yet work
+  correctly behind more than one load-balanced instance — see `AUTH_DESIGN_NOTES.md`'s "Multi-instance /
+  load balancing" and `DEPLOYMENT_ARCHITECTURE_NOTES.md`.
 - **A single shared `ADMIN_TOKEN`**, not per-user credentials or roles — anyone with the token has full
   admin access (create/edit/delete any endpoint or gateway, including ones that call arbitrary SQL or
   URLs).
@@ -1154,6 +1328,291 @@ reasoning and trade-offs.
 
 Newest first. Each entry names what changed, the key files, and links back to the relevant section
 above for the full technical detail.
+
+### 2026-09-23 (same day) — Active sessions: dev-only real token visibility
+
+Padma asked to also show backend tokens (and anything else being withheld) in the Active sessions
+viewer, explicit that this server has no production deployment planned and that the extra visibility is
+for development only. Rather than removing the redaction outright, gated it behind the same
+non-production check `logger.ts` already uses for its own dev-vs-production behavior
+(`process.env.NODE_ENV !== "production"`, factored out as `isDevMode()` in `authService.ts`) — on by
+default for local development and for the test suite, off only once `NODE_ENV=production` is set
+explicitly.
+
+`SessionSummary` (`authService.ts`) gained three optional fields — `token` (the real bearer token a
+caller would send), `backendToken`, and `refreshToken` — populated by `listSessions()` only when
+`isDevMode()` is true; a production run omits all three exactly as before this change, with no separate
+flag to flip. `GET /admin/api/meta` now also reports a top-level `devMode` boolean mirroring the same
+check, so the admin UI knows without probing whether to bother rendering the dev-only parts of the
+Session detail panel.
+
+Admin UI: the Session detail view now shows a loud dev-mode warning banner plus a "Session token
+(dev only)" / "Backend token (dev only)" / "Refresh token (dev only)" field group, gated on whether the
+session object actually carries those fields (the authoritative, request-scoped signal) rather than on
+the separately-fetched `META.devMode` flag, so the UI never invents a value the server didn't send. The
+prior "these are never shown here" copy in that panel is now conditional on the same check, replaced
+with the warning banner when the fields are present.
+
+Updated the two sessions tests added for the previous entry that had asserted the tokens were *never*
+present — that assertion was specific to the original always-redacted design, not to this feature
+generally, and this suite runs with `NODE_ENV=test` (i.e. non-production), so those tokens are now
+expected in the response. Replaced with a test asserting the dev-mode fields are populated by default in
+this suite, plus a new test that flips `process.env.NODE_ENV` to `"production"` for one request (restored
+in a `finally`) and confirms the same fields come back `undefined` — 101 tests total, up from 100.
+Verified with `tsc --noEmit` (clean) and `node --check` on `admin.js`; `vitest run` still can't execute in
+this cloud sandbox for the unrelated, already-documented `better-sqlite3`-on-Linux-VM reason (see the
+Active sessions entry directly below), so Padma should confirm the new production-mode test with a local
+`npm test`.
+
+### 2026-09-23 (same day) — Admin UI: "Active sessions" viewer for the in-memory session store
+
+Padma asked "Can you add a feature to see what is stored in memory for auth providers?" — scoped to a
+live view of caller sessions currently held by `SessionStore` (see
+[`SessionStore`](#caller-authentication)), since that's the one place a real backend token or refresh
+token ever lives once a caller has logged in.
+
+`SessionStore`'s interface gained `list()` (`Promise<Array<{ token, record }>>`), implemented on
+`InMemorySessionStore` as a plain snapshot of its underlying `Map`. `AuthService` (`authService.ts`)
+gained `listSessions()` and `revokeSession(id)`, plus a `SessionSummary` shape (provider, subject,
+claims, `createdAt`/`expiresAt`, `hasRefreshToken`) that deliberately excludes the real bearer token
+and the backend/refresh token it wraps — the same "never re-display a secret once it exists" stance the
+codebase already takes for `bindPassword`/`clientSecret`/`tokenSecret` via `secretRedaction.ts`, applied
+here to session tokens instead of config secrets. Since the admin UI still needs *some* stable
+identifier per session (to list rows and to revoke one), each session gets a one-way `id`:
+`sha256(token).slice(0, 16)` — enough to identify and revoke a session without ever letting the id be
+reversed back into the working token. New admin routes `GET /admin/api/sessions` and
+`DELETE /admin/api/sessions/:id` (`adminApi.ts`; `app.ts` now passes the already-constructed
+`AuthService` instance into `createAdminApiRouter`, alongside the registries it already received).
+
+Admin UI: a new "Active sessions" sidebar section (`gateway-list`/`gateway-row`, matching the visual
+language already shared by gateways/endpoints/auth providers) with a Refresh button, and a read-only
+`session-detail` panel (provider, subject, created/expires timestamps, whether the session is
+refreshable, and its claims) reusing the existing single-active-panel (`showDetailView`/`closeDetail`)
+and info-icon (`FIELD_INFO`) patterns. A "Revoke session" button in the detail panel confirms, then
+deletes the session and refreshes the list — a natural companion action once sessions are visible at
+all, not something separately requested but a small enough addition to include with the viewer itself.
+
+Verified via `tsc --noEmit` (clean) and `node --check` on the updated `admin.js`; added a
+`admin API: sessions` test block to `test/middleware.test.ts` covering the empty-list case, a session
+appearing after login with the token/backend-token never present anywhere in the response body, revoke-
+then-401-on-next-call, a 404 on revoking an unknown id, and that both routes require admin auth like
+every other `/admin/api/*` route. `vitest run` itself hit this environment's own pre-existing
+`better-sqlite3`-on-an-aarch64-Linux-verification-sandbox limitation (see the 2026-09-22 LDAP entry's
+Docker debugging session below for the general shape of that class of issue) rather than any problem in
+the new tests — Padma, worth a `npm test` on your own machine to get the real pass/fail signal on this
+one.
+
+### 2026-09-23 — Admin UI "Test Login" for auth providers; three real Docker/OpenLDAP bugs and one real LDAP security fix it surfaced
+
+Padma asked to "add test option for auth providers" — clarified to: a "Test Login" button in the auth
+provider editor that exercises a provider's *current, possibly-unsaved* config against real credentials,
+without ever creating a caller-usable session. `AuthProvidersRegistry.testLogin(name, input,
+credentials)` merges unchanged secrets the same way saving does (`mergeUnchangedSecrets`), validates and
+resolves `${env.*}` references through the normal schema/`substituteEnv` path, then calls
+`createAuthProvider(...).login(credentials)` directly — returning `{ ok: true, subject?, claims?,
+expiresAt? }` or `{ ok: false, message }`, but never the backend token a real login would produce. A
+config-validation failure (bad schema, unresolved `${env.*}`) is treated differently from a real
+login-attempt failure: the former surfaces as the existing 400 zod-error response, the latter as `{ ok:
+false }` with a message, so the UI can tell "this config is broken" from "this config is fine but these
+credentials don't work" apart. New route: `POST /admin/api/auth-providers/test-login`.
+
+Using this feature to test the newly-added `demoLdap` provider against the real `docker/openldap`
+directory (the fake in-process LDAP server used by the automated suite doesn't exercise the real Docker
+image at all) surfaced a chain of environment and code issues, each fixed as it appeared:
+
+- **Docker Desktop CLI**: `docker compose -f docker/openldap/docker-compose.yml up` failing with
+  `unknown shorthand flag: 'f' in -f` is a known Docker Desktop CLI/shell-alias issue, not a project bug
+  — worked around by `cd`-ing into the directory and omitting `-f`.
+- **Bootstrap LDIF mount fix #1**: the custom bootstrap LDIF directory was mounted `:ro`, but
+  `osixia/openldap`'s own startup script `chown`s it, so the container failed immediately with
+  `Read-only file system`. Fixed by dropping `:ro` from the volume mount.
+- **Bootstrap LDIF mount fix #2**: with the mount now writable, the image's default
+  `LDAP_REMOVE_CONFIG_AFTER_SETUP=true` behavior tried to `rm` that same live bind-mounted directory
+  after setup and failed with `Device or resource busy`. Fixed by setting
+  `LDAP_REMOVE_CONFIG_AFTER_SETUP: "false"` in `docker-compose.yml`'s environment block.
+- **Missing seed file (not a code bug)**: `docker/openldap/bootstrap/10-naimix-seed.ldif` had never
+  actually reached Padma's checkout from an earlier session — Padma's own diagnosis ("bootstrap folder is
+  empty") is what found this, not anything detected proactively. Recreated and delivered.
+- **`ldapts` error-message quality**: a real bind/search failure against OpenLDAP was surfacing to the
+  admin as the bare, unhelpful `{"ok":false,"message":" Code: 0x20"}` — `ldapts`'s own
+  `ResultCodeError` only falls back to a default message when the server's diagnostic text is
+  `undefined`, not when it's an *empty string* (which is exactly what OpenLDAP sends for a `noSuchObject`
+  it doesn't want to explain further — see the ACL note below). Fixed with a `runSearch()` wrapper
+  around every `client.search()` call in `src/auth/providers/ldap.ts`, converting any failure into a
+  clear `AuthError` naming the base DN and a human-readable result-code description
+  (`describeLdapError()`).
+- **Real LDAP security/correctness fix**: even after the fixes above, a group-membership lookup under
+  `ou=groups` — confirmed to genuinely exist via `ldapadd -c` reporting "Already exists" — still failed
+  with `noSuchObject`. Root cause: many directories, OpenLDAP included, deliberately return the *same*
+  `noSuchObject` both for "doesn't exist" and for "exists but you don't have access", to avoid leaking
+  directory structure to an unprivileged bind — and in search-then-bind mode, `login()` was still bound
+  as the *end user* (whose ACLs don't grant broad directory browsing) at the point it ran the
+  group/attribute lookups, rather than as the service account (whose credentials had already succeeded
+  once, earlier, in `resolveUserDn`). Fixed by rebinding as the configured service account before those
+  lookups in search-then-bind mode specifically; direct-bind mode is unchanged, since it has no separate
+  service-account identity to rebind as. This matters for any realistic AD/enterprise directory
+  deployment where end users commonly lack broad directory-browse permissions — not just this test
+  fixture.
+
+Added 7 tests for the `auth-providers/test-login` endpoint (95 total, up from 88); the LDAP fixes above
+were verified against the real Docker-backed OpenLDAP directory (Padma's own `ldapsearch`/`ldapadd`
+checks and a full Test Login round trip), not just the fake in-process server, plus `tsc --noEmit`.
+
+### 2026-09-22 (same day) — Caller authentication, phase 2: the `ldap` auth provider
+
+Padma asked to implement step 2 of the auth roadmap — LDAP/AD plain simple-bind — now that the local
+test directory (below) was in place to develop it against. See [Caller authentication](#caller-authentication)
+for the full architecture.
+
+Added `kind: ldap` end to end: `LdapProviderConfig` (`src/types/config.ts`) and `ldapProviderSchema`
+(`src/config/schema.ts`, unioned into `authProviderConfigSchema` with a `.superRefine()` enforcing
+exactly one of the two bind modes), `createLdapProvider()` (`src/auth/providers/ldap.ts`, using
+`ldapts`), and a `case "ldap"` branch in `providerFactory.ts`'s exhaustive switch. Supports both a
+direct-bind mode (`userDnTemplate`) and a search-then-bind mode (`bindDn`/`bindPassword`/`searchBase`/
+`searchFilter` — the realistic Active Directory/enterprise pattern), optional group-membership lookup,
+and optional extra attribute capture. Untrusted input is escaped before touching LDAP syntax: DN values
+via a small `escapeDnValue()` helper built on `ldapts`'s `DN`/`RDN` classes (which don't expose a
+standalone escape function), filter values via `ldapts`'s own `Filter.escape()`. Since LDAP has no
+native token to relay to a backend, a successful bind mints the middleware's own signed JWT (via the
+newly-added `jsonwebtoken` dependency) as the stand-in backend token — the design decision already on
+record in `AUTH_DESIGN_NOTES.md`'s "LDAP / Active Directory — decided".
+
+Built a second, independent test double: an in-process fake LDAP server
+(`src/mock-backend/ldapServer.ts`, via `ldapjs`'s server API — a different package from production's
+`ldapts`, since a test server and a client have very different APIs even for the same protocol) seeded
+with the *exact same* fixture as `docker/openldap`'s bootstrap LDIF (same base DN, same three users,
+same three groups, same passwords), so the automated test suite doesn't depend on Docker at all. Wired
+into `test/middleware.test.ts`'s `beforeAll`/`afterAll` alongside the existing mock backend; added a
+`caller auth: ... > ldap provider (search-then-bind), end to end through a gateway` test block and
+`admin API: auth-provider CRUD` cases for the new schema validation and a full create/update/delete
+round trip (88 tests total, up from 64). Demo wiring: `demoLdap` in `config/authProviders.yaml`,
+`crmJsonAuthedLdap` in `config/gateways.yaml`, `config/endpoints/api/authed/ldap-echo.yaml`, and three
+new `DEMO_LDAP_*` vars in `.env.example` — log in with `jdoe`/`asmith`/`bwayne`, password
+`password123`.
+
+Extended the admin UI's Auth providers editor with an `ldap` kind: URL, a bind-mode selector toggling
+between the direct- and search-then-bind field sets, optional group-lookup fields, a comma-separated
+extra-attributes field, a TLS-verification checkbox, and the stand-in token's secret/TTL — following
+the exact pattern `basicLogin`/`oauth2` already established (`AUTH_PROVIDER_KINDS`, `FIELD_INFO`
+entries, the same "blank field on edit means unchanged" convention for `bindPassword`/`tokenSecret`,
+which the existing generic `SENSITIVE_KEY_PATTERN` already covers with no changes needed).
+
+Verified for real at every layer, not just written and assumed correct: `tsc --noEmit`, the full
+`vitest run` suite (88/88 passing), `npm run build`, a manual smoke test of the provider's own two bind
+modes plus group/attribute claims directly against the fake LDAP server (catching two real bugs in the
+process — see below), a live end-to-end curl round trip (login → `{__authToken}`-injected signed JWT
+seen by the mock backend) against a real running instance pointed at the fake LDAP server, and a
+disposable Playwright script (per the project's disposable-QA-script convention) exercising the new
+admin UI fields, save/reopen/delete, and the gateway editor's Requires auth dropdown.
+
+Two real bugs surfaced and fixed *in the test infrastructure*, not the production `ldap` provider,
+while building the fake LDAP server: (1) `req.dn` on a **bind** request comes back as a plain string in
+the installed `ldapjs` version, not a `DN` instance as its own docs claim (a `search` request's `req.dn`
+*is* a real `DN`) — worked around by normalizing with `ldap.parseDN()` before calling `.equals()`/
+`.parentOf()`. (2) `ldapjs`'s `SearchResponse.send()` has a real case-sensitivity bug: it silently drops
+any entry attribute whose *lowercased* name isn't found via a case-*sensitive* `indexOf` against the
+client's requested attribute list, so a mixed-case schema attribute name like `departmentNumber`,
+requested with that exact casing, was incorrectly treated as "not requested" and dropped — worked
+around by clearing `res.attributes` in the fake server's search handler, disabling that (redundant, for
+this fixture) filtering entirely. Both are documented inline in `ldapServer.ts` where the workarounds
+live, and neither affects a real LDAP/AD server, only this in-process test double.
+
+### 2026-09-22 — Local LDAP test directory (`docker/openldap`), prep for the LDAP/AD auth provider
+
+Padma asked how to test step 2 of the auth roadmap (LDAP/AD bind — see `AUTH_DESIGN_NOTES.md`'s
+"Suggested phased build order") before building it, specifically whether any free public LDAP/AD test
+service exists. Two do — `ldap.forumsys.com` (public, read-only, anonymous) and the FreeIPA project's
+public demo (`ipa.demo1.freeipa.org`, wiped daily) — but neither suits active development: one can't be
+seeded with new test data, the other resets out from under you. Recommended, and then built, a
+self-hosted alternative instead, the same role `src/mock-backend` already plays for the other backend
+types and the `basicLogin`/`oauth2` providers.
+
+Added `docker/openldap/` — a `docker-compose.yml` running the free `osixia/openldap` image, plus
+`bootstrap/10-naimix-seed.ldif` seeding three test users (`jdoe`, `asmith`, `bwayne`, all password
+`password123`) across three `groupOfNames` groups (`employees`, `engineers`, `admins`), under base DN
+`dc=naimix,dc=test`. New `npm run test-ldap` / `test-ldap:down` scripts. **This is test infrastructure
+only — no LDAP/AD `AuthProvider` exists yet in `src/auth/`; that's still step 2, not yet started.**
+
+Verified for real, not just written and assumed correct: installed `slapd`/`ldap-utils` directly (no
+Docker daemon available in this environment) and loaded the *exact* shipped bootstrap LDIF into a
+throwaway instance the same way the container applies it (root entry created first, then the custom
+LDIF via `ldapadd`, mirroring osixia/openldap's own bootstrap order) — all three users bind successfully
+with the documented password, a wrong password correctly fails with `Invalid credentials (49)`, and both
+an attribute search and a group-membership search (`member=<dn>`) return the expected entries. The exact
+commands used are the ones documented in `docker/openldap/README.md`'s "Quick smoke test" section, so
+Padma can re-run the same checks once the container's actually started with Docker.
+
+### 2026-09-21 (same day) — Auth providers get an admin UI screen; gateways get a `requiresAuth` dropdown
+
+Padma noticed that the just-shipped caller-authentication feature (below) was API/YAML-only: there was
+no way to create an auth provider or point a gateway at one without hand-editing
+`config/authProviders.yaml`/`config/gateways.yaml` or calling the REST API directly. Asked for both
+missing pieces to be added, mirroring the existing Gateways editor's conventions exactly.
+
+Added a new **Auth providers** sidebar section (`public/admin/index.html`/`admin.js`) — list, create,
+edit, delete — alongside Endpoints and Gateways, following the same list-row language
+(`.gateway-list`/`.gateway-row`, reused as-is) and the same "blank field on edit means unchanged"
+convention for `clientSecret` that gateway secrets already use. The editor renders different fields for
+`basicLogin` (login URL, method, headers, username/password field names, static fields, token/refresh-
+token/expires-in/subject JSONPaths) vs. `oauth2` (token URL, grant type, client id/secret, scope,
+headers), plus a shared "Claims" repeatable list that reuses the exact same `outputFieldRow()` component
+as an endpoint's Output tab, since a login-response claim mapping is the identical
+target/source/transform/default shape. The Gateway editor gained a **Requires auth** dropdown
+(`select[name=requiresAuth]`), populated from the auth-provider list, sitting right below the existing
+kind-specific fields and read into `config.requiresAuth` on save exactly like `commonParams` already is.
+
+No backend changes were needed — `/admin/api/auth-providers` and the `requiresAuth` gateway field were
+already fully built (see the entry below); this was purely wiring up existing API surface that had no
+UI yet. `AUTH_PROVIDER_KINDS`/`OAUTH_GRANT_TYPES` are hardcoded client-side in `admin.js`, matching the
+existing `GATEWAY_KINDS` convention (gateway kinds aren't served from `/admin/api/meta` either).
+
+Verified with a dedicated 16-check live-browser Playwright script (not shipped, per the project's
+disposable-QA-script convention) against a real running instance: the Auth providers section lists
+`demoLogin`/`demoOAuth`, opening `demoLogin` shows its real saved fields, creating a new `oauth2`
+provider through the form persists correctly, the gateway editor's Requires auth dropdown is populated
+and pre-selects a gateway's existing `requiresAuth`, changing it round-trips through save+reopen, and
+deleting a provider still referenced by a gateway is correctly blocked with the existing 409 while
+deleting an unused one succeeds — 16/16 passed, screenshot confirmed clean rendering in both the
+gateway and auth-provider editors. Full suite still 81/81, `tsc --noEmit` clean (no `.ts` files touched
+by this entry).
+
+### 2026-09-21 — Caller authentication, phase 1: `basicLogin` + `oauth2` providers, `requiresAuth`, opaque sessions
+
+Padma asked to brainstorm (explicitly not implement) a design for authenticating callers of this
+middleware's own data endpoints against enterprise identity systems, with the middleware holding the
+real backend token and issuing its own opaque session token instead — captured in
+`AUTH_DESIGN_NOTES.md` across a long iterative Q&A (opaque vs. JWT, refresh handling, multi-instance/
+Redis, the OAuth Authorization Code redirect flow, a client-app registry for it). A follow-on
+brainstorm on production deployment topology (admin console as a separate dev-only build, config
+promotion via Git branches to a shared volume, manual rolling restart to apply changes) went into a
+second document, `DEPLOYMENT_ARCHITECTURE_NOTES.md`, since it turned out to be broader than auth
+specifically. Once both were worked through to a decided state, Padma asked to implement phase 1 of
+the auth design in the live project (not the deployment-topology document, which remains
+design-only).
+
+Implemented: the `AuthProvider` abstraction (`src/auth/`) with `basicLogin` (a bespoke backend login
+API) and `oauth2` (a standard RFC 6749 token endpoint, password/client_credentials grants, with
+refresh via the standard `refresh_token` grant); a new `authProviders.yaml` config file and
+`AuthProvidersRegistry` (mirrors `gatewaysRegistry.ts`, sharing its redaction logic via the new
+`secretRedaction.ts`); a `requiresAuth` field on any gateway; `AuthService` (in-process login/logout/
+session-resolution with proactive refresh and refresh-stampede de-duplication) backed by
+`InMemorySessionStore`; `dispatch.ts` enforcing `requiresAuth` and injecting the real backend token as
+a reserved `{__authToken}` param; and `POST /auth/login/:provider` / `POST /auth/logout` routes. Full
+architecture writeup in [Caller authentication](#caller-authentication).
+
+Demo wiring added alongside: `config/authProviders.yaml` (`demoLogin`, `demoOAuth`), a new
+`crmJsonAuthed` gateway (`requiresAuth: demoLogin`), a new `json-authed-echo` endpoint, and two new
+mock-backend routes (`POST /login`, `POST /oauth/token`) so the whole flow — login, token injection,
+logout — is exercisable end to end without a real backend. `/admin/api/auth-providers` gets the same
+CRUD shape as `/admin/api/gateways` (no browser UI for it yet, API/YAML only). One redaction bug was
+caught and fixed during this work: a field ending in `"Path"` (e.g. `tokenPath`) was being masked
+because its name contains the substring `"token"`, even though it holds a JSONPath expression, not a
+secret — see the note in [Caller authentication](#caller-authentication).
+
+Deliberately out of scope for this pass (see `AUTH_DESIGN_NOTES.md`): LDAP/Active Directory, SAML, the
+OAuth Authorization Code flow and its client-app registry, session claims exposed to `{param}`
+substitution, and any Redis-backed store — this phase is single-process/in-memory only, matching what
+the rest of this app already is.
 
 ### 2026-09-16 (same day) — "Try it" panel can now test generated bulk table endpoints
 

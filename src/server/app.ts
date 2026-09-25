@@ -1,16 +1,28 @@
 import path from "node:path";
-import express, { type Express, type Request, type Response, type NextFunction } from "express";
-import cors from "cors";
-import { createDynamicDispatcher } from "./dispatch";
+import type { Express } from "express";
+import express from "express";
+import { createBaseApp, mountDataPlaneRoutes, mountTerminalHandlers } from "./coreApp";
 import { createAdminApiRouter } from "./adminApi";
-import { createAuthRouter } from "./authRoutes";
 import { requireAdminAuth } from "./adminAuth";
-import { AuthService } from "../auth/authService";
-import { InMemorySessionStore } from "../auth/sessionStore";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 import type { Logger } from "./logger";
+
+/**
+ * The FULL app: admin console (UI + API) mounted alongside the data plane,
+ * in one process. This is deliberately a development-only composition --
+ * see DEPLOYMENT_ARCHITECTURE_NOTES.md's "Installation: how development
+ * differs from QA/Production". QA and Production run dataPlaneApp.ts's
+ * createDataPlaneApp() instead, via the separate src/server/qaIndex.ts and
+ * src/server/prodIndex.ts entry points (two build targets, kept separate
+ * so QA/Production behavior can diverge later without touching each
+ * other -- see dataPlaneServer.ts) -- neither imports this file,
+ * adminApi.ts, or adminAuth.ts at all, so the admin console is
+ * structurally absent from either artifact rather than merely disabled by
+ * config. See dataPlaneApp.ts's own comment for the other half of that
+ * split.
+ */
 
 export interface CreateAppOptions {
   endpointRegistry: EndpointRegistry;
@@ -37,43 +49,13 @@ export function createApp({
   workspace,
   settingsFile,
 }: CreateAppOptions): Express {
-  // In-memory only in this phase -- see sessionStore.ts and
-  // AUTH_DESIGN_NOTES.md's "Multi-instance / load balancing" for why a
-  // multi-instance production deployment needs a shared (e.g. Redis) store
-  // behind this same SessionStore interface instead.
-  const authService = new AuthService(authProvidersRegistry, new InMemorySessionStore());
-  const app = express();
-  app.use(cors());
-  // body-parser's own default (used when no `limit` is given) is a hard
-  // 100kb -- too small for a real XML/SOAP payload or a bulk SQL write with
-  // many rows, and the cause of a bare "request entity too large" error with
-  // no indication of why. Configurable per deployment via env var since
-  // there's no one right ceiling for every backend this middleware fronts.
-  const MAX_REQUEST_BODY_SIZE = process.env.MAX_REQUEST_BODY_SIZE ?? "10mb";
-  app.use(express.json({ limit: MAX_REQUEST_BODY_SIZE }));
-  app.use(express.urlencoded({ extended: true, limit: MAX_REQUEST_BODY_SIZE }));
-
-  app.get("/healthz", (_req, res) => {
-    res.json({ status: "ok", endpointCount: endpointRegistry.list().length });
-  });
-
-  // Introspection endpoint: lists every configured endpoint so users can see
-  // what's live without reading the YAML files.
-  app.get("/__endpoints", (_req, res) => {
-    res.json(
-      endpointRegistry.list().map((r) => ({
-        id: r.id,
-        method: r.method,
-        path: r.path,
-        description: r.description,
-        backendType: r.backend.type,
-      }))
-    );
-  });
+  const { app, authService } = createBaseApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger });
 
   // Admin UI: a static browser app (served publicly) talking to a
   // token-gated API. The UI itself has no secrets in it; every API call it
-  // makes carries the bearer token entered on the page.
+  // makes carries the bearer token entered on the page. Mounted between the
+  // base app (healthz/__endpoints) and the data-plane routes below,
+  // matching this app's original route order exactly.
   if (adminUiDir) {
     // express.static 301-redirects a bare "/admin" to "/admin/" itself (so
     // the page's relative asset URLs resolve), then serves index.html for it.
@@ -93,35 +75,14 @@ export function createApp({
     })
   );
 
-  // Caller-facing login/logout -- a different audience from /admin/api
-  // (whoever configures this instance) and from the business endpoints
-  // below. See AUTH_DESIGN_NOTES.md.
-  app.use("/auth", createAuthRouter(authService, logger));
-
-  // Every configured endpoint is served by one dynamic handler that reads the
-  // registry fresh per request (see dispatch.ts) -- this is what lets
-  // endpoints created/edited via the admin API go live without a restart.
-  app.use(createDynamicDispatcher(endpointRegistry, gatewaysRegistry, authService, logger));
-
-  app.use((req: Request, res: Response) => {
-    res.status(404).json({ error: "Not Found", path: req.path });
-  });
-
-  // Centralized error handler: known errors (ValidationError, BackendError)
-  // carry a statusCode; anything else becomes a 500.
-  app.use((err: Error & { statusCode?: number; backendBody?: unknown }, req: Request, res: Response, _next: NextFunction) => {
-    const statusCode = err.statusCode ?? 500;
-    if (statusCode >= 500) {
-      logger.error({ err, path: req.path }, "unhandled error");
-    } else {
-      logger.warn({ err: err.message, path: req.path }, "request error");
-    }
-    res.status(statusCode).json({
-      error: err.name ?? "Error",
-      message: err.message,
-      ...(err.backendBody !== undefined ? { backendBody: err.backendBody } : {}),
-    });
-  });
+  // Caller-facing login/logout + the dynamic dispatcher -- see
+  // coreApp.ts's mountDataPlaneRoutes(). Mounted after admin, matching this
+  // app's original route order exactly (though see mountDataPlaneRoutes()'s
+  // own comment on why the order among these particular routes doesn't
+  // actually matter: dispatch.ts's middleware calls next() for anything it
+  // doesn't recognize as a configured endpoint path).
+  mountDataPlaneRoutes(app, { endpointRegistry, gatewaysRegistry, authService, logger });
+  mountTerminalHandlers(app, logger);
 
   return app;
 }

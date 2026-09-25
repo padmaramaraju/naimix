@@ -8,6 +8,7 @@ import { callBackend, closeAllSqlConnections, getBackendGatewayName } from "../c
 import { mapResponse } from "../transform/mapper";
 import { ValidationError } from "./errors";
 import { generateCrudEndpointsForGateway } from "./crudGenerator";
+import { generateOpenApiDocument } from "./openapiGenerator";
 import { resolveConfigDir, saveWorkspaceSettings } from "./workspaceSettings";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
@@ -478,6 +479,33 @@ export function createAdminApiRouter({
       res.status(204).end();
     })
   );
+
+  // ---- Export ----
+  // Lets whoever's configuring this workspace hand it to another tool: a
+  // standard OpenAPI document describing every caller-facing route, and a
+  // ready-to-run MCP server that talks to this same live instance. Both
+  // reflect the CURRENT config at request time -- there's nothing generated
+  // ahead of time to go stale.
+
+  router.get("/export/openapi.json", (req, res) => {
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const doc = generateOpenApiDocument({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, baseUrl });
+    res.setHeader("Content-Disposition", 'attachment; filename="naimix-openapi.json"');
+    res.json(doc);
+  });
+
+  // The MCP server is a single static file checked into this repo (not
+  // generated per-workspace) -- it discovers endpoints/gateways/auth
+  // providers itself, at its own startup, by calling this same admin API.
+  // See mcp-server/naimix-mcp-server.js's own header comment for the full
+  // design and setup instructions.
+  router.get("/export/mcp-server", (_req, res) => {
+    const filePath = path.resolve(__dirname, "../../mcp-server/naimix-mcp-server.js");
+    if (!fs.existsSync(filePath)) {
+      return res.status(500).json({ error: "NotFound", message: "mcp-server/naimix-mcp-server.js is missing from this installation." });
+    }
+    res.download(filePath, "naimix-mcp-server.js");
+  });
 
   // Zod validation errors -> 400 with details, instead of falling through
   // to the generic 500 handler in app.ts.

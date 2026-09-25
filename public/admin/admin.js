@@ -95,6 +95,40 @@ async function api(method, path, body) {
   return data;
 }
 
+/**
+ * Downloads a file from an authenticated /admin/api/* route. A plain
+ * `<a href>` can't carry the Authorization header these routes require, so
+ * this fetches the response as a Blob and clicks a synthetic, throwaway
+ * `<a download>` pointed at an object URL for it -- the standard workaround
+ * for a browser download that needs a custom header.
+ */
+async function downloadFile(path, fallbackFilename) {
+  const res = await fetch(path, {
+    headers: TOKEN ? { Authorization: `Bearer ${TOKEN}` } : {},
+  });
+  if (res.status === 401) {
+    logout();
+    throw new Error("Session expired — please sign in again.");
+  }
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Download failed (${res.status})${text ? `: ${text}` : ""}`);
+  }
+  const blob = await res.blob();
+  const disposition = res.headers.get("Content-Disposition") || "";
+  const match = /filename="([^"]+)"/.exec(disposition);
+  const filename = match ? match[1] : fallbackFilename;
+
+  const objectUrl = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = objectUrl;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 /* ---------------------------------------------------------------------
  * Toast + small DOM helpers
  * ------------------------------------------------------------------- */
@@ -199,6 +233,7 @@ const FIELD_INFO = {
   authProviderSubjectPath: "An optional JSONPath into the login response identifying the logged-in subject/user (e.g. $.sub or $.userId) -- stored on the session for reference.",
   authProviderClaims: "Optional extra fields pulled out of the login response using the same JSONPath mapping as an endpoint's Output fields, e.g. exposing a display name or role from the login response.",
   activeSessions: "Every caller session currently held in memory across all auth providers. This is a live view of the session store, showing enough to identify a session (provider, subject, claims, timestamps) and revoke it if needed. Outside production (NODE_ENV != \"production\"), opening a session also shows its real session/backend/refresh tokens for local debugging; a real deployment run with NODE_ENV=production always withholds them.",
+  exportSection: "Download a standard OpenAPI (Swagger) description of this workspace's endpoints and auth routes, or a ready-to-run MCP server that talks to this same live instance -- both always reflect the current config, so re-download after making changes rather than reusing an older copy.",
   authProviderTokenUrl: "The OAuth2 token endpoint this provider requests tokens from, per RFC 6749, e.g. https://api.example.com/oauth/token.",
   authProviderGrantType: "password sends the caller's own username/password (a person logging in). client_credentials authenticates this middleware itself with no end-user credentials at all -- use it when callers shouldn't need individual backend accounts.",
   authProviderClientId: "This middleware's own OAuth2 client identifier, issued by the backend's authorization server.",
@@ -1911,6 +1946,22 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById("change-workspace-btn").addEventListener("click", () => openWorkspaceEditor(CURRENT_SETTINGS.configDir));
   document.getElementById("workspace-form").addEventListener("submit", saveWorkspace);
+  document.getElementById("download-openapi-btn").addEventListener("click", async () => {
+    try {
+      await downloadFile("/admin/api/export/openapi.json", "naimix-openapi.json");
+      toast("OpenAPI spec downloaded");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
+  document.getElementById("download-mcp-server-btn").addEventListener("click", async () => {
+    try {
+      await downloadFile("/admin/api/export/mcp-server", "naimix-mcp-server.js");
+      toast("MCP server downloaded");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
 
   for (const closer of document.querySelectorAll("[data-close]")) {
     closer.addEventListener("click", () => closeDrawer(closer.dataset.close));

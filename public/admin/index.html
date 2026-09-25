@@ -74,6 +74,17 @@
           <div id="sessions-list" class="gateway-list"></div>
           <p id="sessions-empty" class="muted sidebar-empty" hidden>No one is currently logged in through any provider.</p>
         </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-section-header">
+            <h2>Export <button type="button" class="info-icon" data-info-key="exportSection" aria-label="What is this?">i</button></h2>
+          </div>
+          <div class="export-actions">
+            <button id="download-openapi-btn" class="btn-secondary btn-sm" type="button">Download OpenAPI spec (JSON)</button>
+            <button id="download-mcp-server-btn" class="btn-secondary btn-sm" type="button">Download MCP server</button>
+          </div>
+          <p class="muted">Reflects the current workspace -- re-download after config changes.</p>
+        </div>
       </aside>
 
       <main id="detail-panel" class="detail-panel">

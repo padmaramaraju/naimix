@@ -28,6 +28,16 @@
   --shadow: 0 8px 24px rgba(20, 24, 32, 0.10);
   --radius: 10px;
   --radius-sm: 7px;
+  /* A button's own fill/border, chosen to contrast against EVERY surface
+     it might sit on (--surface, --sidebar-bg, --code-bg, --bg are all
+     close pale grays in light mode) rather than matching whichever one it
+     happens to be nearest to -- otherwise an outline button (e.g. inside
+     the sidebar) reads as barely more than its own border. See
+     .btn-secondary / .chevron-btn. */
+  --btn-secondary-bg: #e3e7ee;
+  --btn-secondary-border: #b7bfcc;
+  --btn-secondary-hover-bg: #d5dae2;
+  --btn-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
   color-scheme: light;
 }
 
@@ -50,6 +60,10 @@
     --success-bg: #123522;
     --code-bg: #12141a;
     --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    --btn-secondary-bg: #323844;
+    --btn-secondary-border: #4d5566;
+    --btn-secondary-hover-bg: #3e4552;
+    --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
     color-scheme: dark;
   }
 }
@@ -72,6 +86,10 @@
   --success-bg: #123522;
   --code-bg: #12141a;
   --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --btn-secondary-bg: #323844;
+  --btn-secondary-border: #4d5566;
+  --btn-secondary-hover-bg: #3e4552;
+  --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
   color-scheme: dark;
 }
 
@@ -159,20 +177,28 @@ code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-si
 /* Buttons */
 button { font-family: inherit; cursor: pointer; }
 .btn-primary, .btn-secondary, .btn-danger {
-  padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid transparent; font-size: 13px; font-weight: 500;
-  transition: background-color 0.12s ease, border-color 0.12s ease;
+  padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid transparent; font-size: 13px; font-weight: 600;
+  box-shadow: var(--btn-shadow);
+  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
 }
 .btn-primary { background: var(--primary); color: white; }
 .btn-primary:hover { background: var(--primary-hover); }
-.btn-secondary { background: var(--surface); border-color: var(--border); color: var(--text); }
-.btn-secondary:hover { background: var(--code-bg); }
+/* Deliberately its own fill/border (--btn-secondary-*), not var(--surface)
+   or var(--border) -- this button shows up inside the topbar, the
+   workspace bar, and the sidebar alike, and those all sit at very close
+   luminance to --surface in both themes. Matching one of them means
+   blending into whichever panel the button happens to be on; a color
+   chosen to contrast against all of them makes it read as a button
+   everywhere it's used. */
+.btn-secondary { background: var(--btn-secondary-bg); border-color: var(--btn-secondary-border); color: var(--text); }
+.btn-secondary:hover { background: var(--btn-secondary-hover-bg); }
 .btn-secondary.active { background: var(--primary-tint); border-color: var(--primary); color: var(--primary); }
 .btn-danger { background: var(--danger-bg); color: var(--danger); border-color: transparent; }
 .btn-danger:hover { filter: brightness(0.95); }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 .icon-btn { background: none; border: none; font-size: 16px; color: var(--muted); padding: 4px 8px; border-radius: 6px; }
-.icon-btn:hover { background: var(--code-bg); }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
+.icon-btn:hover { background: var(--btn-secondary-bg); }
+button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
 
 /* Theme toggle: a comfortably large tap target with a sliding sun/moon
    icon, styled like a proper switch rather than a tiny text link. */
@@ -208,11 +234,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
  * ------------------------------------------------------------------ */
 .chevron-btn {
   flex: 0 0 auto; width: 28px; height: 28px; display: inline-flex; align-items: center; justify-content: center;
-  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--muted);
-  padding: 0;
+  border: 1px solid var(--btn-secondary-border); border-radius: 8px; background: var(--btn-secondary-bg); color: var(--muted);
+  padding: 0; box-shadow: var(--btn-shadow);
 }
 .chevron { display: inline-block; font-size: 15px; line-height: 1; transition: transform 0.15s ease; }
-.endpoint-folder-header:hover .chevron-btn { background: var(--code-bg); border-color: var(--border-strong); color: var(--text); }
+.endpoint-folder-header:hover .chevron-btn { background: var(--btn-secondary-hover-bg); border-color: var(--border-strong); color: var(--text); }
 .endpoint-folder-header.is-collapsed .chevron { transform: rotate(-90deg); }
 
 /* Endpoints tree -- folders mirror each endpoint's path, same idea as config/endpoints/ on disk */
@@ -246,6 +272,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .gateway-row-kind { flex: 0 0 auto; text-transform: uppercase; font-size: 10px; font-weight: 700; letter-spacing: 0.03em; color: var(--muted); background: var(--code-bg); padding: 2px 6px; border-radius: 4px; }
 .gateway-row-name { font-weight: 600; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; flex: 0 0 auto; }
 .gateway-row-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+
+/* Export section -- two standalone download actions, no list/detail pair */
+.export-actions { display: flex; flex-direction: column; gap: 6px; }
+.export-actions .btn-secondary { width: 100%; text-align: center; }
 
 /* Forms */
 label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: 600; color: var(--muted); }

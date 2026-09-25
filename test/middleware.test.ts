@@ -1131,6 +1131,62 @@ describe("gateway commonParams + env-sourced input params", () => {
   });
 });
 
+describe("admin API: export (OpenAPI spec + MCP server download)", () => {
+  it("requires admin auth for both export routes", async () => {
+    const openapi = await request(app).get("/admin/api/export/openapi.json");
+    expect(openapi.status).toBe(401);
+    const mcp = await request(app).get("/admin/api/export/mcp-server");
+    expect(mcp.status).toBe(401);
+  });
+
+  it("generates a valid-shaped OpenAPI 3.0.3 document reflecting the live workspace", async () => {
+    const res = await request(app).get("/admin/api/export/openapi.json").set(authed());
+    expect(res.status).toBe(200);
+    expect(res.headers["content-disposition"]).toMatch(/naimix-openapi\.json/);
+    expect(res.body.openapi).toBe("3.0.3");
+    expect(res.body.servers[0].url).toMatch(/^http:\/\//);
+
+    // A plain (no-auth) endpoint converts its ":id" path param to "{id}"
+    // and carries no security requirement.
+    const jsonCustomerPath = res.body.paths["/api/json/customers/{id}"];
+    expect(jsonCustomerPath).toBeDefined();
+    expect(jsonCustomerPath.get.operationId).toBe("json-customer-by-id");
+    expect(jsonCustomerPath.get.security).toBeUndefined();
+
+    // An endpoint whose gateway requires auth (crmJsonAuthed -> demoLogin)
+    // carries the shared sessionAuth security requirement.
+    const authedEcho = Object.values(res.body.paths).find(
+      (p: unknown) => (p as Record<string, { operationId?: string }>).get?.operationId === "json-authed-echo"
+    ) as { get: { security?: unknown[] } } | undefined;
+    expect(authedEcho).toBeDefined();
+    expect(authedEcho!.get.security).toEqual([{ sessionAuth: [] }]);
+
+    expect(res.body.components.securitySchemes.sessionAuth).toEqual({
+      type: "http",
+      scheme: "bearer",
+      description: expect.stringContaining("Opaque"),
+    });
+
+    // The built-in caller-facing routes are documented too, with every
+    // configured provider name offered on the login path param.
+    const loginPath = res.body.paths["/auth/login/{provider}"];
+    expect(loginPath).toBeDefined();
+    expect(loginPath.post.parameters[0].schema.enum).toEqual(expect.arrayContaining(["demoLogin", "demoOAuth", "demoLdap"]));
+    expect(res.body.paths["/auth/logout"]).toBeDefined();
+    expect(res.body.paths["/healthz"]).toBeDefined();
+    expect(res.body.paths["/__endpoints"]).toBeDefined();
+  });
+
+  it("downloads the MCP server as a runnable .js file", async () => {
+    const res = await request(app).get("/admin/api/export/mcp-server").set(authed());
+    expect(res.status).toBe(200);
+    expect(res.headers["content-disposition"]).toMatch(/naimix-mcp-server\.js/);
+    expect(res.text).toContain("#!/usr/bin/env node");
+    expect(res.text).toContain("NAIMIX_BASE_URL");
+    expect(res.text).toContain("NAIMIX_ADMIN_TOKEN");
+  });
+});
+
 describe("admin API: generate CRUD endpoints for a SQL gateway", () => {
   it("404s for a gateway that doesn't exist", async () => {
     const res = await request(app).post("/admin/api/gateways/doesNotExist/generate-crud").set(authed());

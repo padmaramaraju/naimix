@@ -62,9 +62,12 @@ curl -X POST http://localhost:4000/auth/login/demoLogin \
 curl http://localhost:4000/api/authed/echo -H 'Authorization: Bearer <token from above>'
 ```
 
-Run `npm run build && npm start` for a production-style run of the compiled
-`dist/` output, or `npm test` to run the automated test suite (it spins up
-its own copy of the mock backend, so no manual setup is required).
+Run `npm run build && npm start` for a compiled run of the full app (admin
+console + data plane together, the same as `npm run dev`) -- this is the
+`dev` target; see "Deploying to QA/Production" below for the separate
+`qa`/`prod` targets, which never include the admin console at all. `npm
+test` runs the automated test suite (it spins up its own copy of the mock backend, so
+no manual setup is required).
 
 To create and edit endpoints visually instead of hand-writing YAML, set
 `ADMIN_TOKEN` in `.env` and open `http://localhost:4000/admin` — see
@@ -687,6 +690,8 @@ scheme automatically.
   (kind, base URL/WSDL/connection details, common parameters) so you can
   check it without leaving the endpoint editor to go find it in the
   Gateways list.
+- **Export** -- download an OpenAPI (Swagger) spec or a ready-to-run MCP
+  server for this workspace. See "Exporting: OpenAPI spec + MCP server" below.
 
 **Things worth knowing:**
 
@@ -701,6 +706,123 @@ scheme automatically.
   a real deployment.
 - Deleting a gateway that an endpoint still references is refused (409, with
   the list of dependent endpoint ids) rather than silently breaking that endpoint.
+
+## Exporting: OpenAPI spec + MCP server
+
+The admin UI's "Export" sidebar section (and `GET /admin/api/export/*` directly, if you'd rather script
+it) gives you two ways to hand this workspace to another tool. Both reflect the *current* config the
+moment you download them -- there's no separate "regenerate" step, so just download again after making
+changes.
+
+**OpenAPI spec (`Download OpenAPI spec (JSON)` / `GET /admin/api/export/openapi.json`)** -- a standard
+OpenAPI 3.0.3 document describing every configured endpoint (as its real caller-facing path and method),
+plus the built-in `/auth/login/{provider}`, `/auth/logout`, `/healthz`, and `/__endpoints` routes. Import
+it into Postman, Swagger UI, an API client's codegen, or anything else that reads OpenAPI. An endpoint
+whose gateway requires auth is marked with a bearer-token security requirement, naming which provider to
+log in through first.
+
+**MCP server (`Download MCP server` / `GET /admin/api/export/mcp-server`)** -- a single, dependency-free
+JavaScript file (`naimix-mcp-server.js`) that turns this workspace into an MCP server any MCP-compatible
+client (Claude Desktop, Claude Code, etc.) can use directly. It's a *thin proxy*, not a static snapshot:
+every time it starts, it asks your live naimix instance what endpoints/gateways/auth providers currently
+exist and builds its tools from that -- there's nothing to regenerate after a config change, just restart
+the MCP client (or the script itself). It needs only Node.js 18+ (for the built-in `fetch`) and no
+`npm install`.
+
+To use it, save the downloaded file somewhere and add it to your MCP client's config, e.g. for Claude
+Desktop/Code:
+
+```json
+{
+  "mcpServers": {
+    "naimix": {
+      "command": "node",
+      "args": ["/absolute/path/to/naimix-mcp-server.js"],
+      "env": {
+        "NAIMIX_BASE_URL": "http://localhost:3000",
+        "NAIMIX_ADMIN_TOKEN": "your ADMIN_TOKEN value"
+      }
+    }
+  }
+}
+```
+
+`NAIMIX_ADMIN_TOKEN` is only ever used to *discover* the workspace's shape (the same admin API the
+"Export" buttons themselves call) -- every actual tool call the server makes on your behalf goes through
+the normal public routes, never back through `/admin/api/*`. Treat the downloaded file plus that token
+together as a credential: whoever has both has full admin access to whatever `NAIMIX_BASE_URL` points at.
+
+You'll get one `login_<provider>` tool per configured auth provider (taking `username`/`password`, except
+an oauth2 `client_credentials` provider, which takes neither), a `logout` tool, a `list_endpoints` tool,
+and one tool per configured endpoint. Log in with the right `login_*` tool before calling a tool for an
+endpoint that requires it -- its description tells you which one.
+
+**This only works against a `dev` build.** QA and Production instances don't expose `/admin/api/*` at all
+(see "Deploying to QA/Production" below), so there's nothing for the MCP server to discover from there --
+point `NAIMIX_BASE_URL` at a `dev` instance.
+
+## Deploying to QA/Production
+
+The admin console (UI + `/admin/api/*`) is a **development-only** tool. It
+is not merely disabled by config in QA/Production -- it is a separate build
+that never contains that code at all. See
+[`DEPLOYMENT_ARCHITECTURE_NOTES.md`](DEPLOYMENT_ARCHITECTURE_NOTES.md)'s
+"Installation: how development differs from QA/Production" for the full
+reasoning; this section is the how-to.
+
+**Three named targets, sharing one core:**
+
+| | Entry point | `npm` scripts | Admin console |
+|---|---|---|---|
+| `dev` | `src/server/index.ts` | `npm run dev`, or `npm run build && npm start` | Present (gated by `ADMIN_TOKEN`) |
+| `qa` | `src/server/qaIndex.ts` | `npm run dev:qa`, or `npm run build:qa && npm run start:qa` | Not present at all |
+| `prod` | `src/server/prodIndex.ts` | `npm run dev:prod`, or `npm run build:prod && npm run start:prod` | Not present at all |
+
+`qa` and `prod` run identical code today -- both are thin wrappers
+(`qaIndex.ts`/`prodIndex.ts`) around the same `dataPlaneServer.ts` startup
+logic and the same `dataPlaneApp.ts` Express app, differing only in their
+startup log line ("QA data-plane" vs. "Production data-plane"). They're
+kept as two separate entry files and build targets on purpose, so that if
+QA and Production ever need to behave differently -- a feature flag, a
+stricter default, anything -- that change has an obvious, low-friction
+place to land (edit `qaIndex.ts` or `prodIndex.ts` alone) instead of
+threading a new conditional through one shared target.
+
+All three targets build on the same `src/server/coreApp.ts` (health/
+introspection endpoints, caller-facing `/auth` login, and the dynamic
+dispatcher that serves every configured endpoint) -- a business-logic fix
+made there applies to all three automatically. Only the `dev` target
+(`src/server/app.ts`) additionally imports `adminApi.ts`/`adminAuth.ts` and
+mounts `/admin` + `/admin/api/*` on top; `src/server/dataPlaneApp.ts` (what
+`qa` and `prod` both use) never imports either file, so the admin console
+isn't reachable code in either of those processes, whatever `ADMIN_TOKEN`
+is or isn't set to.
+
+**Building for QA/Production:**
+
+```bash
+npm run build:qa    # -> dist-qa/server.js
+npm run build:prod  # -> dist-prod/server.js
+```
+
+Each bundles its own entry point (via esbuild, first-party code only --
+`node_modules` stays external, so it must still be installed alongside the
+bundle at runtime) into its own single-file output, then runs
+`scripts/checkDataPlaneBundle.js` against it: a structural check that greps
+the bundled output for admin-only identifiers (`requireAdminAuth`,
+`createAdminApiRouter`, and others) and fails the build if any turn up --
+real proof this separation hasn't quietly regressed, not just a comment
+asserting it holds. Run either with `npm run start:qa` / `npm run
+start:prod`.
+
+**Configuration** works the same way as the full app (`CONFIG_DIR` or the
+legacy `ENDPOINTS_DIR`/`GATEWAYS_FILE`/`AUTH_PROVIDERS_FILE` trio -- see
+"Environment variables" below), except there's no `SETTINGS_FILE`/"Change
+workspace" support: that's the admin console's own feature for a developer
+switching their local instance between Git checkouts, and doesn't apply to
+a QA/Production instance reading a fixed shared volume. `ADMIN_TOKEN` isn't
+read by either build at all -- there's no admin subsystem here for it to
+gate.
 
 ## Workspace
 
@@ -775,7 +897,7 @@ See `.env.example`. The important ones:
 | `AUTH_PROVIDERS_FILE` | Path to the auth providers file (default `config/authProviders.yaml`). Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. See "Caller authentication" above. |
 | `SETTINGS_FILE`      | Where the UI-chosen workspace is remembered (default `data/settings.json`) -- a per-machine preference file, not meant to be checked into Git. |
 | `LOG_LEVEL`          | `fatal`\|`error`\|`warn`\|`info`\|`debug`\|`trace`  |
-| `ADMIN_TOKEN`        | Enables the admin UI/API at `/admin` when set; required bearer token for `/admin/api/*`. Unset = admin disabled. |
+| `ADMIN_TOKEN`        | `dev` target only (`npm run dev`/`npm start`) -- enables the admin UI/API at `/admin` when set; required bearer token for `/admin/api/*`. Unset = admin disabled. Not read at all by the `qa`/`prod` targets (`npm run start:qa`/`start:prod`); see "Deploying to QA/Production" above. |
 | `MAX_REQUEST_BODY_SIZE` | Max JSON/urlencoded request body size (default `10mb`; e.g. `500kb`, `1gb`). Raise this if a real payload trips "request entity too large". |
 
 Everything else in `.env.example` (`DEMO_*`) only feeds the bundled demo
@@ -796,12 +918,18 @@ src/
     workspaceSettings.ts    # "which workspace is this instance pointed at" -- see Workspace
     dispatch.ts              # one dynamic handler that serves every configured endpoint (enforces requiresAuth)
     authRoutes.ts            # POST /auth/login/{provider}, POST /auth/logout
-    adminApi.ts, adminAuth.ts  # /admin/api/* REST API + bearer-token auth
+    adminApi.ts, adminAuth.ts  # /admin/api/* REST API + bearer-token auth -- development build ONLY, see below
     secretRedaction.ts       # shared "mask secrets, blank-means-unchanged" helpers (gateways + auth providers)
-    app.ts, index.ts, paramExtractor.ts, errors.ts, logger.ts
+    coreApp.ts               # shared by all three targets below: cors/body-parsing, healthz/__endpoints, /auth, the dispatcher
+    app.ts, index.ts         # FULL app (admin + data plane) -- the `dev` target, see "Deploying to QA/Production"
+    dataPlaneApp.ts, dataPlaneServer.ts  # DATA-PLANE-ONLY app + shared startup logic -- never imports adminApi.ts/adminAuth.ts
+    qaIndex.ts, prodIndex.ts  # thin `qa`/`prod` entry points, both calling dataPlaneServer.ts -- kept separate so they can diverge later
+    paramExtractor.ts, errors.ts, logger.ts
   mock-backend/ # standalone demo backend (JSON+XML+SOAP+SQLite) used by dev & tests
   types/        # shared TypeScript types
-public/admin/   # the admin UI (static HTML/CSS/JS, no build step)
+public/admin/   # the admin UI (static HTML/CSS/JS, no build step) -- development build only
+scripts/
+  checkDataPlaneBundle.js  # fails `npm run build:qa`/`build:prod` if admin code leaks into either bundle
 config/
   endpoints/*.yaml       # one file per endpoint
   gateways.yaml    # named backend gateways

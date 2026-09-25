@@ -4,3 +4,6 @@
 /node_modules
 setup.sh
 .env
+/dist
+/dist-qa
+/dist-prod

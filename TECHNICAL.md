@@ -35,6 +35,7 @@ reflected here yet, that's a bug in the process — fix the doc in the same pass
 6. [Auto-generated CRUD + stored-procedure endpoints](#auto-generated-crud--stored-procedure-endpoints)
 7. [Output mapping engine](#output-mapping-engine)
 8. [Admin UI and Admin API](#admin-ui-and-admin-api)
+   - [Export: OpenAPI spec + MCP server](#export-openapi-spec--mcp-server)
 9. [Environment variables reference](#environment-variables-reference)
 10. [Testing strategy](#testing-strategy)
 11. [Runtime requirements and dependencies](#runtime-requirements-and-dependencies) (see also [`TECH_STACK.md`](TECH_STACK.md) for *why* each one was picked)
@@ -1004,6 +1005,8 @@ carries whatever token the user typed into the login screen, stored in `localSto
 | `POST /admin/api/gateways/test-connection` | Test real reachability (SQL only) — `{ name?, config }` → `{ ok: true }` or `{ ok: false, message }`. `name`, if given, lets a blank sensitive field in the draft fall back to that gateway's real stored secret. |
 | `POST /admin/api/gateways/:name/generate-crud` | Introspect + generate table-CRUD/procedure endpoints for a saved SQL gateway — see the dedicated section above. |
 | `DELETE /admin/api/gateways/:name` | Delete a gateway — `409` (with the list of dependent endpoint ids) if any endpoint still references it. |
+| `GET /admin/api/export/openapi.json` | Generates and downloads an OpenAPI 3.0.3 document for the current workspace — see [Export: OpenAPI spec + MCP server](#export-openapi-spec--mcp-server). |
+| `GET /admin/api/export/mcp-server` | Downloads the static `mcp-server/naimix-mcp-server.js` file — see the same section. |
 
 A zod validation failure anywhere in this router is caught by a dedicated error-handling middleware at
 the bottom of `createAdminApiRouter()` and turned into `400 { error: "ValidationError", message,
@@ -1150,6 +1153,76 @@ a few hardcoded top-level fields.
   `commonParams` — without leaving the endpoint editor to go look the gateway up separately. It shares
   `INFO_POPUP_FOR`/`closeInfoPopup()` with the field-help popups, so opening one closes the other, and it
   closes itself if the user switches Gateway back to "(none)" while it's open.
+
+### Export: OpenAPI spec + MCP server
+
+Two admin-only download routes let whoever's configuring a workspace hand it to another tool without
+writing any glue themselves: a standard OpenAPI document, and a ready-to-run MCP server. Both are
+generated/served fresh on every request — there's no ahead-of-time generation step to forget to re-run
+after a config change.
+
+**`GET /admin/api/export/openapi.json`** (`src/server/openapiGenerator.ts`'s `generateOpenApiDocument()`,
+called from `adminApi.ts` with `baseUrl` taken from the request itself — `${req.protocol}://${req.get
+("host")}`) builds an OpenAPI 3.0.3 document from the three live registries: one path per configured
+endpoint (`:param` converted to `{param}` — the only path-param syntax difference between naimix's own
+Express-style paths and OpenAPI's), a `path`/`query`/`header`-location `input` param becoming an OpenAPI
+`parameters` entry (path params always `required: true`) and a `body`-location one folding into
+`requestBody.content["application/json"].schema`; an `env`-location param is excluded entirely, since
+it's sourced from this *server's* own environment, never the caller's. An endpoint whose backend's
+gateway has `requiresAuth` set gets `security: [{ sessionAuth: [] }]` and a description naming the
+provider, found via the same `getBackendGatewayName()` → `gateways[name].requiresAuth` chain
+`dispatch.ts` follows at request time. Response schemas are deliberately generic
+(`{ type: "object", additionalProperties: true }`) — `OutputFieldDef` (see [Endpoint config
+reference](#endpoint-config-reference)) carries no per-field type information to draw a precise schema
+from. The document also documents the always-on caller-facing routes every instance exposes:
+`POST /auth/login/{provider}` (path param `provider` enumerated from the workspace's actual auth
+provider names; request body `{ username?, password? }` — every provider kind reads only those two keys,
+confirmed against each of `basicLogin.ts`/`oauth2.ts`/`ldap.ts`'s own `login()`, except an oauth2
+`client_credentials` provider, which reads neither), `POST /auth/logout`, `GET /healthz`, and
+`GET /__endpoints`. One shared `components.securitySchemes.sessionAuth` (`type: http, scheme: bearer`)
+covers every authed operation, since a session token is opaque and uniform regardless of which provider
+issued it.
+
+**`GET /admin/api/export/mcp-server`** just `res.download()`s a single static file,
+`mcp-server/naimix-mcp-server.js` (repo root, a sibling of `src/`/`config/`/`test/` — deliberately outside
+`src/` so it's never swept into naimix's own `tsc`/esbuild builds), resolved via
+`path.resolve(__dirname, "../../mcp-server/...")`, which lands on the right file whether `adminApi.ts` is
+running through `tsx` (`src/server/`) or compiled (`dist/server/`) — no build-script copy step needed,
+unlike the existing `customerService.wsdl` copy.
+
+That file is a **thin-proxy MCP client**, not a per-workspace code generator: it's the same static file
+for every naimix instance, and it discovers its tools at its own process *startup* rather than at
+download time, by calling the live instance's admin API (`GET /admin/api/endpoints`, `/gateways`,
+`/auth-providers`, authenticated with `NAIMIX_ADMIN_TOKEN` — the same value as that instance's own
+`ADMIN_TOKEN`). This means there is no "regenerate the MCP server" step after a config change — restarting
+the MCP client (or just the one process) re-discovers the current shape. It's a single dependency-free
+`.js` file (Node 18+, using the global `fetch`; naimix itself already requires Node 24+) implementing the
+MCP stdio JSON-RPC transport by hand — newline-delimited JSON-RPC 2.0 over stdin/stdout via
+`node:readline`, no `@modelcontextprotocol/sdk` — handling `initialize`, `notifications/initialized`,
+`tools/list`, `tools/call`, `ping`, and defensively-empty `resources/list`/`prompts/list`. Discovery is
+the *only* thing it uses the admin API for: every actual tool call it executes goes to the normal
+caller-facing routes (`/auth/login/{provider}`, `/auth/logout`, and each endpoint's real path), never back
+through `/admin/api/*`. It builds one `endpoint_<sanitized-id>` tool per configured endpoint (its
+`inputSchema` built the same way as the OpenAPI generator's parameters/requestBody, `env`-location params
+excluded the same way), one `login_<sanitized-provider-name>` tool per auth provider (`username`/
+`password` inputs, or none at all for an oauth2 `client_credentials` provider), a `logout` tool (revokes
+one named session or, if none is named, every session this process is holding), and a `list_endpoints`
+tool. An in-memory `Map<providerName, { token, expiresAt }>` holds whatever sessions the current process
+has logged into — never persisted to disk, and scoped to this one process's lifetime. Calling a tool for
+an endpoint whose gateway requires auth, with no matching session yet, returns a clear error naming which
+`login_*` tool to call first, rather than a bare 401 from the backend.
+
+**Caveat baked into the file's own header comment**: this only works against a naimix `dev` build.
+QA/Production expose no `/admin/api/*` at all, by design (see [Admin console made structurally absent
+from QA/Production, not just token-gated](#2026-09-23-same-day--admin-console-made-structurally-absent-from-qaproduction-not-just-token-gated)
+below) — there's nothing for this script to discover from there.
+
+The admin UI's new "Export" sidebar section (`public/admin/index.html`, after "Active sessions") has two
+buttons wired in `admin.js` to a small `downloadFile(path, fallbackFilename)` helper: a plain `<a href>`
+can't carry the `Authorization` header these routes require, so it `fetch()`es the route with the stored
+admin token, reads the response as a `Blob`, and clicks a synthetic, throwaway `<a download>` pointed at
+an object URL for it — the standard workaround for a browser download needing a custom header. It logs
+the user out on a `401`, same as the existing `api()` helper.
 
 ## Environment variables reference
 
@@ -1328,6 +1401,154 @@ reasoning and trade-offs.
 
 Newest first. Each entry names what changed, the key files, and links back to the relevant section
 above for the full technical detail.
+
+### 2026-09-24 — Export: downloadable OpenAPI spec + a thin-proxy MCP server
+
+Padma asked for a way for users to download an OpenAPI/Swagger description of a workspace, plus a
+downloadable MCP server that can call its endpoints and log in through its auth providers. Clarified
+scope up front: the MCP server should be a thin proxy client (calls the live instance rather than a
+static generated snapshot, so it never needs regenerating after a config change), it should include
+login/logout tools for the auth providers, and the OpenAPI export is JSON only (no YAML).
+
+New `src/server/openapiGenerator.ts` (`generateOpenApiDocument()`) builds an OpenAPI 3.0.3 document from
+the live `EndpointRegistry`/`GatewaysRegistry`/`AuthProvidersRegistry` — every configured endpoint as its
+own path/operation (`:param` → `{param}`), `security: [{ sessionAuth: [] }]` on any endpoint whose
+gateway's `requiresAuth` names a provider, plus the always-on `/auth/login/{provider}`, `/auth/logout`,
+`/healthz`, and `/__endpoints` routes. New `mcp-server/naimix-mcp-server.js` (repo root, outside `src/` so
+it's never bundled into naimix's own build) is a single dependency-free file implementing the MCP stdio
+JSON-RPC protocol by hand (no `@modelcontextprotocol/sdk`) — it discovers a live instance's endpoints/
+gateways/auth providers at its own startup via the admin API, then builds `endpoint_*`/`login_*`/`logout`/
+`list_endpoints` tools dynamically, executing real tool calls only against the normal caller-facing routes
+(never back through `/admin/api/*`). New admin routes `GET /admin/api/export/openapi.json` and
+`GET /admin/api/export/mcp-server` (`adminApi.ts`) serve these — both admin-token-gated like every other
+`/admin/api/*` route, and (like every admin route) structurally absent from the QA/Production builds with
+no extra work required, since `adminApi.ts` was already entirely outside `dataPlaneApp.ts`'s module graph.
+Added `generateOpenApiDocument` to `scripts/checkDataPlaneBundle.js`'s forbidden-identifier list as
+defense in depth. New admin UI "Export" sidebar section (`public/admin/index.html`, after "Active
+sessions") with two buttons, wired in `admin.js` to a new `downloadFile()` helper that `fetch()`es the
+route with the stored admin token and clicks a synthetic `<a download>` against a `Blob` object URL, since
+a plain `<a href>` can't carry the `Authorization` header these routes need.
+
+Verified with `tsc --noEmit`, `npm run build:qa` and `npm run build:prod` (bundle audit still passes with
+the two new admin routes added), and `npx vitest run` — new `describe` blocks in `test/middleware.test.ts`
+covering both export routes (admin-auth required, OpenAPI document shape including the `sessionAuth`
+security requirement on an authed endpoint and the provider-enumerated login path, and the MCP server
+file downloading with the right filename and content) plus two new entries in `test/dataPlane.test.ts`'s
+404 list confirming both routes are genuinely absent (not just rejected) from the QA/Production build;
+same pre-existing unrelated `better-sqlite3`/Linux-VM limitation on `middleware.test.ts` as every prior
+entry. See [Export: OpenAPI spec + MCP server](#export-openapi-spec--mcp-server).
+
+### 2026-09-23 (same day) — Split the QA/Production build target into two: `qa` and `prod`
+
+Padma asked to split the previous entry's single `data-plane` build target into three explicitly named
+ones -- `dev` (unchanged), `qa`, and `prod` -- even though `qa` and `prod` are identical today, so that if
+the two ever need to differ (a feature flag, a stricter default, anything), there's already a natural
+place for that difference to live instead of it being threaded into one shared target later.
+
+Renamed/split accordingly: `src/server/dataPlaneIndex.ts`'s startup logic moved into a new
+`src/server/dataPlaneServer.ts`, exporting `startDataPlaneServer(environment: "qa" | "prod")` --
+identical to before except the startup log line now says `Naimix (QA data-plane) listening...` or
+`Naimix (Production data-plane) listening...` depending on which target called it. Two new one-line entry
+files, `src/server/qaIndex.ts` and `src/server/prodIndex.ts`, each just call `startDataPlaneServer("qa")`/
+`startDataPlaneServer("prod")` -- the old `dataPlaneIndex.ts` is deleted, replaced by these two plus the
+shared function. `dataPlaneApp.ts` (the actual Express app -- still exactly one file, still admin-free)
+is unchanged; only the entry-point layer split.
+
+`package.json`'s `build:data-plane`/`start:data-plane`/`dev:data-plane` became six scripts:
+`build:qa`/`start:qa`/`dev:qa` (→ `dist-qa/server.js`) and `build:prod`/`start:prod`/`dev:prod` (→
+`dist-prod/server.js`), each esbuild-bundling its own entry point and running
+`scripts/checkDataPlaneBundle.js` against its own output independently -- so the admin-absence audit from
+the previous entry now runs, and can fail, for `qa` and `prod` separately rather than once for a single
+combined target. Updated that script's default bundle path and doc comments to stop assuming a single
+target. `.gitignore`'s `/dist-data-plane` became `/dist-qa` + `/dist-prod`.
+
+Verified the same way as the previous entry, against both new targets independently: `tsc --noEmit`
+clean; `npm run build:qa` and `npm run build:prod` both succeed with their own bundle-audit passing;
+both resulting binaries (`dist-qa/server.js`, `dist-prod/server.js`) started for real and hit with
+`curl` -- `/healthz` 200s on both, the startup log correctly reads "QA data-plane" for one and
+"Production data-plane" for the other, and `/admin`/`/admin/api/sessions` 404 on both. `test/
+dataPlane.test.ts` needed no changes (it calls `createDataPlaneApp()` directly, unaffected by the entry-
+point split); full suite still 105 tests, same pre-existing unrelated `better-sqlite3` limitation on
+`middleware.test.ts` as every entry before this one.
+
+Updated `DEPLOYMENT_ARCHITECTURE_NOTES.md` (status banner and the two "Decided"/"Installation" passages
+this whole feature touches, now describing three targets and explaining why `qa`/`prod` are kept
+separate) and the README's "Deploying to QA/Production" section (the two-row table became three, the
+build-commands block now shows both `build:qa`/`build:prod`, "Project structure" lists `dataPlaneServer.ts`/
+`qaIndex.ts`/`prodIndex.ts` in place of `dataPlaneIndex.ts`).
+
+### 2026-09-23 (same day) — Admin console made structurally absent from QA/Production, not just token-gated
+
+Padma asked whether the admin console API is installed at all when the server runs in QA/Production
+mode. The honest answer at the time was: yes — `createApp()` always mounted `/admin/*` in every
+environment, protected only by `requireAdminAuth` needing `ADMIN_TOKEN` set. `DEPLOYMENT_ARCHITECTURE_
+NOTES.md` had already recorded a decision that this should instead be enforced structurally (a separate
+build target, not a runtime gate) but explicitly flagged that decision as "brainstorm only — nothing
+implemented." Padma called the current state a security issue and asked to implement the decided design
+now.
+
+Split `app.ts` into a shared core plus two thin compositions, matching that document's own "shared core,
+two thin entry points" framing literally: new `src/server/coreApp.ts` exports `createBaseApp()` (cors,
+body parsing, `/healthz`, `/__endpoints`, a fresh `AuthService`) and `mountDataPlaneRoutes()` (`/auth`
+login/logout, the dynamic dispatcher) plus `mountTerminalHandlers()` (404 + error handler) — none of it
+imports `adminApi.ts` or `adminAuth.ts`, directly or transitively. `app.ts`'s `createApp()` (the
+development entry point, reached via the existing `src/server/index.ts`) now calls `createBaseApp()`,
+mounts the admin UI/API in between (exactly where it always was in the route order), then calls
+`mountDataPlaneRoutes()`/`mountTerminalHandlers()` — behaviorally identical to before the refactor, which
+is what let the existing 101 tests (all of which exercise `createApp()`) pass unchanged as the
+regression check for this refactor. New `src/server/dataPlaneApp.ts` (`createDataPlaneApp()`) calls only
+`createBaseApp()` + `mountDataPlaneRoutes()` + `mountTerminalHandlers()` — never admin. New
+`src/server/dataPlaneIndex.ts` is the QA/Production entry point: no `ADMIN_TOKEN`, no `adminUiDir`, and
+deliberately no `SETTINGS_FILE`/"persisted workspace" support either (that's the admin console's own
+"Change workspace" feature for a developer's local instance, meaningless for a QA/Production instance
+reading a fixed shared volume per `DEPLOYMENT_ARCHITECTURE_NOTES.md`) — just `CONFIG_DIR` (or the legacy
+`ENDPOINTS_DIR`/`GATEWAYS_FILE`/`AUTH_PROVIDERS_FILE` trio) resolved once at startup.
+
+"Structurally absent" needed more than a conditional at runtime, since plain `tsc` compiles the whole
+`src/` tree regardless of which files a given process actually imports — a QA/Production deployment
+running `node dist/server/dataPlaneIndex.js` out of that same output directory would still have
+`adminApi.js` sitting right next to it on disk. Added a real second build target instead: `npm run
+build:data-plane` bundles `src/server/dataPlaneIndex.ts` with `esbuild` (`--bundle --packages=external`,
+so only first-party `src/` code is inlined — `node_modules`, including every native DB driver, stays
+external and must still be installed alongside the bundle) into a single `dist-data-plane/server.js`,
+then runs the new `scripts/checkDataPlaneBundle.js`, which greps that bundle for admin-only identifiers
+(`requireAdminAuth`, `createAdminApiRouter`, `AdminDisabled`, `ADMIN_TOKEN`, and others) and fails the
+build (non-zero exit) if any are found — a structural, automated check that this separation hasn't
+quietly regressed via some future change reintroducing an admin import into `dataPlaneApp.ts`'s module
+graph, not just a comment asserting it holds. Added `esbuild` as a devDependency (an `npm install`
+without `--legacy-peer-deps` hit an unrelated pre-existing `npm`/`arborist` bug walking `vitest` 4.x's
+own optional-peer-dependency graph — worked around with `--legacy-peer-deps` for this one install; not a
+project bug, and doesn't affect this change). New scripts: `build:data-plane`, `start:data-plane`,
+`dev:data-plane`. Added `/dist` and `/dist-data-plane` to `.gitignore` (neither was there before, for
+either build output).
+
+Verified structurally and functionally, not just written and assumed correct: `tsc --noEmit` clean;
+`npm run build:data-plane` actually run, its own bundle-audit step passing; the resulting
+`dist-data-plane/server.js` started for real (`CONFIG_DIR=config`) and hit directly with `curl` —
+`/healthz` 200s, `/__endpoints` lists the real 60 configured endpoints, `/admin` and `/admin/` both 404
+(the plain "Not Found" JSON body from `mountTerminalHandlers()`, not `adminAuth.ts`'s "AdminDisabled"/
+"Unauthorized" shape — proof the route was never registered, not merely rejected), and `/admin/api/*`
+404s the same way. Also added `test/dataPlane.test.ts` (4 tests, calling `createDataPlaneApp()` directly)
+covering the same ground as an automated regression test: the caller-facing surface still works
+(`/healthz`, `/__endpoints`, `/auth/login` validation), a bare `GET /admin` 404s, every `/admin/api/*`
+route 404s with the generic "Not Found" body, and — specifically guarding against a future "fix" that
+gates these routes with `requireAdminAuth` instead of never mounting them — the sessions route still
+404s even with `ADMIN_TOKEN` set in the environment and a matching bearer token sent. Ran the full suite
+afterward (105 tests: 101 from before + 4 new); everything except `middleware.test.ts` passed, which hit
+this environment's already-documented `better-sqlite3`-on-Linux-VM limitation (unrelated to this change
+— `dataPlane.test.ts` itself doesn't touch SQLite/the mock backend at all, and passed cleanly).
+
+Updated `DEPLOYMENT_ARCHITECTURE_NOTES.md`'s top-of-file status banner and its two directly-relevant
+"Decided" sections to mark this one piece implemented (with file/script pointers) while leaving the
+document's other pieces (the shared-volume/Git-promotion pipeline, Redis-backed multi-instance sessions,
+rolling-restart supervision) explicitly still brainstorm-only, so the status banner keeps meaning what it
+says for what's actually still unbuilt. Added a new README "Deploying to QA/Production" section (the
+two-entry-point table, the `build:data-plane` how-to, what's different about config resolution), updated
+the "npm run build && npm start" quick-start line to clarify it's the development build, updated the
+`ADMIN_TOKEN` row in "Environment variables" and its `.env.example` comment to say it's development-build-
+only, and updated "Project structure" to list the new files. See
+[Admin UI and Admin API](#admin-ui-and-admin-api) and `DEPLOYMENT_ARCHITECTURE_NOTES.md`'s "Installation:
+how development differs from QA/Production" for the full design reasoning.
 
 ### 2026-09-23 (same day) — Active sessions: dev-only real token visibility
 

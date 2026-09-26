@@ -54,20 +54,11 @@ jobs:
           CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_AUTH_TOKEN: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_TOKEN: ${{ secrets.OPENAI_API_KEY }}
-          CODEX_HOME: "/home/runner/.codex"
+          CODEX_DISABLE_SANDBOX: "1"
         run: |
 
           # Construct a prompt for Codex using the user story content
           PROMPT="Task: Implement the following user story.\nKey: ${{ steps.jira_details.outputs.issue_key }}\nSummary: ${{ steps.jira_details.outputs.summary }}\nDescription: ${{ steps.jira_details.outputs.description }}"
-
-          # Initialize the custom config directory
-          mkdir -p $CODEX_HOME
-          
-          # Force the legacy Landlock backend to prevent bubblewrap RTM_NEWADDR kernel crashes
-          cat <<EOF > $CODEX_HOME/config.toml
-          preferred_auth_method = "apikey"
-          use_legacy_landlock = true
-          EOF
 
           # Instruct the codex-cli agent to analyze and modify files
           codex exec "$PROMPT" --model "gpt-5.6-luna"

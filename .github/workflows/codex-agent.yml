@@ -51,6 +51,16 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
+        # 1. Force override config directory to prevent ChatGPT OAuth session fallbacks
+          mkdir -p ~/.config/codex
+          cat <<EOF > ~/.config/codex/config.toml
+          model = "gpt-4o"
+          model_provider = "openai"
+          [model_providers.openai]
+          wire_api = "responses"
+          requires_openai_auth = true
+          env_key = "OPENAI_API_KEY"
+          EOF
           # Construct a prompt for Codex using the user story content
           PROMPT="Task: Implement the following user story.\nKey: ${{ steps.jira_details.outputs.issue_key }}\nSummary: ${{ steps.jira_details.outputs.summary }}\nDescription: ${{ steps.jira_details.outputs.description }}"
           

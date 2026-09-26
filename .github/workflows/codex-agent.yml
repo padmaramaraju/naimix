@@ -55,7 +55,7 @@ jobs:
           PROMPT="Task: Implement the following user story.\nKey: ${{ steps.jira_details.outputs.issue_key }}\nSummary: ${{ steps.jira_details.outputs.summary }}\nDescription: ${{ steps.jira_details.outputs.description }}"
           
           # Instruct the codex-cli agent to analyze and modify files
-          codex exec -a full-auto "$PROMPT"
+          codex exec --a full-auto "$PROMPT"
 
       - name: Run Existing Tests
         run: |

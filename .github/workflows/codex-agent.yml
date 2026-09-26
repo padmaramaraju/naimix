@@ -20,7 +20,7 @@ jobs:
           node-node-version: '20'
 
       - name: Install Codex CLI
-        run: npm install -g @openai/codex-cli
+        run: npm install -g @openai/codex
 
       - name: Fetch User Story Details from Jira
         id: jira_details

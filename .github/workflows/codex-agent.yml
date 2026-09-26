@@ -56,7 +56,7 @@ jobs:
           
           # Instruct the codex-cli agent to analyze and modify files
           #codex run --prompt "$PROMPT" --path "." #this command does not work
-          codex run "$PROMPT" --path "."
+          codex exec "$PROMPT" --path "."
 
       - name: Run Existing Tests
         run: |

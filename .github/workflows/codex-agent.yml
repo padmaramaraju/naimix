@@ -51,8 +51,8 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
-          CODEX_KEY="${{ vars.CODEX_KEY }}"
-          echo "CODEX_KEY: $CODEX_KEY"
+          TEST_VAR="${{ vars.TEST_VAR }}"
+          echo "TEST_VAR: $TEST_VAR"
           # Construct a prompt for Codex using the user story content
           PROMPT="Task: Implement the following user story.\nKey: ${{ steps.jira_details.outputs.issue_key }}\nSummary: ${{ steps.jira_details.outputs.summary }}\nDescription: ${{ steps.jira_details.outputs.description }}"
           

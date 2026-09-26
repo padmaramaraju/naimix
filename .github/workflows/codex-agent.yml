@@ -57,7 +57,7 @@ jobs:
           # Instruct the codex-cli agent to analyze and modify files
           #codex run --prompt "$PROMPT" --path "." #this command does not work
           echo $OPENAI_API_KEY
-          codex exec "$PROMPT"
+          codex exec "$PROMPT" --config 'cli_auth_credentials_store="auto"'
 
       - name: Run Existing Tests
         run: |

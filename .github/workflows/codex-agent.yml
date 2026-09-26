@@ -50,6 +50,9 @@ jobs:
       - name: Implement User Story using Codex
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_AUTH_TOKEN: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_TOKEN: ${{ secrets.OPENAI_API_KEY }}
         run: |
   
           # Construct a prompt for Codex using the user story content

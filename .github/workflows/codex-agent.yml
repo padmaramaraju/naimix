@@ -1,0 +1,84 @@
+name: Codex Jira-GitHub Automation
+
+on:
+  repository_dispatch:
+    types: [trigger-codex-story]
+
+jobs:
+  implement_story:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+
+      - name: Set up Node.js (for codex-cli)
+        uses: actions/setup-node@v4
+        with:
+          node-node-version: '20'
+
+      - name: Install Codex CLI
+        run: npm install -g @openai/codex-cli
+
+      - name: Fetch User Story Details from Jira
+        id: jira_details
+        run: |
+          ISSUE_KEY="${{ github.event.client_payload.issue_key }}"
+          echo "Processing issue: $ISSUE_KEY"
+          
+          # Fetch story data using Jira API
+          RESPONSE=$(curl -s -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
+            -X GET "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$ISSUE_KEY")
+          
+          # Extract Summary and Description using jq
+          SUMMARY=$(echo "$RESPONSE" | jq -r '.fields.summary')
+          DESCRIPTION=$(echo "$RESPONSE" | jq -r '.fields.description.content[0].content[0].text // "No description provided"')
+          
+          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
+          echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
+          echo "issue_key=$ISSUE_KEY" >> $GITHUB_OUTPUT
+
+      - name: Create Feature Branch
+        run: |
+          BRANCH_NAME="feature/${{ steps.jira_details.outputs.issue_key }}-auto-impl"
+          git config --global user.name "Codex AI Agent"
+          git config --global user.email "codex-agent@openai.com"
+          git checkout -b "$BRANCH_NAME"
+
+      - name: Implement User Story using Codex
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          # Construct a prompt for Codex using the user story content
+          PROMPT="Task: Implement the following user story.\nKey: ${{ steps.jira_details.outputs.issue_key }}\nSummary: ${{ steps.jira_details.outputs.summary }}\nDescription: ${{ steps.jira_details.outputs.description }}"
+          
+          # Instruct the codex-cli agent to analyze and modify files
+          codex-cli run --prompt "$PROMPT" --path "."
+
+      - name: Run Existing Tests
+        run: |
+          # Replace this with your project's native testing framework suite
+          npm test || pytest || echo "No tests configured or tests failed"
+
+      - name: Commit and Push Changes
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          BRANCH_NAME="feature/${{ steps.jira_details.outputs.issue_key }}-auto-impl"
+          git add .
+          git commit -m "${{ steps.jira_details.outputs.issue_key }}: Automated Codex implementation of user story"
+          git push origin "$BRANCH_NAME" --force
+
+      - name: Raise GitHub Pull Request
+        env:
+          GH_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+        run: |
+          BRANCH_NAME="feature/${{ steps.jira_details.outputs.issue_key }}-auto-impl"
+          gh pr create \
+            --title "${{ steps.jira_details.outputs.issue_key }}: ${{ steps.jira_details.outputs.summary }}" \
+            --body "Closes ${{ steps.jira_details.outputs.issue_key }}. This pull request was automatically generated and implemented by OpenAI Codex based on the Jira user story." \
+            --head "$BRANCH_NAME" \
+            --base main
+

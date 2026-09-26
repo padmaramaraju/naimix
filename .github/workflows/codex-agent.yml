@@ -49,45 +49,32 @@ jobs:
 
       - name: Implement User Story using Codex
         env:
+          # Setting multiple environment variables as not sure which one GitHub picks
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           CODEX_AUTH_TOKEN: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_TOKEN: ${{ secrets.OPENAI_API_KEY }}
+          CODEX_HOME: "/home/runner/.codex"
         run: |
 
-          echo "=== Running Token Validation ==="
-    
-          # 1. Capture the HTTP response status code
-          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "Authorization: Bearer $OPENAI_API_KEY" \
-            https://openai.com)
-    
-           echo "OpenAI Endpoint Response Code: $RESPONSE_CODE"
-    
-           # 2. Evaluate the server's response
-          if [ "$RESPONSE_CODE" -eq 200 ]; then
-          echo "✅ SUCCESS: The API key is valid and active!"
-          elif [ "$RESPONSE_CODE" -eq 401 ]; then
-          echo "❌ ERROR 401: Invalid Authentication."
-          echo "   -> Reason: The key string is incorrect, expired, or was revoked in your OpenAI dashboard."
-          elif [ "$RESPONSE_CODE" -eq 429 ]; then
-          echo "❌ ERROR 429: Rate Limit or Insufficient Funds."
-          echo "   -> Reason: Your OpenAI account balance is likely $0.00 or credit limit hit."
-          else
-          echo "❓ UNKNOWN FAILURE: Received HTTP $RESPONSE_CODE"
-          # Print raw JSON response body for deeper troubleshooting
-          curl -s -H "Authorization: Bearer $OPENAI_API_KEY" https://openai.com
-          fi
-          echo "================================="
-          
           # Construct a prompt for Codex using the user story content
           PROMPT="Task: Implement the following user story.\nKey: ${{ steps.jira_details.outputs.issue_key }}\nSummary: ${{ steps.jira_details.outputs.summary }}\nDescription: ${{ steps.jira_details.outputs.description }}"
+
+          # Initialize the custom config directory
+          mkdir -p $CODEX_HOME
           
-          codex --version
-          codex doctor
+          # Force the legacy Landlock backend to prevent bubblewrap RTM_NEWADDR kernel crashes
+          cat <<EOF > $CODEX_HOME/config.toml
+          preferred_auth_method = "apikey"
+          use_legacy_landlock = true
           
+          [permissions.workspace-git.filesystem.":project_roots"]
+          "." = "write"
+          ".git" = "write"
+          EOF
+
           # Instruct the codex-cli agent to analyze and modify files
-          codex exec "$PROMPT"
+          codex exec "$PROMPT" --model "gpt-5.6-luna"
 
       - name: Run Existing Tests
         run: |

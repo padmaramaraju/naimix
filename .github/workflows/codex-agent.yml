@@ -67,11 +67,6 @@ jobs:
           cat <<EOF > $CODEX_HOME/config.toml
           preferred_auth_method = "apikey"
           use_legacy_landlock = true
-          default_permissions = "deny"
-          
-          [permissions.workspace-git.filesystem.":project_roots"]
-          "." = "write"
-          ".git" = "write"
           EOF
 
           # Instruct the codex-cli agent to analyze and modify files

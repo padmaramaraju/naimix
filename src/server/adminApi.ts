@@ -243,6 +243,25 @@ export function createAdminApiRouter({
     });
   });
 
+  router.get("/settings/folders", asyncHandler(async (req, res) => {
+    const { dir } = z.object({ dir: z.string().min(1).optional() }).parse(req.query);
+    const currentDir = path.resolve(dir ?? workspace.configDir ?? path.dirname(endpointRegistry.getDir()));
+    try {
+      const entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
+      const folders = entries.filter(entry => entry.isDirectory())
+        .map(entry => ({ name: entry.name, path: path.join(currentDir, entry.name) }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      const parent = path.dirname(currentDir);
+      res.json({ path: currentDir, parent: parent === currentDir ? null : parent, folders });
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (["ENOENT", "ENOTDIR", "EACCES", "EPERM"].includes(code ?? "")) {
+        throw new ValidationError("This folder is unavailable or cannot be read. Choose another folder.");
+      }
+      throw err;
+    }
+  }));
+
   router.put(
     "/settings",
     asyncHandler(async (req, res) => {

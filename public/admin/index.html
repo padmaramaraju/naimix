@@ -388,6 +388,16 @@
           <label class="block">Workspace path
             <input name="configDir" required placeholder="/Users/you/repos/team-config" />
           </label>
+          <button type="button" id="browse-workspace-btn" class="btn-secondary">Browse folders…</button>
+          <section id="workspace-browser" class="workspace-browser" aria-label="Choose workspace folder" hidden>
+            <p class="muted">Folders on the machine running Naimix. Open a folder, then choose “Select this folder”.</p>
+            <p id="workspace-browser-path" class="workspace-browser-path" aria-live="polite"></p>
+            <button type="button" id="workspace-parent-btn" class="btn-secondary btn-sm">Up one folder</button>
+            <ul id="workspace-folders" class="workspace-folders" aria-label="Folders"></ul>
+            <p id="workspace-browser-error" class="error-text" role="alert" hidden></p>
+            <button type="button" id="select-workspace-folder-btn" class="btn-primary">Select this folder</button>
+            <button type="button" id="cancel-workspace-browse-btn" class="btn-secondary">Cancel browsing</button>
+          </section>
           <p id="workspace-form-error" class="error-text" hidden></p>
           <div class="drawer-footer">
             <button type="button" class="btn-secondary" data-close="workspace-editor">Cancel</button>

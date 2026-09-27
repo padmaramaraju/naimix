@@ -1437,6 +1437,46 @@ describe("admin API: workspace switching", () => {
     expect(res.body.gatewayCount).toBeGreaterThan(0);
   });
 
+  it("requires admin authentication to browse folders", async () => {
+    const res = await request(wsApp).get("/admin/api/settings/folders");
+    expect(res.status).toBe(401);
+  });
+
+  it("starts browsing at the current workspace and lists only directories", async () => {
+    const res = await request(wsApp).get("/admin/api/settings/folders").set(authed());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      path: FOLDER_A,
+      parent: WS_ROOT,
+      folders: [{ name: "endpoints", path: path.join(FOLDER_A, "endpoints") }],
+    });
+  });
+
+  it("navigates to parent and empty folders without switching the workspace", async () => {
+    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir: WS_ROOT }).set(authed());
+    expect(res.status).toBe(200);
+    expect(res.body.folders).toEqual([
+      { name: "folder-a", path: FOLDER_A },
+      { name: "folder-b", path: FOLDER_B },
+    ]);
+    const empty = await request(wsApp).get("/admin/api/settings/folders").query({ dir: FOLDER_B }).set(authed());
+    expect(empty.body).toEqual({ path: FOLDER_B, parent: WS_ROOT, folders: [] });
+    expect(wsWorkspace.configDir).toBe(FOLDER_A);
+    expect(fs.existsSync(WS_SETTINGS_FILE)).toBe(false);
+  });
+
+  it("stops parent navigation at the filesystem root", async () => {
+    const root = path.parse(WS_ROOT).root;
+    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir: root }).set(authed());
+    expect(res.status).toBe(200);
+    expect(res.body.parent).toBeNull();
+  });
+
+  it.each([MISSING_FOLDER, path.join(FOLDER_A, "gateways.yaml"), ""])("rejects an invalid browse path: %s", async dir => {
+    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir }).set(authed());
+    expect(res.status).toBe(400);
+  });
+
   it("rejects switching to a folder that doesn't exist on disk", async () => {
     const res = await request(wsApp).put("/admin/api/settings").set(authed()).send({ configDir: MISSING_FOLDER });
     expect(res.status).toBe(400);

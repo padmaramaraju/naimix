@@ -1,90 +1,239 @@
-name: Codex Jira-GitHub Automation
+# .github/workflows/jira-codex-pr.yml
+#
+# Triggered by a Jira Automation rule (via repository_dispatch) when an issue
+# is assigned to you. Creates a feature branch, runs OpenAI Codex to implement
+# the ticket, runs the test suite, and opens a PR.
+#
+# Prereqs:
+#   1. Secrets: OPENAI_API_KEY, JIRA_API_TOKEN, JIRA_USER_EMAIL
+#   2. Repo variable: JIRA_BASE_URL (e.g. https://yourcompany.atlassian.net)
+#   3. A Jira Automation rule (Issue assigned -> assignee = you) that calls:
+#        POST https://api.github.com/repos/<owner>/<repo>/dispatches
+#        Authorization: token <GH_PAT_with_repo_scope>
+#        Accept: application/vnd.github+json
+#        Body:
+#          {
+#            "event_type": "jira-issue-assigned",
+#            "client_payload": {
+#              "issue_key": "{{issue.key}}"
+#            }
+#          }
+#      (Use a webhook action or Jira's built-in "Send web request" action.)
+
+name: Jira -> Codex -> PR
 
 on:
   repository_dispatch:
     types: [trigger-codex-story]
 
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: jira-codex-${{ github.event.client_payload.issue_key }}
+  cancel-in-progress: false
+
 jobs:
-  implement_story:
+  implement:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+
     steps:
-      - name: Checkout Code
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
 
-      - name: Set up Node.js (for codex-cli)
-        uses: actions/setup-node@v4
-        with:
-          node-node-version: '20'
-
-      - name: Install Codex CLI
-        run: npm install -g @openai/codex
-
-      - name: Fetch User Story Details from Jira
-        id: jira_details
+      - name: Set variables
+        id: vars
         run: |
           ISSUE_KEY="${{ github.event.client_payload.issue_key }}"
-          echo "Processing issue: $ISSUE_KEY"
-          
-          # Fetch story data using Jira API
-          RESPONSE=$(curl -s -u "${{ secrets.JIRA_USER_EMAIL }}:${{ secrets.JIRA_API_TOKEN }}" \
-            -X GET "${{ secrets.JIRA_BASE_URL }}/rest/api/3/issue/$ISSUE_KEY")
-          
-          # Extract Summary and Description using jq
+          if [ -z "$ISSUE_KEY" ]; then
+            echo "No issue_key provided in client_payload" >&2
+            exit 1
+          fi
+          SLUG=$(echo "$ISSUE_KEY" | tr '[:upper:]' '[:lower:]')
+          echo "issue_key=$ISSUE_KEY" >> "$GITHUB_OUTPUT"
+          echo "branch=feature/${SLUG}" >> "$GITHUB_OUTPUT"
+
+      # ---- Pull ticket details from Jira ----
+      - name: Fetch Jira ticket
+        id: jira
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          ISSUE_KEY: ${{ steps.vars.outputs.issue_key }}
+        run: |
+          RESPONSE=$(curl -sS -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Accept: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$ISSUE_KEY")
+
+          echo "$RESPONSE" > jira_issue.json
+
           SUMMARY=$(echo "$RESPONSE" | jq -r '.fields.summary')
-          DESCRIPTION=$(echo "$RESPONSE" | jq -r '.fields.description.content[0].content[0].text // "No description provided"')
-          
-          echo "summary=$SUMMARY" >> $GITHUB_OUTPUT
-          echo "description=$DESCRIPTION" >> $GITHUB_OUTPUT
-          echo "issue_key=$ISSUE_KEY" >> $GITHUB_OUTPUT
+          # Description is Atlassian Document Format (ADF); extract plain text.
+          DESCRIPTION=$(echo "$RESPONSE" | jq -r '
+            [.fields.description.content[]?.content[]?.text?] | join(" ")
+          ')
 
-      - name: Create Feature Branch
+          {
+            echo "summary<<EOF"
+            echo "$SUMMARY"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+          {
+            echo "description<<EOF"
+            echo "$DESCRIPTION"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # ---- Create the feature branch ----
+      - name: Create feature branch
         run: |
-          BRANCH_NAME="feature/${{ steps.jira_details.outputs.issue_key }}-auto-impl"
-          git config --global user.name "Codex AI Agent"
-          git config --global user.email "codex-agent@openai.com"
-          git checkout -b "$BRANCH_NAME"
+          git config user.name "codex-bot"
+          git config user.email "codex-bot@users.noreply.github.com"
+          git checkout -b "${{ steps.vars.outputs.branch }}"
 
-      - name: Implement User Story using Codex
+      # ---- Build the prompt for Codex ----
+      - name: Write task prompt
         env:
-          # Setting multiple environment variables as not sure which one GitHub picks
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CODEX_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          CODEX_AUTH_TOKEN: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_TOKEN: ${{ secrets.OPENAI_API_KEY }}
-          CODEX_DISABLE_SANDBOX: "1"
+          ISSUE_KEY: ${{ steps.vars.outputs.issue_key }}
+          SUMMARY: ${{ steps.jira.outputs.summary }}
+          DESCRIPTION: ${{ steps.jira.outputs.description }}
         run: |
+          cat > /tmp/codex_prompt.txt <<EOF
+          You are implementing the following Jira ticket in this repository.
 
-          # Construct a prompt for Codex using the user story content
-          PROMPT="Task: Implement the following user story.\nKey: ${{ steps.jira_details.outputs.issue_key }}\nSummary: ${{ steps.jira_details.outputs.summary }}\nDescription: ${{ steps.jira_details.outputs.description }}"
+          Ticket: $ISSUE_KEY
+          Title: $SUMMARY
 
-          # Instruct the codex-cli agent to analyze and modify files
-          codex exec "$PROMPT" --model "gpt-5.6-luna"
+          Description:
+          $DESCRIPTION
 
-      - name: Run Existing Tests
+          Instructions:
+          - Implement the change described above, following the existing
+            code style and conventions in this repo.
+          - Keep the change scoped to what the ticket describes. Do not
+            perform unrelated refactors.
+          - Add or update tests that cover the change where the repo has
+            an existing test suite/convention to follow.
+          - Do not modify CI/workflow files, secrets, or dependency lockfiles
+            unless the ticket explicitly requires it.
+          - When finished, leave the working tree with all changes staged
+            but uncommitted.
+          EOF
+
+      # ---- Run Codex non-interactively ----
+      - name: Run Codex
+        uses: openai/codex-action@v1
+        with:
+          openai-api-key: ${{ secrets.OPENAI_API_KEY }}
+          permission-profile: ":workspace"
+          prompt-file: /tmp/codex_prompt.txt
+          # Uncomment to pin a specific model:
+          # model: gpt-5.3-codex
+
+      - name: Commit Codex changes
+        id: commit
         run: |
-          # Replace this with your project's native testing framework suite
-          npm test || pytest || echo "No tests configured or tests failed"
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "No changes produced by Codex; nothing to commit."
+            exit 0
+          fi
+          git add -A
+          git commit -m "${{ steps.vars.outputs.issue_key }}: ${{ steps.jira.outputs.summary }}"
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
-      - name: Commit and Push Changes
-        env:
-          GITHUB_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+      # ---- Install deps + run tests (adjust to your stack) ----
+      - name: Set up Node
+        if: steps.commit.outputs.changed == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        if: steps.commit.outputs.changed == 'true'
+        run: npm ci
+
+      - name: Run tests
+        id: tests
+        if: steps.commit.outputs.changed == 'true'
         run: |
-          BRANCH_NAME="feature/${{ steps.jira_details.outputs.issue_key }}-auto-impl"
-          git add .
-          git commit -m "${{ steps.jira_details.outputs.issue_key }}: Automated Codex implementation of user story"
-          git push origin "$BRANCH_NAME" --force
+          set +e
+          npm test -- --ci --reporters=default --reporters=summary > test_output.txt 2>&1
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          set -e
 
-      - name: Raise GitHub Pull Request
+      - name: Push branch
+        if: steps.commit.outputs.changed == 'true'
+        run: git push origin "${{ steps.vars.outputs.branch }}" --force-with-lease
+
+      # ---- Open the PR ----
+      - name: Open pull request
+        if: steps.commit.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GH_PERSONAL_ACCESS_TOKEN }}
+          ISSUE_KEY: ${{ steps.vars.outputs.issue_key }}
+          SUMMARY: ${{ steps.jira.outputs.summary }}
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          TEST_EXIT: ${{ steps.tests.outputs.exit_code }}
         run: |
-          BRANCH_NAME="feature/${{ steps.jira_details.outputs.issue_key }}-auto-impl"
-          gh pr create \
-            --title "${{ steps.jira_details.outputs.issue_key }}: ${{ steps.jira_details.outputs.summary }}" \
-            --body "Closes ${{ steps.jira_details.outputs.issue_key }}. This pull request was automatically generated and implemented by OpenAI Codex based on the Jira user story." \
-            --head "$BRANCH_NAME" \
-            --base main
+          TEST_STATUS="✅ Passed"
+          if [ "$TEST_EXIT" != "0" ]; then
+            TEST_STATUS="⚠️ Failing (exit code $TEST_EXIT) — needs review before merge"
+          fi
 
+          TEST_LOG=$(tail -c 3000 test_output.txt 2>/dev/null || echo "No test output captured.")
+
+          gh pr create \
+            --title "$ISSUE_KEY: $SUMMARY" \
+            --head "${{ steps.vars.outputs.branch }}" \
+            --base "main" \
+            --body "$(cat <<PRBODY
+          Auto-generated by Codex from Jira ticket [$ISSUE_KEY]($JIRA_BASE_URL/browse/$ISSUE_KEY).
+
+          ## Summary
+          $SUMMARY
+
+          ## Test results
+          $TEST_STATUS
+
+          <details>
+          <summary>Test output (tail)</summary>
+
+          \`\`\`
+          $TEST_LOG
+          \`\`\`
+
+          </details>
+
+          ---
+          ⚠️ This PR was generated automatically. Review the diff carefully
+          before merging — do not merge on green tests alone.
+          PRBODY
+          )"
+
+      # ---- Post the PR link back to Jira (optional) ----
+      - name: Comment on Jira ticket
+        if: steps.commit.outputs.changed == 'true'
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN: ${{ secrets.JIRA_API_TOKEN }}
+          ISSUE_KEY: ${{ steps.vars.outputs.issue_key }}
+        run: |
+          PR_URL="https://github.com/${{ github.repository }}/pull/new/${{ steps.vars.outputs.branch }}"
+          curl -sS -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -X POST \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/$ISSUE_KEY/comment" \
+            -d "{\"body\": {\"type\": \"doc\", \"version\": 1, \"content\": [{\"type\": \"paragraph\", \"content\": [{\"type\": \"text\", \"text\": \"Codex opened a pull request: $PR_URL\"}]}]}}"
+
+      - name: No changes notice
+        if: steps.commit.outputs.changed == 'false'
+        run: echo "Codex made no changes for this ticket — check jira_issue.json and the prompt for issues."

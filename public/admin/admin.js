@@ -474,7 +474,6 @@ function renderWorkspaceBar(settings) {
 }
 
 function openWorkspaceEditor(currentConfigDir) {
-  cancelWorkspaceBrowse();
   showError("workspace-form-error", "");
   const form = document.getElementById("workspace-form");
   form.configDir.value = currentConfigDir || "";
@@ -482,68 +481,24 @@ function openWorkspaceEditor(currentConfigDir) {
   form.configDir.focus();
 }
 
-let workspaceBrowseRequest = 0;
-let workspaceBrowseFolder = null;
-
-function cancelWorkspaceBrowse() {
-  workspaceBrowseRequest++;
-  workspaceBrowseFolder = null;
-  document.getElementById("workspace-browser").hidden = true;
-}
-
-async function browseWorkspace(dir) {
-  const request = ++workspaceBrowseRequest;
-  const browser = document.getElementById("workspace-browser");
-  const folders = document.getElementById("workspace-folders");
-  const select = document.getElementById("select-workspace-folder-btn");
-  const parent = document.getElementById("workspace-parent-btn");
-  browser.hidden = false;
-  browser.setAttribute("aria-busy", "true");
-  folders.replaceChildren();
-  select.disabled = true;
-  parent.disabled = true;
-  workspaceBrowseFolder = null;
-  document.getElementById("workspace-browser-path").textContent = "Loading folders…";
-  showError("workspace-browser-error", "");
-  try {
-    const result = await api("GET", `/admin/api/settings/folders${dir ? `?dir=${encodeURIComponent(dir)}` : ""}`);
-    if (request !== workspaceBrowseRequest) return;
-    workspaceBrowseFolder = result.path;
-    document.getElementById("workspace-browser-path").textContent = result.path;
-    parent.disabled = !result.parent;
-    parent.onclick = () => browseWorkspace(result.parent);
-    for (const folder of result.folders) {
-      const item = document.createElement("li");
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "btn-secondary";
-      button.textContent = folder.name;
-      button.addEventListener("click", () => browseWorkspace(folder.path));
-      item.appendChild(button);
-      folders.appendChild(item);
-    }
-    if (!result.folders.length) {
-      const item = document.createElement("li");
-      item.textContent = "No subfolders. You can select this folder.";
-      folders.appendChild(item);
-    }
-    select.disabled = false;
-    select.focus();
-  } catch (err) {
-    if (request !== workspaceBrowseRequest) return;
-    document.getElementById("workspace-browser-path").textContent = dir || "";
-    showError("workspace-browser-error", err.message);
-  } finally {
-    if (request === workspaceBrowseRequest) browser.setAttribute("aria-busy", "false");
-  }
-}
-
-function selectWorkspaceFolder() {
-  if (!workspaceBrowseFolder) return;
+async function browseWorkspace() {
+  const button = document.getElementById("browse-workspace-btn");
   const form = document.getElementById("workspace-form");
-  form.configDir.value = workspaceBrowseFolder;
-  cancelWorkspaceBrowse();
-  form.configDir.focus();
+  showError("workspace-form-error", "");
+  button.disabled = true;
+  button.textContent = "Choosing folder…";
+  try {
+    const result = await api("POST", "/admin/api/settings/select-folder");
+    if (result.configDir !== null) {
+      form.configDir.value = result.configDir;
+      form.configDir.focus();
+    }
+  } catch (err) {
+    showError("workspace-form-error", err.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Browse…";
+  }
 }
 
 async function saveWorkspace(ev) {
@@ -1970,7 +1925,6 @@ async function saveAuthProvider(ev) {
  * Drawer (settings dialog) + wiring
  * ------------------------------------------------------------------- */
 function closeDrawer(id) {
-  if (id === "workspace-editor") cancelWorkspaceBrowse();
   document.getElementById(id).hidden = true;
 }
 
@@ -2012,9 +1966,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById("change-workspace-btn").addEventListener("click", () => openWorkspaceEditor(CURRENT_SETTINGS.configDir));
   document.getElementById("workspace-form").addEventListener("submit", saveWorkspace);
-  document.getElementById("browse-workspace-btn").addEventListener("click", () => browseWorkspace());
-  document.getElementById("select-workspace-folder-btn").addEventListener("click", selectWorkspaceFolder);
-  document.getElementById("cancel-workspace-browse-btn").addEventListener("click", cancelWorkspaceBrowse);
+  document.getElementById("browse-workspace-btn").addEventListener("click", browseWorkspace);
   document.getElementById("download-openapi-btn").addEventListener("click", async () => {
     try {
       await downloadFile("/admin/api/export/openapi.json", "naimix-openapi.json");

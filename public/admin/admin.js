@@ -481,6 +481,26 @@ function openWorkspaceEditor(currentConfigDir) {
   form.configDir.focus();
 }
 
+async function browseWorkspace() {
+  const button = document.getElementById("browse-workspace-btn");
+  const form = document.getElementById("workspace-form");
+  showError("workspace-form-error", "");
+  button.disabled = true;
+  button.textContent = "Choosing folder…";
+  try {
+    const result = await api("POST", "/admin/api/settings/select-folder");
+    if (result.configDir !== null) {
+      form.configDir.value = result.configDir;
+      form.configDir.focus();
+    }
+  } catch (err) {
+    showError("workspace-form-error", err.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = "Browse…";
+  }
+}
+
 async function saveWorkspace(ev) {
   ev.preventDefault();
   showError("workspace-form-error", "");
@@ -1946,6 +1966,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById("change-workspace-btn").addEventListener("click", () => openWorkspaceEditor(CURRENT_SETTINGS.configDir));
   document.getElementById("workspace-form").addEventListener("submit", saveWorkspace);
+  document.getElementById("browse-workspace-btn").addEventListener("click", browseWorkspace);
   document.getElementById("download-openapi-btn").addEventListener("click", async () => {
     try {
       await downloadFile("/admin/api/export/openapi.json", "naimix-openapi.json");

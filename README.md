@@ -839,7 +839,10 @@ subfolder, a `gateways.yaml` file, and an `authProviders.yaml` file --
 exactly this project's own `config/` layout. Point an instance at one:
 
 - **Admin UI** -- click "Change workspace…" in the bar under the header,
-  enter the folder's path, and save. The folder must already exist (it's
+  click "Browse folders…", navigate to your folder, click "Select this folder",
+  and save. You can also enter the path directly. The browser lists folders
+  on the machine running Naimix; native browser pickers don't expose the
+  absolute paths needed by the server. The folder must already exist (it's
   your Git checkout) but `endpoints/`/`gateways.yaml` inside it don't have
   to -- both are created automatically the first time you save an endpoint
   or gateway, same as `config/` was for this project's own demo data.

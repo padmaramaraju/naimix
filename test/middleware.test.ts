@@ -1402,6 +1402,13 @@ describe("admin API: workspace switching", () => {
   let wsGatewaysRegistry: GatewaysRegistry;
   let wsAuthProvidersRegistry: AuthProvidersRegistry;
   const wsWorkspace: { configDir?: string } = { configDir: FOLDER_A };
+  // Indirection so individual `it`s can swap in their own fake picker
+  // without rebuilding the whole app -- see the "select-folder" tests below.
+  // The default rejects loudly if a test exercises the route without first
+  // setting this, rather than silently popping a real GUI dialog.
+  let wsPickFolder: (startDir: string) => Promise<string | null> = async () => {
+    throw new Error("wsPickFolder wasn't stubbed for this test");
+  };
 
   beforeAll(() => {
     fs.mkdirSync(path.join(FOLDER_A, "endpoints"), { recursive: true });
@@ -1422,6 +1429,9 @@ describe("admin API: workspace switching", () => {
       logger,
       workspace: wsWorkspace,
       settingsFile: WS_SETTINGS_FILE,
+      // Never the real pickFolderNative -- tests must not pop up a real OS
+      // dialog. Each select-folder test sets wsPickFolder itself.
+      pickFolder: (startDir) => wsPickFolder(startDir),
     });
   });
 
@@ -1435,6 +1445,99 @@ describe("admin API: workspace switching", () => {
     expect(res.body.configDir).toBe(FOLDER_A);
     expect(res.body.endpointCount).toBe(ENDPOINT_COUNT);
     expect(res.body.gatewayCount).toBeGreaterThan(0);
+  });
+
+  it("requires admin authentication to browse folders", async () => {
+    const res = await request(wsApp).get("/admin/api/settings/folders");
+    expect(res.status).toBe(401);
+  });
+
+  it("starts browsing at the current workspace and lists only directories", async () => {
+    const res = await request(wsApp).get("/admin/api/settings/folders").set(authed());
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      path: FOLDER_A,
+      parent: WS_ROOT,
+      folders: [{ name: "endpoints", path: path.join(FOLDER_A, "endpoints") }],
+    });
+  });
+
+  it("navigates to parent and empty folders without switching the workspace", async () => {
+    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir: WS_ROOT }).set(authed());
+    expect(res.status).toBe(200);
+    expect(res.body.folders).toEqual([
+      { name: "folder-a", path: FOLDER_A },
+      { name: "folder-b", path: FOLDER_B },
+    ]);
+    const empty = await request(wsApp).get("/admin/api/settings/folders").query({ dir: FOLDER_B }).set(authed());
+    expect(empty.body).toEqual({ path: FOLDER_B, parent: WS_ROOT, folders: [] });
+    expect(wsWorkspace.configDir).toBe(FOLDER_A);
+    expect(fs.existsSync(WS_SETTINGS_FILE)).toBe(false);
+  });
+
+  it("stops parent navigation at the filesystem root", async () => {
+    const root = path.parse(WS_ROOT).root;
+    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir: root }).set(authed());
+    expect(res.status).toBe(200);
+    expect(res.body.parent).toBeNull();
+  });
+
+  it.each([MISSING_FOLDER, path.join(FOLDER_A, "gateways.yaml"), ""])("rejects an invalid browse path: %s", async dir => {
+    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir }).set(authed());
+    expect(res.status).toBe(400);
+  });
+
+  it("requires admin authentication to open the folder picker", async () => {
+    const res = await request(wsApp).post("/admin/api/settings/select-folder");
+    expect(res.status).toBe(401);
+  });
+
+  it("opens the picker at the current workspace and returns what it resolved", async () => {
+    let requestedStartDir: string | undefined;
+    wsPickFolder = async (startDir) => {
+      requestedStartDir = startDir;
+      return FOLDER_B;
+    };
+
+    const res = await request(wsApp).post("/admin/api/settings/select-folder").set(authed()).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ configDir: FOLDER_B });
+    // No startDir was given in the request body, so it should default to
+    // the current workspace, not e.g. process.cwd() or a hardcoded path.
+    expect(requestedStartDir).toBe(FOLDER_A);
+  });
+
+  it("honors an explicit startDir hint from the client", async () => {
+    let requestedStartDir: string | undefined;
+    wsPickFolder = async (startDir) => {
+      requestedStartDir = startDir;
+      return FOLDER_A;
+    };
+
+    const res = await request(wsApp)
+      .post("/admin/api/settings/select-folder")
+      .set(authed())
+      .send({ startDir: FOLDER_B });
+    expect(res.status).toBe(200);
+    expect(requestedStartDir).toBe(FOLDER_B);
+  });
+
+  it("returns configDir: null when the user cancels the dialog", async () => {
+    wsPickFolder = async () => null;
+
+    const res = await request(wsApp).post("/admin/api/settings/select-folder").set(authed()).send({});
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ configDir: null });
+  });
+
+  it("surfaces a picker failure (e.g. the OS dialog tool isn't installed) as a 400, not a 500", async () => {
+    wsPickFolder = async () => {
+      throw new Error(`"zenity" isn't available on this machine, so the folder picker can't be shown. Type the path instead.`);
+    };
+
+    const res = await request(wsApp).post("/admin/api/settings/select-folder").set(authed()).send({});
+    expect(res.status).toBe(400);
+    expect(res.body.message).toMatch(/zenity/i);
   });
 
   it("rejects switching to a folder that doesn't exist on disk", async () => {

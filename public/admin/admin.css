@@ -363,6 +363,10 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
 .drawer-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); }
 .drawer-body { padding: 20px; overflow-y: auto; flex: 1; }
 .drawer-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border); }
+.workspace-browser { margin-top: 12px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; }
+.workspace-browser-path { overflow-wrap: anywhere; font-family: monospace; }
+.workspace-folders { list-style: none; padding: 0; max-height: 240px; overflow-y: auto; }
+.workspace-folders button { width: 100%; text-align: left; margin-bottom: 4px; overflow-wrap: anywhere; }
 
 .toast {
   position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);

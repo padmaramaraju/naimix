@@ -9,6 +9,7 @@ import { mapResponse } from "../transform/mapper";
 import { ValidationError } from "./errors";
 import { generateCrudEndpointsForGateway } from "./crudGenerator";
 import { generateOpenApiDocument } from "./openapiGenerator";
+import { pickFolderNative } from "./nativeFolderPicker";
 import { resolveConfigDir, saveWorkspaceSettings } from "./workspaceSettings";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
@@ -31,6 +32,12 @@ export interface AdminApiDeps {
   /** Where to persist the chosen workspace so it survives a restart
    * (see workspaceSettings.ts). Required for PUT /settings to work. */
   settingsFile: string;
+  /** Opens a native OS folder-picker dialog for POST /settings/select-folder,
+   * resolving to the chosen path or null if cancelled. Defaults to the real
+   * one (nativeFolderPicker.ts); overridable so tests can exercise the
+   * route's own logic (the null/error handling) without actually popping up
+   * a GUI dialog in CI. */
+  pickFolder?: (startDir: string) => Promise<string | null>;
 }
 
 const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"] as const;
@@ -87,6 +94,7 @@ export function createAdminApiRouter({
   logger,
   workspace,
   settingsFile,
+  pickFolder = pickFolderNative,
 }: AdminApiDeps): Router {
   const router = Router();
   const adminLogger = logger.child({ component: "admin-api" });
@@ -261,6 +269,32 @@ export function createAdminApiRouter({
       throw err;
     }
   }));
+
+  // Opens a native OS folder-picker dialog on the machine running THIS
+  // server (the admin UI's "Browse..." button) and returns the chosen
+  // absolute path for the form to fill in -- it never saves anything
+  // itself, same division of labor as the rest of this workspace-switching
+  // flow (PUT /settings still does the actual switch). `configDir: null`
+  // means the user cancelled the dialog, not an error -- the UI leaves the
+  // text field alone in that case. See nativeFolderPicker.ts for why this
+  // doesn't go through the `dialog-node` package (it has no folder-picking
+  // mode, only a file one).
+  router.post(
+    "/settings/select-folder",
+    asyncHandler(async (req, res) => {
+      const { startDir } = z.object({ startDir: z.string().optional() }).parse(req.body ?? {});
+      const from = path.resolve(startDir || workspace.configDir || path.dirname(endpointRegistry.getDir()));
+      try {
+        const configDir = await pickFolder(from);
+        res.json({ configDir });
+      } catch (err) {
+        // "Couldn't launch/run the picker" (missing zenity, unsupported OS,
+        // ...) -- surfaced the same way a bad typed-in path is, since the
+        // admin UI shows either one inline in the same error slot.
+        throw new ValidationError(err instanceof Error ? err.message : "Couldn't open the folder picker.");
+      }
+    })
+  );
 
   router.put(
     "/settings",

@@ -38,6 +38,11 @@ export interface CreateAppOptions {
    * don't need it -- everything else about the app works unchanged. */
   workspace?: { configDir?: string };
   settingsFile?: string;
+  /** Overrides the real native folder-picker dialog behind POST
+   * /settings/select-folder -- see adminApi.ts's AdminApiDeps and
+   * nativeFolderPicker.ts. Only ever set by tests, so they can exercise
+   * that route's own logic without actually popping up a GUI dialog. */
+  pickFolder?: (startDir: string) => Promise<string | null>;
 }
 
 export function createApp({
@@ -48,6 +53,7 @@ export function createApp({
   adminUiDir,
   workspace,
   settingsFile,
+  pickFolder,
 }: CreateAppOptions): Express {
   const { app, authService } = createBaseApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger });
 
@@ -72,6 +78,7 @@ export function createApp({
       logger,
       workspace: workspace ?? {},
       settingsFile: settingsFile ?? path.resolve(process.cwd(), "data/settings.json"),
+      pickFolder,
     })
   );
 

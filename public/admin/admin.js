@@ -488,7 +488,8 @@ async function browseWorkspace() {
   button.disabled = true;
   button.textContent = "Choosing folder…";
   try {
-    const result = await api("POST", "/admin/api/settings/select-folder");
+    const startDir = form.configDir.value.trim();
+    const result = await api("POST", "/admin/api/settings/select-folder", startDir ? { startDir } : undefined);
     if (result.configDir !== null) {
       form.configDir.value = result.configDir;
       form.configDir.focus();

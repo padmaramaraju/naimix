@@ -494,6 +494,7 @@ describe("caller auth: POST /auth/login + a gateway's requiresAuth", () => {
   it("rejects a call to an authed endpoint with no token", async () => {
     const res = await request(app).get("/api/authed/echo");
     expect(res.status).toBe(401);
+    expect(res.body.message).toBe("Not authorized.");
   });
 
   it("rejects a call with an unknown/garbage token", async () => {

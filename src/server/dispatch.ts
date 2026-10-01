@@ -55,9 +55,7 @@ export function createDynamicDispatcher(
       if (requiresAuth) {
         const token = bearerToken(req);
         if (!token) {
-          throw new AuthError(
-            `This endpoint requires authentication. Log in via POST /auth/login/${requiresAuth} and send the returned token as "Authorization: Bearer <token>".`
-          );
+          throw new AuthError("Not authorized.");
         }
         const session = await authService.resolveSession(token, requiresAuth);
         params.__authToken = session.backendToken;

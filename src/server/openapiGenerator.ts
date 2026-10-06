@@ -118,7 +118,7 @@ function buildOperation(endpoint: EndpointConfig, gateways: Record<string, Gatew
  * /__endpoints). Reads live registry state on every call -- there's no
  * caching -- so downloading this again after an endpoint/gateway/auth-
  * provider change picks it up immediately with no separate "regenerate"
- * step. See GET /export/openapi.json in adminApi.ts, the only caller.
+ * step. See GET /export/openapi.json in consoleApi.ts, the only caller.
  */
 export function generateOpenApiDocument({
   endpointRegistry,

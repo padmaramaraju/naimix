@@ -12,14 +12,14 @@ import path from "node:path";
 export interface WorkspaceSettings {
   /** Path to the workspace -- a folder containing an `endpoints/`
    * subfolder and a `gateways.yaml` file, typically a local Git checkout.
-   * The admin UI's "Change workspace" control always saves an absolute
-   * path (see adminApi.ts), since it's meant to point at an arbitrary
+   * The console UI's "Change workspace" control always saves an absolute
+   * path (see consoleApi.ts), since it's meant to point at an arbitrary
    * folder anywhere on disk; a relative path also works (resolved against
    * process.cwd() at startup -- see index.ts's resolveStartupPaths()) for
    * the common case of pointing at this project's own bundled `config/`
    * folder, so a checkout stays self-contained without a hand-set absolute
    * path baked in. Persisted/transmitted under the field name `configDir`
-   * -- a stable data contract (this settings file, the /admin/api/settings
+   * -- a stable data contract (this settings file, the /console/api/settings
    * API, the "Change workspace" form field) that's independent of the
    * user-facing "workspace" name. */
   configDir: string;
@@ -27,7 +27,7 @@ export interface WorkspaceSettings {
 
 /**
  * Reads the locally-persisted "which workspace is this machine currently
- * pointed at" preference, if one has ever been saved (via the admin UI's
+ * pointed at" preference, if one has ever been saved (via the console UI's
  * "Change workspace" control). Deliberately lives OUTSIDE any workspace
  * itself -- since the whole point is that the workspace can be swapped for
  * a different Git checkout entirely, this file has to survive that swap.

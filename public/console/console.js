@@ -5,7 +5,7 @@
  * ------------------------------------------------------------------- */
 const REDACTED = "••••••••";
 const SENSITIVE_KEY = /pass|secret|token|apikey|api_key|credential/i;
-const THEME_KEY = "naimix-admin-theme";
+const THEME_KEY = "naimix-console-theme";
 
 let TOKEN = null;
 let META = { methods: [], backendTypes: [], transforms: [], sqlClients: [], paramLocations: [], paramTypes: [], devMode: false };
@@ -96,7 +96,7 @@ async function api(method, path, body) {
 }
 
 /**
- * Downloads a file from an authenticated /admin/api/* route. A plain
+ * Downloads a file from an authenticated /console/api/* route. A plain
  * `<a href>` can't carry the Authorization header these routes require, so
  * this fetches the response as a Blob and clicks a synthetic, throwaway
  * `<a download>` pointed at an object URL for it -- the standard workaround
@@ -309,7 +309,7 @@ function infoIcon(key) {
   return el("button", { type: "button", class: "info-icon", "data-info-key": key, "aria-label": "What is this?" }, ["i"]);
 }
 
-// A <label> is flex-direction: column (see admin.css), so each of its direct
+// A <label> is flex-direction: column (see console.css), so each of its direct
 // children -- including an .info-icon <button>, which is an element rather
 // than a text run -- becomes its own flex item on its own line. Grouping a
 // label's title word + icon (+ any trailing muted qualifier) inside one
@@ -409,12 +409,12 @@ async function login(token) {
   const prevToken = TOKEN;
   TOKEN = token;
   try {
-    await api("GET", "/admin/api/endpoints");
+    await api("GET", "/console/api/endpoints");
   } catch (err) {
     TOKEN = prevToken;
     throw err;
   }
-  localStorage.setItem("naimix-admin-token", token);
+  localStorage.setItem("naimix-console-token", token);
   document.getElementById("login-screen").hidden = true;
   document.getElementById("app").hidden = false;
   await loadAll();
@@ -422,7 +422,7 @@ async function login(token) {
 
 function logout() {
   TOKEN = null;
-  localStorage.removeItem("naimix-admin-token");
+  localStorage.removeItem("naimix-console-token");
   document.getElementById("app").hidden = true;
   document.getElementById("login-screen").hidden = false;
 }
@@ -432,12 +432,12 @@ function logout() {
  * ------------------------------------------------------------------- */
 async function loadAll() {
   const [meta, endpoints, gateways, authProviders, sessions, settings] = await Promise.all([
-    api("GET", "/admin/api/meta"),
-    api("GET", "/admin/api/endpoints"),
-    api("GET", "/admin/api/gateways"),
-    api("GET", "/admin/api/auth-providers"),
-    api("GET", "/admin/api/sessions"),
-    api("GET", "/admin/api/settings"),
+    api("GET", "/console/api/meta"),
+    api("GET", "/console/api/endpoints"),
+    api("GET", "/console/api/gateways"),
+    api("GET", "/console/api/auth-providers"),
+    api("GET", "/console/api/sessions"),
+    api("GET", "/console/api/settings"),
   ]);
   META = meta;
   ENDPOINTS = endpoints;
@@ -454,14 +454,14 @@ async function loadAll() {
 /** Re-fetches just the session list -- used by the sidebar's "Refresh"
  * button and after a revoke, without re-loading every other section. */
 async function refreshSessions() {
-  SESSIONS = await api("GET", "/admin/api/sessions");
+  SESSIONS = await api("GET", "/console/api/sessions");
   renderSessionsList();
 }
 
 /* ---------------------------------------------------------------------
  * Workspace -- the folder (endpoints/ + gateways.yaml) this instance is
  * currently pointed at. Still persisted/transmitted under the field name
- * `configDir` (see workspaceSettings.ts / the /admin/api/settings API) --
+ * `configDir` (see workspaceSettings.ts / the /console/api/settings API) --
  * that's a stable data contract, not the user-facing name.
  * ------------------------------------------------------------------- */
 function renderWorkspaceBar(settings) {
@@ -489,7 +489,7 @@ async function browseWorkspace() {
   button.textContent = "Choosing folder…";
   try {
     const startDir = form.configDir.value.trim();
-    const result = await api("POST", "/admin/api/settings/select-folder", startDir ? { startDir } : undefined);
+    const result = await api("POST", "/console/api/settings/select-folder", startDir ? { startDir } : undefined);
     if (result.configDir !== null) {
       form.configDir.value = result.configDir;
       form.configDir.focus();
@@ -507,7 +507,7 @@ async function saveWorkspace(ev) {
   showError("workspace-form-error", "");
   const configDir = ev.target.configDir.value.trim();
   try {
-    const result = await api("PUT", "/admin/api/settings", { configDir });
+    const result = await api("PUT", "/console/api/settings", { configDir });
     closeDrawer("workspace-editor");
     toast(
       `Switched to ${configDir} — ${result.endpointCount} endpoint(s)${result.endpointErrors.length ? `, ${result.endpointErrors.length} error(s)` : ""}, ${result.gatewayCount} gateway(s)`,
@@ -693,7 +693,7 @@ function renderAuthProvidersList() {
  * AuthService.listSessions()): every logged-in caller across every
  * provider, for whoever runs this instance to see without a debugger.
  * Never shows a session's real bearer token or the backend/refresh token
- * it wraps -- the admin API itself never sends those out either.
+ * it wraps -- the console API itself never sends those out either.
  * ------------------------------------------------------------------- */
 function formatSessionExpiry(expiresAt) {
   if (expiresAt === undefined) return "No expiry";
@@ -762,7 +762,7 @@ async function revokeSession(id) {
   const label = session ? `${session.providerName} / ${session.subject || "(no subject)"}` : "this session";
   if (!confirm(`Revoke ${label}? That caller's current session token will stop working immediately.`)) return;
   try {
-    await api("DELETE", `/admin/api/sessions/${encodeURIComponent(id)}`);
+    await api("DELETE", `/console/api/sessions/${encodeURIComponent(id)}`);
     toast("Session revoked");
     closeDetail();
     await refreshSessions();
@@ -774,7 +774,7 @@ async function revokeSession(id) {
 async function deleteEndpoint(id) {
   if (!confirm(`Delete endpoint "${id}"? This removes its config file too.`)) return;
   try {
-    await api("DELETE", `/admin/api/endpoints/${encodeURIComponent(id)}`);
+    await api("DELETE", `/console/api/endpoints/${encodeURIComponent(id)}`);
     toast(`Deleted endpoint "${id}"`);
     closeDetail();
     await loadAll();
@@ -786,7 +786,7 @@ async function deleteEndpoint(id) {
 async function deleteGateway(name) {
   if (!confirm(`Delete gateway "${name}"?`)) return;
   try {
-    await api("DELETE", `/admin/api/gateways/${encodeURIComponent(name)}`);
+    await api("DELETE", `/console/api/gateways/${encodeURIComponent(name)}`);
     toast(`Deleted gateway "${name}"`);
     closeDetail();
     await loadAll();
@@ -798,7 +798,7 @@ async function deleteGateway(name) {
 async function deleteAuthProvider(name) {
   if (!confirm(`Delete auth provider "${name}"?`)) return;
   try {
-    await api("DELETE", `/admin/api/auth-providers/${encodeURIComponent(name)}`);
+    await api("DELETE", `/console/api/auth-providers/${encodeURIComponent(name)}`);
     toast(`Deleted auth provider "${name}"`);
     closeDetail();
     await loadAll();
@@ -814,21 +814,58 @@ function renderKeyValueEditor(container, initialObj, opts) {
   opts = opts || {};
   container.innerHTML = "";
 
+  // opts.maskable: whether this field is masked is an explicit per-entry
+  // setting rather than inferred from a key's own name -- used for a
+  // gateway's commonParams (see commonParamsMasked in schema.ts/config.ts
+  // and secretRedaction.ts's redactSelected). A commonParams entry named
+  // "apiKey" is NOT auto-masked under this mode. The single eye toggle
+  // IS that setting here: whatever it's showing (hidden/shown) when the
+  // form is saved is what gets persisted as masked or not -- there's no
+  // separate on/off control.
+  // opts.maskedKeys: which entries start out hidden, when maskable.
+  const maskable = !!opts.maskable;
+  const initiallyMaskedKeys = new Set(opts.maskedKeys || []);
+
+  function isInitiallyMasked(key) {
+    return maskable ? initiallyMaskedKeys.has(key) : SENSITIVE_KEY.test(key || "");
+  }
+
   function addRow(k, v) {
     const isRedacted = v === REDACTED;
     const keyInput = el("input", { placeholder: "key", value: k || "" });
     const valueInput = el("input", {
       placeholder: isRedacted ? "(unchanged — leave blank to keep)" : "value",
-      type: SENSITIVE_KEY.test(k || "") ? "password" : "text",
+      type: isInitiallyMasked(k) ? "password" : "text",
       value: isRedacted ? "" : v == null ? "" : String(v),
     });
-    keyInput.addEventListener("input", () => {
-      valueInput.type = SENSITIVE_KEY.test(keyInput.value) ? "password" : "text";
-    });
+
+    // The one control for hiding/showing a value, anchored to the field
+    // itself (right edge, like a typical password-reveal input) rather
+    // than living as a separate checkbox alongside it.
+    const revealBtn = el(
+      "button",
+      {
+        type: "button",
+        class: "icon-btn field-reveal-btn",
+        title: "Show/hide value",
+        "aria-label": "Show/hide value",
+        onclick: () => {
+          valueInput.type = valueInput.type === "password" ? "text" : "password";
+        },
+      },
+      ["👁"]
+    );
+    if (!maskable) {
+      keyInput.addEventListener("input", () => {
+        valueInput.type = SENSITIVE_KEY.test(keyInput.value) ? "password" : "text";
+      });
+    }
+
+    const valueWrap = el("div", { class: "field-with-reveal" }, [valueInput, revealBtn]);
     const removeBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => row.remove() }, ["✕"]);
     const row = el("div", { class: "repeatable-row" }, [
       el("label", {}, [opts.keyLabel || "Key", keyInput]),
-      el("label", {}, [opts.valueLabel || "Value", valueInput]),
+      el("label", {}, [opts.valueLabel || "Value", valueWrap]),
       removeBtn,
     ]);
     row._keyInput = keyInput;
@@ -839,6 +876,22 @@ function renderKeyValueEditor(container, initialObj, opts) {
   for (const [k, v] of Object.entries(initialObj || {})) addRow(k, v);
   container._addRow = addRow;
   return container;
+}
+
+/** Like readKeyValueEditor(), but also returns which rows are currently
+ * showing their value hidden (password-style) -- only meaningful for an
+ * editor rendered with opts.maskable (see renderKeyValueEditor), where
+ * the eye toggle's current state IS the masked setting being saved. */
+function readKeyValueEditorMaskable(container) {
+  const values = {};
+  const maskedKeys = [];
+  for (const row of container.children) {
+    const k = row._keyInput.value.trim();
+    if (!k) continue;
+    values[k] = row._valueInput.value;
+    if (row._valueInput.type === "password") maskedKeys.push(k);
+  }
+  return { values, maskedKeys };
 }
 
 function readKeyValueEditor(container) {
@@ -1301,9 +1354,9 @@ async function saveEndpoint(ev) {
   }
   try {
     if (EDITING_ENDPOINT_ID) {
-      await api("PUT", `/admin/api/endpoints/${encodeURIComponent(EDITING_ENDPOINT_ID)}`, endpoint);
+      await api("PUT", `/console/api/endpoints/${encodeURIComponent(EDITING_ENDPOINT_ID)}`, endpoint);
     } else {
-      await api("POST", "/admin/api/endpoints", endpoint);
+      await api("POST", "/console/api/endpoints", endpoint);
     }
     toast(`Saved endpoint "${endpoint.id}" — it's live now.`);
     await loadAll();
@@ -1343,7 +1396,7 @@ async function fetchSample() {
       }
     }
 
-    const { raw } = await api("POST", "/admin/api/test-backend", { input, backend, params, rawQuery, rawBody });
+    const { raw } = await api("POST", "/console/api/test-backend", { input, backend, params, rawQuery, rawBody });
     LAST_RAW_SAMPLE = raw;
     HAS_RAW_SAMPLE = true;
     document.getElementById("test-raw-output").textContent = JSON.stringify(raw, null, 2);
@@ -1362,7 +1415,7 @@ async function applyMappingToSample() {
     const fields = [...document.getElementById("output-fields-list").children].map((r) => r._read()).filter((f) => f.target && f.source);
     const output = { fields };
     if (form.outputRoot.value.trim()) output.root = form.outputRoot.value.trim();
-    const { mapped } = await api("POST", "/admin/api/test-mapping", { raw: LAST_RAW_SAMPLE, output });
+    const { mapped } = await api("POST", "/console/api/test-mapping", { raw: LAST_RAW_SAMPLE, output });
     document.getElementById("test-mapped-output").textContent = JSON.stringify(mapped, null, 2);
   } catch (err) {
     document.getElementById("test-mapped-output").textContent = "Error: " + err.message;
@@ -1467,7 +1520,7 @@ async function generateCrudEndpoints() {
   try {
     const summary = await api(
       "POST",
-      `/admin/api/gateways/${encodeURIComponent(EDITING_GATEWAY_NAME)}/generate-crud`,
+      `/console/api/gateways/${encodeURIComponent(EDITING_GATEWAY_NAME)}/generate-crud`,
       {}
     );
     const lines = [
@@ -1508,7 +1561,7 @@ async function testDbConnection() {
     const config = document.getElementById("gateway-fields")._read();
     const body = { config };
     if (EDITING_GATEWAY_NAME) body.name = EDITING_GATEWAY_NAME;
-    const result = await api("POST", "/admin/api/gateways/test-connection", body);
+    const result = await api("POST", "/console/api/gateways/test-connection", body);
     resultEl.classList.add(result.ok ? "test-result-ok" : "test-result-error");
     resultEl.textContent = result.ok ? "✓ Connected successfully" : `✕ ${result.message}`;
   } catch (err) {
@@ -1520,7 +1573,7 @@ async function testDbConnection() {
 /** Renders a test-login result the same way testDbConnection() renders a
  * connection-test result, plus the extra bits a login carries: the
  * resolved subject and any captured claims. Never shows the backend token
- * (the admin API doesn't return one) -- just enough to confirm the config
+ * (the console API doesn't return one) -- just enough to confirm the config
  * actually authenticates. */
 async function testAuthProviderLogin() {
   const resultEl = document.getElementById("auth-provider-test-result");
@@ -1535,7 +1588,7 @@ async function testAuthProviderLogin() {
     };
     const body = { config, credentials };
     if (EDITING_AUTH_PROVIDER_NAME) body.name = EDITING_AUTH_PROVIDER_NAME;
-    const result = await api("POST", "/admin/api/auth-providers/test-login", body);
+    const result = await api("POST", "/console/api/auth-providers/test-login", body);
     resultEl.classList.add(result.ok ? "test-result-ok" : "test-result-error");
     if (!result.ok) {
       resultEl.textContent = `✕ ${result.message}`;
@@ -1575,7 +1628,7 @@ function openGatewayEditor(name) {
   form.requiresAuth.value = gw?.requiresAuth || "";
 
   const commonParamsList = document.getElementById("gateway-common-params-list");
-  renderKeyValueEditor(commonParamsList, gw?.commonParams, {});
+  renderKeyValueEditor(commonParamsList, gw?.commonParams, { maskable: true, maskedKeys: gw?.commonParamsMasked || [] });
 
   showDetailView("gateway");
   document.getElementById("detail-panel").scrollTop = 0;
@@ -1588,13 +1641,22 @@ async function saveGateway(ev) {
   const name = form.name.value.trim();
   try {
     const config = document.getElementById("gateway-fields")._read();
-    const commonParams = readKeyValueEditor(document.getElementById("gateway-common-params-list"));
-    if (Object.keys(commonParams).length > 0) config.commonParams = commonParams;
+    const { values: commonParams, maskedKeys: commonParamsMasked } = readKeyValueEditorMaskable(
+      document.getElementById("gateway-common-params-list")
+    );
+    if (Object.keys(commonParams).length > 0) {
+      config.commonParams = commonParams;
+      // Always send the current checkbox state, even when empty -- the
+      // server merges a saved config's commonParamsMasked in wholesale
+      // (see GatewaysRegistry.upsert()), so omitting it here on a save
+      // that unchecked every box would leave stale masked entries behind.
+      config.commonParamsMasked = commonParamsMasked;
+    }
     if (form.requiresAuth.value) config.requiresAuth = form.requiresAuth.value;
     if (EDITING_GATEWAY_NAME) {
-      await api("PUT", `/admin/api/gateways/${encodeURIComponent(EDITING_GATEWAY_NAME)}`, { config });
+      await api("PUT", `/console/api/gateways/${encodeURIComponent(EDITING_GATEWAY_NAME)}`, { config });
     } else {
-      await api("POST", "/admin/api/gateways", { name, config });
+      await api("POST", "/console/api/gateways", { name, config });
     }
     toast(`Saved gateway "${name}"`);
     await loadAll();
@@ -1910,9 +1972,9 @@ async function saveAuthProvider(ev) {
   try {
     const config = document.getElementById("auth-provider-fields")._read();
     if (EDITING_AUTH_PROVIDER_NAME) {
-      await api("PUT", `/admin/api/auth-providers/${encodeURIComponent(EDITING_AUTH_PROVIDER_NAME)}`, { config });
+      await api("PUT", `/console/api/auth-providers/${encodeURIComponent(EDITING_AUTH_PROVIDER_NAME)}`, { config });
     } else {
-      await api("POST", "/admin/api/auth-providers", { name, config });
+      await api("POST", "/console/api/auth-providers", { name, config });
     }
     toast(`Saved auth provider "${name}"`);
     await loadAll();
@@ -1946,7 +2008,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   document.getElementById("reload-btn").addEventListener("click", async () => {
     try {
-      const result = await api("POST", "/admin/api/reload");
+      const result = await api("POST", "/console/api/reload");
       toast(`Reloaded — ${result.endpointCount} endpoint(s)${result.errors.length ? `, ${result.errors.length} error(s)` : ""}`, result.errors.length > 0);
       await loadAll();
     } catch (err) {
@@ -1970,7 +2032,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("browse-workspace-btn").addEventListener("click", browseWorkspace);
   document.getElementById("download-openapi-btn").addEventListener("click", async () => {
     try {
-      await downloadFile("/admin/api/export/openapi.json", "naimix-openapi.json");
+      await downloadFile("/console/api/export/openapi.json", "naimix-openapi.json");
       toast("OpenAPI spec downloaded");
     } catch (err) {
       toast(err.message, true);
@@ -1978,7 +2040,7 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById("download-mcp-server-btn").addEventListener("click", async () => {
     try {
-      await downloadFile("/admin/api/export/mcp-server", "naimix-mcp-server.js");
+      await downloadFile("/console/api/export/mcp-server", "naimix-mcp-server.js");
       toast("MCP server downloaded");
     } catch (err) {
       toast(err.message, true);
@@ -2020,7 +2082,7 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("fetch-sample-btn").addEventListener("click", fetchSample);
   document.getElementById("apply-mapping-btn").addEventListener("click", applyMappingToSample);
 
-  const savedToken = localStorage.getItem("naimix-admin-token");
+  const savedToken = localStorage.getItem("naimix-console-token");
   if (savedToken) {
     login(savedToken).catch(() => {
       // Stored token no longer valid -- fall back to the login screen silently.

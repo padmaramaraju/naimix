@@ -62,16 +62,16 @@ curl -X POST http://localhost:4000/auth/login/demoLogin \
 curl http://localhost:4000/api/authed/echo -H 'Authorization: Bearer <token from above>'
 ```
 
-Run `npm run build && npm start` for a compiled run of the full app (admin
+Run `npm run build && npm start` for a compiled run of the full app (developer
 console + data plane together, the same as `npm run dev`) -- this is the
 `dev` target; see "Deploying to QA/Production" below for the separate
-`qa`/`prod` targets, which never include the admin console at all. `npm
+`qa`/`prod` targets, which never include the developer console at all. `npm
 test` runs the automated test suite (it spins up its own copy of the mock backend, so
 no manual setup is required).
 
 To create and edit endpoints visually instead of hand-writing YAML, set
-`ADMIN_TOKEN` in `.env` and open `http://localhost:4000/admin` — see
-[Admin UI](#admin-ui) below.
+`CONSOLE_TOKEN` in `.env` and open `http://localhost:4000/console` — see
+[Console UI](#console-ui) below.
 
 ## How it works
 
@@ -115,19 +115,19 @@ HTTP method (e.g. a generated table's GET/POST/PATCH/DELETE, all at
 This is purely a storage convenience -- request matching only ever looks at
 the `path` field parsed out of an endpoint's YAML, never at where the file
 happens to live on disk, so moving files around (by hand, or automatically
-whenever the admin UI saves an endpoint whose path or id changed) can never
-change runtime behavior. The admin UI's Endpoints list shows the same
+whenever the console UI saves an endpoint whose path or id changed) can never
+change runtime behavior. The console UI's Endpoints list shows the same
 structure as a collapsible folder tree, so endpoints with same the top-level
 path segment (`/api`, `/api/xml`, etc.) group together instead of being one
 long flat list.
 
-Saving an endpoint through the admin UI (or the `/admin/api/endpoints` endpoints)
+Saving an endpoint through the console UI (or the `/console/api/endpoints` endpoints)
 always writes to the correct nested location for its current path/id, moves
 the file if either one changes, and prunes any folder left empty afterward
 -- there's nothing to do by hand. Hand-editing files directly on disk still
 works too; the folder they're placed under doesn't need to be right (the
 loader finds every `.yaml`/`.json` file recursively regardless of where it
-sits), it's just where the admin UI will file its own copy the next time
+sits), it's just where the console UI will file its own copy the next time
 that endpoint is saved.
 
 ## Endpoint config reference
@@ -260,7 +260,7 @@ backend:
   query: "SELECT id, first_name, last_name FROM customers WHERE id = :id"
 ```
 
-This hand-written `query` form is one of three SQL backend modes; the admin
+This hand-written `query` form is one of three SQL backend modes; the console
 UI's "Generate CRUD + procedure endpoints" button produces the other two
 (table-based bulk CRUD, and stored-procedure calls) automatically -- see
 "Auto-generated CRUD + stored-procedure endpoints" below.
@@ -275,7 +275,7 @@ able to override): a shared backend API key, a fixed tenant id, an internal
 service token. It plays by the same `required`/`default`/`type` rules as
 every other location -- a `required: true` env param whose variable isn't
 set fails the request with a 400, same as a missing required path param
-would. In the admin UI's "Try it" test panel, an env param's test-value box
+would. In the console UI's "Try it" test panel, an env param's test-value box
 is an optional override; leaving it blank uses the real environment value,
 same as a live request would.
 
@@ -283,7 +283,7 @@ same as a live request would.
 
 `baseUrl` (json/xml) and `wsdl` (soap) are required on every gateway --
 a gateway with no idea where its backend lives isn't useful, so both the
-schema and the admin UI enforce it (the UI's Base URL/WSDL URL field is
+schema and the console UI enforce it (the UI's Base URL/WSDL URL field is
 marked required, and saving without one fails with a clear `baseUrl:
 Required` / `wsdl: Required` error). An endpoint can still point at a fully
 custom, absolute URL/WSDL of its own without going through any gateway
@@ -348,7 +348,7 @@ full design and what's still ahead.
 
 This is authentication for the middleware's *own data endpoints* (the ones
 under `/api/...` you define) -- a separate, independent system from
-`ADMIN_TOKEN`, which only ever gates `/admin/api/*` (configuring this
+`CONSOLE_TOKEN`, which only ever gates `/console/api/*` (configuring this
 instance). A caller here never sees or handles the real backend credential;
 this middleware logs in on their behalf, holds the resulting backend token
 server-side, and hands the caller its own opaque session token instead.
@@ -445,16 +445,16 @@ memory (fine for one instance; see `AUTH_DESIGN_NOTES.md` for why a
 multi-instance production deployment needs a shared store instead).
 
 Manage providers the same way as gateways -- an **Auth providers** section in
-the admin UI's sidebar (list/create/edit/delete, with the same "blank field
+the console UI's sidebar (list/create/edit/delete, with the same "blank field
 means unchanged" convention for `clientSecret`), or directly via
-`/admin/api/auth-providers` (`GET`/`POST`/`PUT`/`DELETE`). A gateway's own
+`/console/api/auth-providers` (`GET`/`POST`/`PUT`/`DELETE`). A gateway's own
 editor has a **Requires auth** dropdown, populated from this list, that sets
 its `requiresAuth` field. Deleting a provider still required by a gateway is
 refused (409), same as deleting a gateway an endpoint still uses.
 
 ## Auto-generated CRUD + stored-procedure endpoints
 
-For a SQL/database gateway, the admin UI can introspect the actual
+For a SQL/database gateway, the console UI can introspect the actual
 database and generate endpoints for you instead of hand-writing one YAML file
 per table. Open the gateway (it must already be saved) and click
 **"Generate CRUD + procedure endpoints"**. This never overwrites or fails on a
@@ -528,7 +528,7 @@ so unlike table endpoints, procedure endpoints work normally in the endpoint edi
 
 A generated endpoint's backend config looks like this rather than a raw `query`
 (see `src/types/config.ts`/`src/config/schema.ts` for the full shape) --
-it's what the admin UI's endpoint editor shows as a read-only summary rather
+it's what the console UI's endpoint editor shows as a read-only summary rather
 than an editable SQL box, since regenerating (not hand-editing) is how you
 pick up a schema change:
 
@@ -554,7 +554,7 @@ believed correct but worth a first real test against your own server.
 
 ## Adding a new endpoint
 
-**Via the admin UI** (see below) -- endpoints and gateways created, edited,
+**Via the console UI** (see below) -- endpoints and gateways created, edited,
 or deleted there take effect immediately, no restart needed.
 
 **By hand:**
@@ -562,11 +562,11 @@ or deleted there take effect immediately, no restart needed.
 1. Add a `.yaml` file anywhere under `config/endpoints/` (nested however deep
    you like, or flat -- the loader scans the whole tree) following the
    reference above. See "Folder layout mirrors each endpoint's path" above for
-   the convention the admin UI itself follows, if you want to match it.
+   the convention the console UI itself follows, if you want to match it.
 2. If it needs a new backend gateway, add it to `config/gateways.yaml`
    (and the corresponding secret to `.env`).
-3. Restart the server (or click "Reload from disk" in the admin UI, or
-   `POST /admin/api/reload`, to pick up hand-edited files without a restart).
+3. Restart the server (or click "Reload from disk" in the console UI, or
+   `POST /console/api/reload`, to pick up hand-edited files without a restart).
 4. `curl http://localhost:4000/__endpoints` to confirm it registered, then hit
    the endpoint.
 
@@ -574,20 +574,20 @@ Config files are validated on load (via `zod`); a malformed endpoint file is
 logged and skipped rather than crashing the whole server, so one bad file
 never takes down every other endpoint.
 
-## Admin UI
+## Developer Console
 
 A browser UI for creating endpoints, mapping input parameters, and configuring
-output fields, served by the middleware itself at `/admin`. It talks to a
-REST API (`/admin/api/*`) that persists straight to `config/endpoints/*.yaml`
+output fields, served by the middleware itself at `/console`. It talks to a
+REST API (`/console/api/*`) that persists straight to `config/endpoints/*.yaml`
 and `config/gateways.yaml` -- the same files you could edit by hand --
 and every change takes effect on the very next request, no restart required.
 
-**Enabling it:** set `ADMIN_TOKEN` in `.env` to any random string (see the
-generator command in `.env.example`). Leaving it unset disables `/admin/api/*`
+**Enabling it:** set `CONSOLE_TOKEN` in `.env` to any random string (see the
+generator command in `.env.example`). Leaving it unset disables `/console/api/*`
 entirely (it responds `503`) rather than running unauthenticated, since the
-admin API can configure an endpoint that calls any URL or SQL query the
+console API can configure an endpoint that calls any URL or SQL query the
 middleware's process can reach. Every request to it must carry
-`Authorization: Bearer <ADMIN_TOKEN>`; the page itself prompts for the token
+`Authorization: Bearer <CONSOLE_TOKEN>`; the page itself prompts for the token
 once and keeps it in the browser's local storage.
 
 **Layout:** a left-hand sidebar lists every endpoint (grouped into a folder
@@ -709,19 +709,19 @@ scheme automatically.
 
 ## Exporting: OpenAPI spec + MCP server
 
-The admin UI's "Export" sidebar section (and `GET /admin/api/export/*` directly, if you'd rather script
+The console UI's "Export" sidebar section (and `GET /console/api/export/*` directly, if you'd rather script
 it) gives you two ways to hand this workspace to another tool. Both reflect the *current* config the
 moment you download them -- there's no separate "regenerate" step, so just download again after making
 changes.
 
-**OpenAPI spec (`Download OpenAPI spec (JSON)` / `GET /admin/api/export/openapi.json`)** -- a standard
+**OpenAPI spec (`Download OpenAPI spec (JSON)` / `GET /console/api/export/openapi.json`)** -- a standard
 OpenAPI 3.0.3 document describing every configured endpoint (as its real caller-facing path and method),
 plus the built-in `/auth/login/{provider}`, `/auth/logout`, `/healthz`, and `/__endpoints` routes. Import
 it into Postman, Swagger UI, an API client's codegen, or anything else that reads OpenAPI. An endpoint
 whose gateway requires auth is marked with a bearer-token security requirement, naming which provider to
 log in through first.
 
-**MCP server (`Download MCP server` / `GET /admin/api/export/mcp-server`)** -- a single, dependency-free
+**MCP server (`Download MCP server` / `GET /console/api/export/mcp-server`)** -- a single, dependency-free
 JavaScript file (`naimix-mcp-server.js`) that turns this workspace into an MCP server any MCP-compatible
 client (Claude Desktop, Claude Code, etc.) can use directly. It's a *thin proxy*, not a static snapshot:
 every time it starts, it asks your live naimix instance what endpoints/gateways/auth providers currently
@@ -740,30 +740,30 @@ Desktop/Code:
       "args": ["/absolute/path/to/naimix-mcp-server.js"],
       "env": {
         "NAIMIX_BASE_URL": "http://localhost:3000",
-        "NAIMIX_ADMIN_TOKEN": "your ADMIN_TOKEN value"
+        "NAIMIX_CONSOLE_TOKEN": "your CONSOLE_TOKEN value"
       }
     }
   }
 }
 ```
 
-`NAIMIX_ADMIN_TOKEN` is only ever used to *discover* the workspace's shape (the same admin API the
+`NAIMIX_CONSOLE_TOKEN` is only ever used to *discover* the workspace's shape (the same console API the
 "Export" buttons themselves call) -- every actual tool call the server makes on your behalf goes through
-the normal public routes, never back through `/admin/api/*`. Treat the downloaded file plus that token
-together as a credential: whoever has both has full admin access to whatever `NAIMIX_BASE_URL` points at.
+the normal public routes, never back through `/console/api/*`. Treat the downloaded file plus that token
+together as a credential: whoever has both has full console access to whatever `NAIMIX_BASE_URL` points at.
 
 You'll get one `login_<provider>` tool per configured auth provider (taking `username`/`password`, except
 an oauth2 `client_credentials` provider, which takes neither), a `logout` tool, a `list_endpoints` tool,
 and one tool per configured endpoint. Log in with the right `login_*` tool before calling a tool for an
 endpoint that requires it -- its description tells you which one.
 
-**This only works against a `dev` build.** QA and Production instances don't expose `/admin/api/*` at all
+**This only works against a `dev` build.** QA and Production instances don't expose `/console/api/*` at all
 (see "Deploying to QA/Production" below), so there's nothing for the MCP server to discover from there --
 point `NAIMIX_BASE_URL` at a `dev` instance.
 
 ## Deploying to QA/Production
 
-The admin console (UI + `/admin/api/*`) is a **development-only** tool. It
+The developer console (UI + `/console/api/*`) is a **development-only** tool. It
 is not merely disabled by config in QA/Production -- it is a separate build
 that never contains that code at all. See
 [`DEPLOYMENT_ARCHITECTURE_NOTES.md`](DEPLOYMENT_ARCHITECTURE_NOTES.md)'s
@@ -772,9 +772,9 @@ reasoning; this section is the how-to.
 
 **Three named targets, sharing one core:**
 
-| | Entry point | `npm` scripts | Admin console |
+| | Entry point | `npm` scripts | Developer console |
 |---|---|---|---|
-| `dev` | `src/server/index.ts` | `npm run dev`, or `npm run build && npm start` | Present (gated by `ADMIN_TOKEN`) |
+| `dev` | `src/server/index.ts` | `npm run dev`, or `npm run build && npm start` | Present (gated by `CONSOLE_TOKEN`) |
 | `qa` | `src/server/qaIndex.ts` | `npm run dev:qa`, or `npm run build:qa && npm run start:qa` | Not present at all |
 | `prod` | `src/server/prodIndex.ts` | `npm run dev:prod`, or `npm run build:prod && npm run start:prod` | Not present at all |
 
@@ -792,10 +792,10 @@ All three targets build on the same `src/server/coreApp.ts` (health/
 introspection endpoints, caller-facing `/auth` login, and the dynamic
 dispatcher that serves every configured endpoint) -- a business-logic fix
 made there applies to all three automatically. Only the `dev` target
-(`src/server/app.ts`) additionally imports `adminApi.ts`/`adminAuth.ts` and
-mounts `/admin` + `/admin/api/*` on top; `src/server/dataPlaneApp.ts` (what
-`qa` and `prod` both use) never imports either file, so the admin console
-isn't reachable code in either of those processes, whatever `ADMIN_TOKEN`
+(`src/server/app.ts`) additionally imports `consoleApi.ts`/`consoleAuth.ts` and
+mounts `/console` + `/console/api/*` on top; `src/server/dataPlaneApp.ts` (what
+`qa` and `prod` both use) never imports either file, so the developer console
+isn't reachable code in either of those processes, whatever `CONSOLE_TOKEN`
 is or isn't set to.
 
 **Building for QA/Production:**
@@ -809,8 +809,8 @@ Each bundles its own entry point (via esbuild, first-party code only --
 `node_modules` stays external, so it must still be installed alongside the
 bundle at runtime) into its own single-file output, then runs
 `scripts/checkDataPlaneBundle.js` against it: a structural check that greps
-the bundled output for admin-only identifiers (`requireAdminAuth`,
-`createAdminApiRouter`, and others) and fails the build if any turn up --
+the bundled output for console-only identifiers (`requireConsoleAuth`,
+`createConsoleApiRouter`, and others) and fails the build if any turn up --
 real proof this separation hasn't quietly regressed, not just a comment
 asserting it holds. Run either with `npm run start:qa` / `npm run
 start:prod`.
@@ -818,10 +818,10 @@ start:prod`.
 **Configuration** works the same way as the full app (`CONFIG_DIR` or the
 legacy `ENDPOINTS_DIR`/`GATEWAYS_FILE`/`AUTH_PROVIDERS_FILE` trio -- see
 "Environment variables" below), except there's no `SETTINGS_FILE`/"Change
-workspace" support: that's the admin console's own feature for a developer
+workspace" support: that's the developer console's own feature for a developer
 switching their local instance between Git checkouts, and doesn't apply to
-a QA/Production instance reading a fixed shared volume. `ADMIN_TOKEN` isn't
-read by either build at all -- there's no admin subsystem here for it to
+a QA/Production instance reading a fixed shared volume. `CONSOLE_TOKEN` isn't
+read by either build at all -- there's no console subsystem here for it to
 gate.
 
 ## Workspace
@@ -838,7 +838,7 @@ A workspace is any folder containing (or that will contain) an `endpoints/`
 subfolder, a `gateways.yaml` file, and an `authProviders.yaml` file --
 exactly this project's own `config/` layout. Point an instance at one:
 
-- **Admin UI** -- click "Change workspace…" in the bar under the header,
+- **Console UI** -- click "Change workspace…" in the bar under the header,
   click "Browse folders…", navigate to your folder, click "Select this folder",
   and save. You can also enter the path directly. The browser lists folders
   on the machine running Naimix; native browser pickers don't expose the
@@ -894,13 +894,13 @@ See `.env.example`. The important ones:
 | Variable            | Purpose                                             |
 |----------------------|------------------------------------------------------|
 | `PORT`               | Port the middleware listens on (default `4000`)     |
-| `CONFIG_DIR`         | Folder containing both `endpoints/` and `gateways.yaml` (see "Workspace" above). Overridden by a workspace chosen through the admin UI, once one has been saved. |
+| `CONFIG_DIR`         | Folder containing both `endpoints/` and `gateways.yaml` (see "Workspace" above). Overridden by a workspace chosen through the console UI, once one has been saved. |
 | `ENDPOINTS_DIR`       | Directory of endpoint config files (default `config/endpoints`). Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. |
 | `GATEWAYS_FILE`      | Path to the gateways file (default `config/gateways.yaml`). Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. |
 | `AUTH_PROVIDERS_FILE` | Path to the auth providers file (default `config/authProviders.yaml`). Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. See "Caller authentication" above. |
 | `SETTINGS_FILE`      | Where the UI-chosen workspace is remembered (default `data/settings.json`) -- a per-machine preference file, not meant to be checked into Git. |
 | `LOG_LEVEL`          | `fatal`\|`error`\|`warn`\|`info`\|`debug`\|`trace`  |
-| `ADMIN_TOKEN`        | `dev` target only (`npm run dev`/`npm start`) -- enables the admin UI/API at `/admin` when set; required bearer token for `/admin/api/*`. Unset = admin disabled. Not read at all by the `qa`/`prod` targets (`npm run start:qa`/`start:prod`); see "Deploying to QA/Production" above. |
+| `CONSOLE_TOKEN`        | `dev` target only (`npm run dev`/`npm start`) -- enables the console UI/API at `/console` when set; required bearer token for `/console/api/*`. Unset = console disabled. Not read at all by the `qa`/`prod` targets (`npm run start:qa`/`start:prod`); see "Deploying to QA/Production" above. |
 | `MAX_REQUEST_BODY_SIZE` | Max JSON/urlencoded request body size (default `10mb`; e.g. `500kb`, `1gb`). Raise this if a real payload trips "request entity too large". |
 
 Everything else in `.env.example` (`DEMO_*`) only feeds the bundled demo
@@ -921,18 +921,18 @@ src/
     workspaceSettings.ts    # "which workspace is this instance pointed at" -- see Workspace
     dispatch.ts              # one dynamic handler that serves every configured endpoint (enforces requiresAuth)
     authRoutes.ts            # POST /auth/login/{provider}, POST /auth/logout
-    adminApi.ts, adminAuth.ts  # /admin/api/* REST API + bearer-token auth -- development build ONLY, see below
+    consoleApi.ts, consoleAuth.ts  # /console/api/* REST API + bearer-token auth -- development build ONLY, see below
     secretRedaction.ts       # shared "mask secrets, blank-means-unchanged" helpers (gateways + auth providers)
     coreApp.ts               # shared by all three targets below: cors/body-parsing, healthz/__endpoints, /auth, the dispatcher
-    app.ts, index.ts         # FULL app (admin + data plane) -- the `dev` target, see "Deploying to QA/Production"
-    dataPlaneApp.ts, dataPlaneServer.ts  # DATA-PLANE-ONLY app + shared startup logic -- never imports adminApi.ts/adminAuth.ts
+    app.ts, index.ts         # FULL app (console + data plane) -- the `dev` target, see "Deploying to QA/Production"
+    dataPlaneApp.ts, dataPlaneServer.ts  # DATA-PLANE-ONLY app + shared startup logic -- never imports consoleApi.ts/consoleAuth.ts
     qaIndex.ts, prodIndex.ts  # thin `qa`/`prod` entry points, both calling dataPlaneServer.ts -- kept separate so they can diverge later
     paramExtractor.ts, errors.ts, logger.ts
   mock-backend/ # standalone demo backend (JSON+XML+SOAP+SQLite) used by dev & tests
   types/        # shared TypeScript types
-public/admin/   # the admin UI (static HTML/CSS/JS, no build step) -- development build only
+public/console/   # the console UI (static HTML/CSS/JS, no build step) -- development build only
 scripts/
-  checkDataPlaneBundle.js  # fails `npm run build:qa`/`build:prod` if admin code leaks into either bundle
+  checkDataPlaneBundle.js  # fails `npm run build:qa`/`build:prod` if console code leaks into either bundle
 config/
   endpoints/*.yaml       # one file per endpoint
   gateways.yaml    # named backend gateways
@@ -977,9 +977,9 @@ test/           # vitest + supertest test suite
   `client.setEndpoint()` per request; if you truly need multiple concurrent
   endpoints behind the *same* WSDL URL, split them into separate WSDL
   URLs/gateways.
-- The admin API's single `ADMIN_TOKEN` is one shared secret, not per-user
+- The console API's single `CONSOLE_TOKEN` is one shared secret, not per-user
   accounts/roles -- fine for a small team or personal use; a real
-  multi-user deployment would want proper auth in front of `/admin`.
+  multi-user deployment would want proper auth in front of `/console`.
 - Generated CRUD endpoints' `list` filters are exact-match only (no ranges,
   `OR`, or `LIKE`), and bulk update/delete target rows strictly by primary
   key (see "Auto-generated CRUD + stored-procedure endpoints"). The

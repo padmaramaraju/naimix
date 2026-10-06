@@ -49,7 +49,7 @@ export class AuthProvidersRegistry {
     this.raw = loadAuthProvidersRaw(this.filePath);
   }
 
-  /** Raw (unsubstituted) providers, as edited/persisted -- for a future admin UI. */
+  /** Raw (unsubstituted) providers, as edited/persisted -- for a future console UI. */
   listRaw(): AuthProvidersFileParsed["authProviders"] {
     return this.raw.authProviders;
   }
@@ -93,7 +93,7 @@ export class AuthProvidersRegistry {
 
   /**
    * Attempts a real login against a provider's config -- either an already-
-   * saved one (`name` given) or a draft still being edited in the admin UI
+   * saved one (`name` given) or a draft still being edited in the console UI
    * (`name` omitted) -- without creating a session, so it's safe to use
    * while iterating on a provider's settings. The auth-provider counterpart
    * to GatewaysRegistry.testConnection(): `name` (optional) lets an
@@ -102,7 +102,7 @@ export class AuthProvidersRegistry {
    * blank, same as saving would.
    *
    * A malformed config (missing/invalid fields) is allowed to throw --
-   * adminApi.ts's existing zod-error middleware turns that into the same
+   * consoleApi.ts's existing zod-error middleware turns that into the same
    * 400 response saving would give. Only a real login attempt failing (bad
    * credentials, an unreachable directory/server, a rejected search) comes
    * back as `{ ok: false, message }` for the UI to show inline, and the

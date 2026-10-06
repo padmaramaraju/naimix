@@ -13,7 +13,7 @@ export interface SessionStore {
   set(token: string, record: SessionRecord): Promise<void>;
   delete(token: string): Promise<void>;
   /** Every currently-held session, token included -- used only by
-   * AuthService's admin-facing session listing/revocation (see
+   * AuthService's console-facing session listing/revocation (see
    * listSessions()/revokeSession() in authService.ts), which derives a
    * non-reversible id from each token rather than ever handing the real
    * token back out. A future Redis-backed store implements this with a

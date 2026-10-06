@@ -9,25 +9,25 @@ import { logger } from "./logger";
 import { loadWorkspaceSettings, resolveConfigDir } from "./workspaceSettings";
 
 const PORT = Number(process.env.PORT ?? 4000);
-const ADMIN_UI_DIR = path.resolve(process.cwd(), "public/admin");
+const CONSOLE_UI_DIR = path.resolve(process.cwd(), "public/console");
 const SETTINGS_FILE = path.resolve(process.cwd(), process.env.SETTINGS_FILE ?? "data/settings.json");
 
 /**
  * Resolves where endpoints/gateways load from at startup, in priority
  * order:
- *  1. A workspace the admin UI previously saved via "Change workspace"
+ *  1. A workspace the console UI previously saved via "Change workspace"
  *     (persisted in SETTINGS_FILE -- see workspaceSettings.ts). This is
  *     what makes the choice survive a restart, which is the whole point of
  *     each user running their own instance against their own Git checkout.
- *     The persisted value is resolved against process.cwd() -- the admin
- *     UI always saves an absolute path (see adminApi.ts's PUT handler), but
+ *     The persisted value is resolved against process.cwd() -- the console
+ *     UI always saves an absolute path (see consoleApi.ts's PUT handler), but
  *     a relative one (e.g. hand-set to "config" to point at this project's
  *     own bundled config/ folder, keeping the whole checkout self-contained
  *     and portable) resolves correctly too rather than only working by
  *     accident of whatever path.join happens to produce.
  *  2. CONFIG_DIR env var, if set -- same "one folder holds both endpoints/
  *     and gateways.yaml" convention, useful for scripting/CI or a first run
- *     before anyone's used the admin UI.
+ *     before anyone's used the console UI.
  *  3. Legacy ENDPOINTS_DIR/GATEWAYS_FILE env vars, independently (each
  *     defaulting to the project's own config/endpoints and
  *     config/gateways.yaml) -- unchanged pre-workspace-feature behavior,
@@ -77,7 +77,7 @@ function main() {
     gatewaysRegistry,
     authProvidersRegistry,
     logger,
-    adminUiDir: ADMIN_UI_DIR,
+    consoleUiDir: CONSOLE_UI_DIR,
     workspace,
     settingsFile: SETTINGS_FILE,
   });
@@ -89,10 +89,10 @@ function main() {
       logger.info(`Workspace: ${configDir}`);
     }
     logger.info(`GET /__endpoints for a live list, GET /healthz for status`);
-    if (process.env.ADMIN_TOKEN) {
-      logger.info(`Admin UI: http://localhost:${PORT}/admin`);
+    if (process.env.CONSOLE_TOKEN) {
+      logger.info(`Console UI: http://localhost:${PORT}/console`);
     } else {
-      logger.warn("ADMIN_TOKEN is not set -- the admin UI/API is disabled. Set it in .env to enable it.");
+      logger.warn("CONSOLE_TOKEN is not set -- the console UI/API is disabled. Set it in .env to enable it.");
     }
   });
 

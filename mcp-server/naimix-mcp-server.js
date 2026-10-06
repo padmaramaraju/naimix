@@ -13,7 +13,7 @@
  * this process) and it re-discovers the current shape.
  *
  * IMPORTANT: this only works against a naimix `dev` build. QA and
- * Production builds do not expose /admin/api/* at all (by design -- see
+ * Production builds do not expose /console/api/* at all (by design -- see
  * DEPLOYMENT_ARCHITECTURE_NOTES.md in the naimix repo), so there is nothing
  * for this script to discover from there. Point NAIMIX_BASE_URL at a `dev`
  * instance.
@@ -23,20 +23,20 @@
  *
  * Configuration (environment variables):
  *   NAIMIX_BASE_URL     Required. e.g. http://localhost:3000
- *   NAIMIX_ADMIN_TOKEN  Required. The same value as this naimix instance's
- *                        own ADMIN_TOKEN env var (i.e. what you'd type into
- *                        the admin UI's login screen). Used ONLY to
+ *   NAIMIX_CONSOLE_TOKEN  Required. The same value as this naimix instance's
+ *                        own CONSOLE_TOKEN env var (i.e. what you'd type into
+ *                        the console UI's login screen). Used ONLY to
  *                        discover the workspace's endpoints/gateways/auth
- *                        providers at startup (GET /admin/api/*) -- every
+ *                        providers at startup (GET /console/api/*) -- every
  *                        actual tool call this server makes on your behalf
  *                        goes to the normal caller-facing routes
  *                        (/auth/login/*, /auth/logout, and each endpoint's
- *                        real path), never back through the admin API.
+ *                        real path), never back through the console API.
  *
- * Security note: NAIMIX_ADMIN_TOKEN grants full admin access to whatever
- * naimix instance NAIMIX_BASE_URL points at (the same access the admin UI
+ * Security note: NAIMIX_CONSOLE_TOKEN grants full console access to whatever
+ * naimix instance NAIMIX_BASE_URL points at (the same access the console UI
  * has). Treat this file plus that token together as a credential -- don't
- * share them, and don't point this at a naimix instance whose admin token
+ * share them, and don't point this at a naimix instance whose console token
  * you wouldn't otherwise hand out.
  *
  * Using this with Claude Desktop or Claude Code: add an entry like this to
@@ -49,7 +49,7 @@
  *         "args": ["/absolute/path/to/naimix-mcp-server.js"],
  *         "env": {
  *           "NAIMIX_BASE_URL": "http://localhost:3000",
- *           "NAIMIX_ADMIN_TOKEN": "paste-your-admin-token-here"
+ *           "NAIMIX_CONSOLE_TOKEN": "paste-your-console-token-here"
  *         }
  *       }
  *     }
@@ -64,37 +64,37 @@
 const readline = require('node:readline');
 
 const BASE_URL = (process.env.NAIMIX_BASE_URL || '').replace(/\/+$/, '');
-const ADMIN_TOKEN = process.env.NAIMIX_ADMIN_TOKEN || '';
+const CONSOLE_TOKEN = process.env.NAIMIX_CONSOLE_TOKEN || '';
 
 if (!BASE_URL) {
   process.stderr.write('[naimix-mcp] NAIMIX_BASE_URL is required (e.g. http://localhost:3000)\n');
   process.exit(1);
 }
-if (!ADMIN_TOKEN) {
-  process.stderr.write('[naimix-mcp] NAIMIX_ADMIN_TOKEN is required (your naimix instance\'s ADMIN_TOKEN value)\n');
+if (!CONSOLE_TOKEN) {
+  process.stderr.write('[naimix-mcp] NAIMIX_CONSOLE_TOKEN is required (your naimix instance\'s CONSOLE_TOKEN value)\n');
   process.exit(1);
 }
 
 /* -----------------------------------------------------------------------
- * Workspace discovery (admin API -- read-only, only called at startup)
+ * Workspace discovery (console API -- read-only, only called at startup)
  * --------------------------------------------------------------------- */
 
-async function adminFetch(path) {
-  const res = await fetch(`${BASE_URL}/admin/api${path}`, {
-    headers: { Authorization: `Bearer ${ADMIN_TOKEN}` },
+async function consoleFetch(path) {
+  const res = await fetch(`${BASE_URL}/console/api${path}`, {
+    headers: { Authorization: `Bearer ${CONSOLE_TOKEN}` },
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    throw new Error(`GET /admin/api${path} -> ${res.status}: ${body || res.statusText}`);
+    throw new Error(`GET /console/api${path} -> ${res.status}: ${body || res.statusText}`);
   }
   return res.json();
 }
 
 async function loadWorkspace() {
   const [endpoints, gateways, authProviders] = await Promise.all([
-    adminFetch('/endpoints'),
-    adminFetch('/gateways'),
-    adminFetch('/auth-providers'),
+    consoleFetch('/endpoints'),
+    consoleFetch('/gateways'),
+    consoleFetch('/auth-providers'),
   ]);
   return { endpoints, gateways, authProviders };
 }

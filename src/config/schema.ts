@@ -141,6 +141,13 @@ export type EndpointConfigParsed = z.infer<typeof endpointConfigSchema>;
 // any other gateway field. An endpoint's own `input` param of the same
 // name wins if both are present (see connectors/index.ts).
 const commonParamsField = { commonParams: z.record(z.string()).optional() };
+// Names of commonParams entries to mask in the console UI/API. Masking a
+// gateway's commonParams is opt-in per entry, set explicitly by the person
+// configuring the gateway -- never inferred from a key's name (a
+// commonParams entry named "apiKey" is not automatically treated as a
+// secret). See secretRedaction.ts's redactSelected/mergeSelectedUnchanged
+// and GatewaysRegistry.listRedacted()/upsert().
+const commonParamsMaskedField = { commonParamsMasked: z.array(z.string()).optional() };
 // Name of an authProviders entry this gateway requires a caller session for
 // -- see the matching note on GatewayConfig in src/types/config.ts and
 // AUTH_DESIGN_NOTES.md.
@@ -151,6 +158,7 @@ const jsonGatewaySchema = z.object({
   baseUrl: z.string().min(1, "baseUrl is required"),
   headers: z.record(z.string()).optional(),
   ...commonParamsField,
+  ...commonParamsMaskedField,
   ...requiresAuthField,
 });
 
@@ -159,6 +167,7 @@ const xmlGatewaySchema = z.object({
   baseUrl: z.string().min(1, "baseUrl is required"),
   headers: z.record(z.string()).optional(),
   ...commonParamsField,
+  ...commonParamsMaskedField,
   ...requiresAuthField,
 });
 
@@ -166,6 +175,7 @@ const soapGatewaySchema = z.object({
   kind: z.literal("soap").optional(),
   wsdl: z.string().min(1, "wsdl is required"),
   ...commonParamsField,
+  ...commonParamsMaskedField,
   ...requiresAuthField,
 });
 
@@ -181,6 +191,7 @@ const sqlGatewaySchema = z.object({
   useNullAsDefault: z.boolean().optional(),
   pool: z.record(z.unknown()).optional(),
   ...commonParamsField,
+  ...commonParamsMaskedField,
   ...requiresAuthField,
 });
 

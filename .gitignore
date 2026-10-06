@@ -7,3 +7,4 @@ setup.sh
 /dist
 /dist-qa
 /dist-prod
+package-lock.json

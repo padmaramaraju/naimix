@@ -12,7 +12,7 @@ import { substituteEnv } from "../config/envSubst";
 import { testSqlConnection } from "../connectors/sql";
 import type { SqlGatewayConfig, GatewayConfig } from "../types/config";
 import { ValidationError } from "./errors";
-import { redact, mergeUnchangedSecrets } from "./secretRedaction";
+import { redact, mergeUnchangedSecrets, redactSelected, mergeSelectedUnchanged } from "./secretRedaction";
 
 /**
  * Parses a gateway config, translating a failure into a clear,
@@ -20,7 +20,7 @@ import { redact, mergeUnchangedSecrets } from "./secretRedaction";
  * throw. `gatewayConfigSchema` is a plain z.union (not discriminated --
  * `kind` is optional on 3 of its 4 branches), so a naive `parse()` failure
  * surfaces as one opaque top-level "Invalid input" issue with an empty
- * `path`, which the admin UI has nothing to attribute to a specific field.
+ * `path`, which the console UI has nothing to attribute to a specific field.
  * This picks out the branch matching the submitted `kind` (the one whose
  * issues don't include a `kind` mismatch) and reports its field errors.
  */
@@ -45,7 +45,7 @@ function parseGatewayConfig(input: unknown): GatewayConfig {
  * Holds the current set of named backend gateways in memory, backed by
  * gateways.yaml on disk. Unlike the one-shot loader used at startup, this
  * keeps the RAW (pre-${env.X}-substitution) config around too, so the
- * admin UI can show/preserve "this field references an environment
+ * console UI can show/preserve "this field references an environment
  * variable" instead of a resolved secret, and so editing one gateway
  * doesn't require re-typing every other one.
  */
@@ -64,7 +64,7 @@ export class GatewaysRegistry {
 
   /**
    * Repoints this registry at a different gateways.yaml and reloads it
-   * immediately -- the gateways-side half of the admin UI's "Change
+   * immediately -- the gateways-side half of the console UI's "Change
    * folder" feature (see workspaceSettings.ts and EndpointRegistry.setDir()).
    */
   setFilePath(filePath: string): void {
@@ -76,7 +76,7 @@ export class GatewaysRegistry {
     this.raw = loadGatewaysRaw(this.filePath);
   }
 
-  /** Raw (unsubstituted) gateways, as edited/persisted -- for the admin UI. */
+  /** Raw (unsubstituted) gateways, as edited/persisted -- for the console UI. */
   listRaw(): GatewaysFileParsed["gateways"] {
     return this.raw.gateways;
   }
@@ -85,11 +85,21 @@ export class GatewaysRegistry {
     return this.raw.gateways[name];
   }
 
-  /** Same shape, with sensitive-looking literal fields masked for display. */
+  /** Same shape, with sensitive-looking literal fields masked for
+   * display, plus any commonParams entries the gateway's own
+   * commonParamsMasked list opts into masking (never inferred from an
+   * entry's name -- see secretRedaction.ts's redactSelected). */
   listRedacted(): GatewaysFileParsed["gateways"] {
     const out: GatewaysFileParsed["gateways"] = {};
     for (const [name, gw] of Object.entries(this.raw.gateways)) {
-      out[name] = redact(gw) as (typeof this.raw.gateways)[string];
+      const redacted = redact(gw) as (typeof this.raw.gateways)[string] & {
+        commonParams?: Record<string, string>;
+        commonParamsMasked?: string[];
+      };
+      if (redacted.commonParams) {
+        redacted.commonParams = redactSelected(redacted.commonParams, redacted.commonParamsMasked);
+      }
+      out[name] = redacted;
     }
     return out;
   }
@@ -109,8 +119,25 @@ export class GatewaysRegistry {
     if (!name || !/^[A-Za-z0-9_-]+$/.test(name)) {
       throw new ValidationError("Gateway name must contain only letters, digits, _ or -");
     }
-    const existing = this.raw.gateways[name];
-    const merged = mergeUnchangedSecrets(input, existing);
+    const existing = this.raw.gateways[name] as
+      | (GatewayConfig & { commonParams?: Record<string, string>; commonParamsMasked?: string[] })
+      | undefined;
+    const merged = mergeUnchangedSecrets(input, existing) as GatewayConfig & {
+      commonParams?: Record<string, string>;
+      commonParamsMasked?: string[];
+    };
+    // commonParams masking is opt-in per entry (commonParamsMasked), not
+    // name-pattern-based, so it needs its own "blank means unchanged"
+    // merge pass -- mergeUnchangedSecrets() above deliberately leaves
+    // commonParams alone (see secretRedaction.ts's
+    // NON_SENSITIVE_CONTAINER_KEYS). Falls back to the previously stored
+    // masked-entry list when the submitted config doesn't include one, so
+    // a save that doesn't touch the "Mask" checkboxes doesn't silently
+    // un-mask anything.
+    if (merged.commonParams) {
+      const maskedKeys = merged.commonParamsMasked ?? existing?.commonParamsMasked;
+      merged.commonParams = mergeSelectedUnchanged(merged.commonParams, existing?.commonParams, maskedKeys);
+    }
     const parsed = parseGatewayConfig(merged);
 
     this.raw = { gateways: { ...this.raw.gateways, [name]: parsed } };

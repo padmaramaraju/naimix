@@ -28,7 +28,7 @@ import { resolveConfigDir } from "./workspaceSettings";
  *
  * Config resolution is deliberately simpler than index.ts's (the
  * development entry point): no SETTINGS_FILE / "persisted workspace"
- * support, because that's the admin console's own "Change workspace"
+ * support, because that's the developer console's own "Change workspace"
  * feature remembering a developer's choice across restarts of their own
  * local instance -- meaningless (and absent on purpose) here. A QA/
  * Production instance reads from wherever CONFIG_DIR (or the legacy
@@ -82,7 +82,7 @@ export function startDataPlaneServer(environment: DataPlaneEnvironment): void {
       logger.info(`Workspace: ${configDir}`);
     }
     logger.info(`GET /__endpoints for a live list, GET /healthz for status`);
-    logger.info("Admin console is not present in this build -- see DEPLOYMENT_ARCHITECTURE_NOTES.md.");
+    logger.info("Developer console is not present in this build -- see DEPLOYMENT_ARCHITECTURE_NOTES.md.");
   });
 
   const shutdown = async (signal: string) => {

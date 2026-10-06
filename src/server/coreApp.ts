@@ -10,21 +10,21 @@ import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 import type { Logger } from "./logger";
 
 /**
- * Everything BOTH the full (admin + data-plane, development-only) app and
+ * Everything BOTH the full (console + data-plane, development-only) app and
  * the data-plane-only (QA/Production) app need -- and, just as
- * importantly, nothing else. This module has no knowledge of the admin
- * console at all: it does not import adminApi.ts or adminAuth.ts, and
+ * importantly, nothing else. This module has no knowledge of the developer
+ * console at all: it does not import consoleApi.ts or consoleAuth.ts, and
  * never will. That's not a style preference -- it's what makes the
  * data-plane builds (QA via qaIndex.ts, Production via prodIndex.ts, both
  * through dataPlaneApp.ts/dataPlaneServer.ts) structurally unable to
- * expose the admin API, rather than merely not calling it. See
+ * expose the console API, rather than merely not calling it. See
  * "Installation: how development differs from QA/Production" in
  * DEPLOYMENT_ARCHITECTURE_NOTES.md.
  *
  * app.ts (the full/development app) builds on top of createBaseApp() by
- * mounting the admin UI/API in between mountDataPlaneRoutes() and
+ * mounting the console UI/API in between mountDataPlaneRoutes() and
  * mountTerminalHandlers() -- see its own comments for why that middle slot
- * is where admin routes have to go. dataPlaneApp.ts calls createBaseApp(),
+ * is where console routes have to go. dataPlaneApp.ts calls createBaseApp(),
  * then mountDataPlaneRoutes(), then mountTerminalHandlers(), with nothing
  * in between.
  */
@@ -86,30 +86,30 @@ export function createBaseApp({ endpointRegistry, gatewaysRegistry, authProvider
 }
 
 /**
- * Mounts the caller-facing (never admin-facing) surface: /auth login/
+ * Mounts the caller-facing (never console-facing) surface: /auth login/
  * logout, and the dynamic dispatcher that serves every configured
  * endpoint. This is what a caller/API-consumer actually talks to in every
- * environment, dev or QA/Production alike -- unlike the admin UI/API,
+ * environment, dev or QA/Production alike -- unlike the console UI/API,
  * which only the full/dev app ever mounts.
  */
 export function mountDataPlaneRoutes(
   app: Express,
   { endpointRegistry, gatewaysRegistry, authService, logger }: { endpointRegistry: EndpointRegistry; gatewaysRegistry: GatewaysRegistry; authService: AuthService; logger: Logger }
 ): void {
-  // Caller-facing login/logout -- a different audience from /admin/api
+  // Caller-facing login/logout -- a different audience from /console/api
   // (whoever configures this instance) and from the business endpoints
   // below. See AUTH_DESIGN_NOTES.md.
   app.use("/auth", createAuthRouter(authService, logger));
 
   // Every configured endpoint is served by one dynamic handler that reads the
   // registry fresh per request (see dispatch.ts) -- this is what lets
-  // endpoints created/edited via the admin API go live without a restart.
+  // endpoints created/edited via the console API go live without a restart.
   app.use(createDynamicDispatcher(endpointRegistry, gatewaysRegistry, authService, logger));
 }
 
 /**
  * The 404 + centralized error handler. Must be mounted dead last, after
- * every other route (core, and in the full/dev app, admin too) -- an
+ * every other route (core, and in the full/dev app, console too) -- an
  * Express error/fallback handler only catches what nothing before it
  * matched or threw past.
  */

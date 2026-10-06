@@ -2,18 +2,18 @@ import crypto from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 
 /**
- * Gates every /admin/api/* request behind a shared bearer token set via the
- * ADMIN_TOKEN environment variable. The admin UI/API can configure endpoints
+ * Gates every /console/api/* request behind a shared bearer token set via the
+ * CONSOLE_TOKEN environment variable. The console UI/API can configure endpoints
  * that call arbitrary backend URLs and SQL queries, so this is deliberately
- * required rather than optional: if ADMIN_TOKEN isn't set, the admin API is
+ * required rather than optional: if CONSOLE_TOKEN isn't set, the console API is
  * disabled outright instead of silently running unauthenticated.
  */
-export function requireAdminAuth(req: Request, res: Response, next: NextFunction): void {
-  const token = process.env.ADMIN_TOKEN;
+export function requireConsoleAuth(req: Request, res: Response, next: NextFunction): void {
+  const token = process.env.CONSOLE_TOKEN;
   if (!token) {
     res.status(503).json({
-      error: "AdminDisabled",
-      message: "The admin API is disabled. Set ADMIN_TOKEN in your environment to enable it.",
+      error: "ConsoleDisabled",
+      message: "The console API is disabled. Set CONSOLE_TOKEN in your environment to enable it.",
     });
     return;
   }
@@ -26,7 +26,7 @@ export function requireAdminAuth(req: Request, res: Response, next: NextFunction
   const ok = providedBuf.length === tokenBuf.length && crypto.timingSafeEqual(providedBuf, tokenBuf);
 
   if (!ok) {
-    res.status(401).json({ error: "Unauthorized", message: "Missing or invalid admin token." });
+    res.status(401).json({ error: "Unauthorized", message: "Missing or invalid console token." });
     return;
   }
 

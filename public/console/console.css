@@ -331,6 +331,16 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
 .repeatable-row .checkbox-field { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 6px; padding-top: 18px; }
 .repeatable-row .remove-btn { flex: 0 0 auto; margin-top: 18px; }
 
+/* Show/hide toggle anchored to the right edge of its own field, inside
+   the input's visual bounds -- the common password-reveal placement,
+   instead of a separate control living beside the field. */
+.field-with-reveal { position: relative; display: flex; }
+.field-with-reveal input { flex: 1; min-width: 0; padding-right: 34px; }
+.field-with-reveal .field-reveal-btn {
+  position: absolute; right: 2px; top: 50%; transform: translateY(-50%);
+  padding: 2px 6px; font-size: 14px; line-height: 1;
+}
+
 .test-actions { display: flex; gap: 8px; margin: 10px 0; }
 .test-results { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .code-block {
@@ -378,7 +388,7 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
 /* ------------------------------------------------------------------
  * Field info icons -- a small "i" next to a label that pops up a short
  * explanation of what the field is for. One popup element is reused for
- * all of them (see admin.js), positioned next to whichever icon was
+ * all of them (see console.js), positioned next to whichever icon was
  * clicked.
  * ------------------------------------------------------------------ */
 .info-icon {
@@ -400,7 +410,7 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
  * Gateway quick-view -- the "View gateway" button next to the Backend
  * tab's Gateway select opens the same shared popup, but with a wider,
  * structured rendering of the gateway's actual definition instead of a
- * plain sentence of help text (see admin.js buildGatewayPreview()).
+ * plain sentence of help text (see console.js buildGatewayPreview()).
  * ------------------------------------------------------------------ */
 .gateway-select-row { display: flex; gap: 8px; align-items: center; }
 .gateway-select-row select { flex: 1; min-width: 0; }

@@ -6,7 +6,7 @@ self-contained — a developer picking up this codebase should be able to work f
 without also needing `README.md` open.
 
 `README.md` is the companion document and covers the same ground from a different angle: it's the
-*user-facing* guide (install it, configure an endpoint, run the admin UI) aimed at someone operating the
+*user-facing* guide (install it, configure an endpoint, run the console UI) aimed at someone operating the
 middleware. This file is aimed at someone *modifying* it — the actual module boundaries, request flow,
 data structures, and the reasoning behind non-obvious decisions.
 
@@ -34,7 +34,7 @@ reflected here yet, that's a bug in the process — fix the doc in the same pass
    - [SQL connector](#sql-connector)
 6. [Auto-generated CRUD + stored-procedure endpoints](#auto-generated-crud--stored-procedure-endpoints)
 7. [Output mapping engine](#output-mapping-engine)
-8. [Admin UI and Admin API](#admin-ui-and-admin-api)
+8. [Console UI and Console API](#developer-console)
    - [Export: OpenAPI spec + MCP server](#export-openapi-spec--mcp-server)
 9. [Environment variables reference](#environment-variables-reference)
 10. [Testing strategy](#testing-strategy)
@@ -56,18 +56,18 @@ Design principles that show up repeatedly in the codebase:
 - **Config over code.** Adding an endpoint means writing an endpoint file, not writing a request handler.
   This is why the schema (`src/config/schema.ts`) is the real API surface of the project — the code
   underneath is generic machinery that interprets it.
-- **Hot reload, always.** Every mutation made through the admin API (create/edit/delete an endpoint or
+- **Hot reload, always.** Every mutation made through the console API (create/edit/delete an endpoint or
   gateway) takes effect on the very next HTTP request, no restart. This shaped the server's
   architecture from the start: endpoints are matched by one dynamic dispatcher reading an in-memory
   table, not by registering individual Express handlers at startup.
 - **One backend abstraction, five SQL dialects.** The SQL connector uses `knex` as a dialect-agnostic
   query builder so the same endpoint config shape (and the same generated-CRUD feature) works whether the
   underlying database is Postgres, MySQL, SQL Server, or SQLite.
-- **Fail loud, fail specific.** Zod schemas validate every config file and every admin API request
-  body; validation errors carry a field path so the admin UI (and a developer editing YAML by hand)
+- **Fail loud, fail specific.** Zod schemas validate every config file and every console API request
+  body; validation errors carry a field path so the console UI (and a developer editing YAML by hand)
   gets a precise, actionable message instead of "invalid input".
-- **Everything the admin UI can do, `curl` can do too.** The admin UI is a thin browser client over
-  `/admin/api/*` — there's no functionality that exists only in the UI and not the API.
+- **Everything the console UI can do, `curl` can do too.** The console UI is a thin browser client over
+  `/console/api/*` — there's no functionality that exists only in the UI and not the API.
 
 ## Project structure
 
@@ -114,7 +114,7 @@ src/
     index.ts          Process entry point: resolves which workspace to start from (persisted
                        setting > CONFIG_DIR > legacy ENDPOINTS_DIR/GATEWAYS_FILE), builds the
                        registries, builds the Express app, listens, handles graceful shutdown.
-    app.ts            Builds the Express app: static admin UI, admin API (behind auth), the dynamic
+    app.ts            Builds the Express app: static console UI, console API (behind auth), the dynamic
                        endpoint dispatcher, 404 handler, centralized error handler.
     dispatch.ts       The single Express middleware that serves every configured endpoint.
     endpointRegistry.ts  In-memory table of endpoint configs, backed by files under a (mutable, repointable)
@@ -130,14 +130,14 @@ src/
                        "mask secrets, blank field on edit means unchanged" requirement).
     workspaceSettings.ts  "Which workspace is this instance pointed at" -- resolves a folder into
                        {endpointsDir, gatewaysFile, authProvidersFile}, and persists/reads the
-                       admin-UI-chosen workspace to/from a local settings file so it survives a
+                       console-UI-chosen workspace to/from a local settings file so it survives a
                        restart. See Workspace.
     crudGenerator.ts  Generates table-CRUD + stored-procedure endpoints for a SQL gateway.
     paramExtractor.ts Extracts+validates an endpoint's declared `input` params from an incoming request.
     authRoutes.ts     POST /auth/login/{provider}, POST /auth/logout -- caller-facing, separate from
-                       both /admin/api/* and the business dispatcher. See [Caller authentication](#caller-authentication).
-    adminApi.ts       The /admin/api/* REST API.
-    adminAuth.ts      Bearer-token auth gate in front of the admin API.
+                       both /console/api/* and the business dispatcher. See [Caller authentication](#caller-authentication).
+    consoleApi.ts       The /console/api/* REST API.
+    consoleAuth.ts      Bearer-token auth gate in front of the console API.
     errors.ts         ValidationError (400) / BackendError (502 by default) / AuthError (401) error classes.
     logger.ts         pino logger setup.
   mock-backend/
@@ -148,13 +148,13 @@ src/
                        SQL backend example and for CRUD-generation test coverage.
     customerService.wsdl  Hand-written WSDL for the mock SOAP service.
 
-public/admin/         The admin UI: plain HTML/CSS/JS, no build step, served via express.static.
+public/console/         The console UI: plain HTML/CSS/JS, no build step, served via express.static.
   index.html          Markup: login screen, Endpoints/Gateways tabs, endpoint editor drawer, gateway
                        editor drawer.
-  admin.js            All client-side logic (~950 lines): API calls, the endpoints folder-tree renderer,
+  console.js            All client-side logic (~950 lines): API calls, the endpoints folder-tree renderer,
                        the endpoint/gateway editors, key-value editors, path auto-generation, the
                        "Try it" test panel.
-  admin.css           Styling, incl. light/dark via prefers-color-scheme.
+  console.css           Styling, incl. light/dark via prefers-color-scheme.
 
 config/
   endpoints/             One YAML file per endpoint, nested into folders mirroring each endpoint's own path
@@ -164,7 +164,7 @@ config/
 
 test/
   middleware.test.ts  Integration tests: every backend type end-to-end against the mock backend, the
-                       full admin API (endpoint/gateway CRUD, test endpoints, connection pooling
+                       full console API (endpoint/gateway CRUD, test endpoints, connection pooling
                        edge cases, CRUD generation, folder-layout behavior).
   mapper.test.ts      Unit tests for the output-mapping engine.
   paramExtractor.test.ts  Unit tests for input-param extraction/coercion/validation.
@@ -172,10 +172,10 @@ test/
 
 ## Request lifecycle
 
-For a live (non-admin) request, e.g. `GET /api/json/customers/1`:
+For a live (non-console) request, e.g. `GET /api/json/customers/1`:
 
 1. **`app.ts`** has already registered, in order: `express.json()`/`express.urlencoded()` body
-   parsing, `/healthz`, `/__endpoints`, `express.static` for `/admin`, the auth-gated `/admin/api`
+   parsing, `/healthz`, `/__endpoints`, `express.static` for `/console`, the auth-gated `/console/api`
    router, and finally `createDynamicDispatcher(...)` as a catch-all middleware.
 2. **`dispatch.ts`**'s dispatcher runs `endpointRegistry.match(req.method, req.path)`. `EndpointRegistry`
    holds every loaded endpoint wrapped with a `path-to-regexp` matcher; the first endpoint whose method and
@@ -200,8 +200,8 @@ For a live (non-admin) request, e.g. `GET /api/json/customers/1`:
    `app.ts`'s centralized error handler, which logs it (`warn` for 4xx, `error` for 5xx) and responds
    with `{ error, message, backendBody? }`.
 
-For an `/admin/api/*` request, the flow is the same Express app but a different router
-(`adminApi.ts`), gated by `adminAuth.ts`'s bearer-token check, and acting directly on the
+For an `/console/api/*` request, the flow is the same Express app but a different router
+(`consoleApi.ts`), gated by `consoleAuth.ts`'s bearer-token check, and acting directly on the
 `EndpointRegistry`/`GatewaysRegistry` in memory (which is what makes changes take effect immediately —
 there's no separate "reload" step required, though one exists for picking up hand-edited files).
 
@@ -212,7 +212,7 @@ there's no separate "reload" step required, though one exists for picking up han
 Every field below is validated by `endpointConfigSchema` in `src/config/schema.ts`.
 
 ```yaml
-id: get-customer                 # unique id (used in logs, the admin UI, and as part of the filename)
+id: get-customer                 # unique id (used in logs, the console UI, and as part of the filename)
 description: "Optional human-readable description"
 method: GET                      # GET | POST | PUT | PATCH | DELETE
 path: /api/customers/:id         # must start with "/"; Express-style path, supports :params
@@ -318,7 +318,7 @@ from the output entirely rather than written as `null`.
 
 Every field below is validated by `gatewayConfigSchema` (a `z.union`, not a discriminated union —
 `kind` is optional on 3 of its 4 branches, which is why `parseGatewayConfig()` in
-`gatewaysRegistry.ts` exists; see [Admin UI and Admin API](#admin-ui-and-admin-api)).
+`gatewaysRegistry.ts` exists; see [Console UI and Console API](#developer-console)).
 
 ```yaml
 gateways:
@@ -372,8 +372,8 @@ strings/arrays/objects, replacing every match against `process.env`. **Substitut
 config-load time** (not per-request) for anything going through `loadEndpointConfigs()`/`loadGateways()`
 in `loader.ts`. If a referenced variable isn't set, it throws immediately rather than silently
 resolving to `"undefined"` or an empty string — a missing secret fails loud at startup (or at
-`GatewaysRegistry.upsert()`/save time through the admin API) instead of surfacing later as a
-confusing runtime error from whatever backend call needed it. The admin UI's `GatewaysRegistry`
+`GatewaysRegistry.upsert()`/save time through the console API) instead of surfacing later as a
+confusing runtime error from whatever backend call needed it. The console UI's `GatewaysRegistry`
 specifically keeps *both* the raw pre-substitution config and can produce the resolved version on
 demand (`getResolved()`), so editing one field of a gateway never requires re-typing a secret, and
 the UI can show "this references an environment variable" instead of ever displaying (or being able
@@ -386,7 +386,7 @@ be one-shot config loaded at startup:
 
 - **`EndpointRegistry`** (`src/server/endpointRegistry.ts`) — a `Map<id, {config, file, matcher}>` backed by
   the files under its endpoints directory (`getDir()`). `reloadFromDisk()` re-reads everything (used at
-  startup, and by `POST /admin/api/reload`); `upsert()`/`remove()` are what the admin API calls, and
+  startup, and by `POST /console/api/reload`); `upsert()`/`remove()` are what the console API calls, and
   they mutate the in-memory map *and* the file on disk in the same call, so the very next request
   already sees the change. `match(method, path)` is what `dispatch.ts` calls per-request; it iterates
   the map in insertion order and returns the first `path-to-regexp` match. `setDir(endpointsDir)` repoints
@@ -394,18 +394,18 @@ be one-shot config loaded at startup:
   workspace" (see [Workspace](#workspace)).
 - **`GatewaysRegistry`** (`src/server/gatewaysRegistry.ts`) — same idea for a
   `gateways.yaml` (`getFilePath()`), but as a single file with one entry per gateway name rather
-  than one file per endpoint. Keeps the raw (pre-`${env.X}`) config for the admin UI and produces the
+  than one file per endpoint. Keeps the raw (pre-`${env.X}`) config for the console UI and produces the
   resolved version (`getResolved()`) for connectors to actually call with. Also owns secret redaction
-  (see [Admin UI and Admin API](#admin-ui-and-admin-api)). `setFilePath(gatewaysFile)` is the
+  (see [Console UI and Console API](#developer-console)). `setFilePath(gatewaysFile)` is the
   gateways half of "Change folder".
 
-Neither registry needs an explicit "reload" call after an admin API mutation — `upsert()`/`remove()`
-update the in-memory state directly. `POST /admin/api/reload` exists specifically for the case where
-someone hand-edited a file on disk (bypassing the admin API entirely) and wants the running server to
+Neither registry needs an explicit "reload" call after an console API mutation — `upsert()`/`remove()`
+update the in-memory state directly. `POST /console/api/reload` exists specifically for the case where
+someone hand-edited a file on disk (bypassing the console API entirely) and wants the running server to
 pick it up without a restart. Both registries' backing path is mutable at runtime (`endpointsDir`/
 `filePath` are plain instance fields, not `readonly`) specifically so `setDir()`/`setFilePath()` can
 repoint the *same* registry instances — used by every other module that already holds a reference to
-them (`dispatch.ts`, `adminApi.ts`) — at a different folder without reconstructing anything.
+them (`dispatch.ts`, `consoleApi.ts`) — at a different folder without reconstructing anything.
 
 ### Folder layout mirrors each endpoint's path
 
@@ -432,7 +432,7 @@ from that file's directory pruning any folder that's now empty, stopping at the 
 directory or at `ENDPOINTS_DIR` itself (which is never removed). See `cleanupEmptyDirs()` in
 `endpointRegistry.ts`.
 
-The admin UI's Endpoints tab renders the same grouping as a collapsible folder tree (`admin.js`
+The console UI's Endpoints tab renders the same grouping as a collapsible folder tree (`console.js`
 `buildEndpointTree()`/`renderEndpointsTree()`), but deliberately displays the *raw* path segment (`:id`) for
 readability rather than the filesystem's bracket form (`[id]`) — a considered display/storage split:
 the bracket convention is a filesystem-safety concern with no reason to leak into what a human reads,
@@ -459,24 +459,24 @@ contract this doc keeps calling by its real name wherever code is involved.
 **Resolution order at startup** (`resolveStartupPaths()` in `src/server/index.ts`), highest priority
 first:
 
-1. A workspace previously saved through the admin UI, read back via `loadWorkspaceSettings(SETTINGS_FILE)`
+1. A workspace previously saved through the console UI, read back via `loadWorkspaceSettings(SETTINGS_FILE)`
    — `SETTINGS_FILE` defaults to `data/settings.json`, resolved relative to `process.cwd()`. This file
    deliberately lives *outside* any workspace (since the whole point is that the workspace can
    be swapped for an entirely different Git checkout) and is not meant to be committed to Git — it is a
    per-machine preference, not shared project config (see `.gitignore`). The persisted `configDir` is
    resolved with `path.resolve(process.cwd(), persisted.configDir)` before use — a no-op for the absolute
-   path the admin UI always saves (see step 2 below), but it also makes a **relative** value in a
+   path the console UI always saves (see step 2 below), but it also makes a **relative** value in a
    hand-edited `settings.json` resolve correctly (e.g. `"configDir": "config"` to point at this project's
    own bundled `config/` folder — see the note on packing a real workspace in as the project's own
    default, below), rather than that only working by accident of what `path.join` happens to produce.
 2. `CONFIG_DIR` env var, if set — same one-folder-holds-both convention, useful for a first run or
-   scripted/CI setup before anyone's touched the admin UI.
+   scripted/CI setup before anyone's touched the console UI.
 3. Legacy `ENDPOINTS_DIR`/`GATEWAYS_FILE` env vars, resolved independently (each defaulting to this
    project's own `config/endpoints`/`config/gateways.yaml`) — the pre-workspace-feature behavior,
    unchanged, for anyone who wants endpoints and gateways stored in unrelated locations rather than one
    shared workspace.
 
-**Switching workspaces at runtime** — `PUT /admin/api/settings` (`{configDir}`) in `adminApi.ts`:
+**Switching workspaces at runtime** — `PUT /console/api/settings` (`{configDir}`) in `consoleApi.ts`:
 
 1. Resolves and validates `configDir`: it must already exist as a directory on disk (this app will
    never silently create an arbitrary folder somewhere on someone's machine from a typo) — a missing
@@ -490,32 +490,32 @@ first:
    once a different `gateways.yaml` is in effect, and is closed rather than left to leak until
    process exit.
 3. Calls `endpointRegistry.setDir(endpointsDir)` and `gatewaysRegistry.setFilePath(gatewaysFile)` — the
-   *same* registry instances `dispatch.ts` and the rest of `adminApi.ts` already hold references to, so
-   every other endpoint (live data endpoints, `/admin/api/endpoints`, `/admin/api/gateways`, …) reflects the
-   new workspace starting with the very next request, no restart, exactly like any other admin API change.
+   *same* registry instances `dispatch.ts` and the rest of `consoleApi.ts` already hold references to, so
+   every other endpoint (live data endpoints, `/console/api/endpoints`, `/console/api/gateways`, …) reflects the
+   new workspace starting with the very next request, no restart, exactly like any other console API change.
 4. Updates the in-memory `workspace.configDir` (a small mutable `{configDir?: string}` object threaded
-   through `index.ts` → `app.ts` → `adminApi.ts` by reference, since `EndpointRegistry`/`GatewaysRegistry`
+   through `index.ts` → `app.ts` → `consoleApi.ts` by reference, since `EndpointRegistry`/`GatewaysRegistry`
    don't necessarily share one common parent folder in legacy mode, so "the current workspace" has
    to be tracked as its own piece of state rather than derived from either registry) and persists it via
    `saveWorkspaceSettings(settingsFile, {configDir})`, so the choice survives the next `npm start`.
 
-`GET /admin/api/settings` reports `{configDir, endpointsDir, gatewaysFile, endpointCount, gatewayCount}`
+`GET /console/api/settings` reports `{configDir, endpointsDir, gatewaysFile, endpointCount, gatewayCount}`
 — `configDir` is `null` when running in legacy mode (no workspace ever chosen via `CONFIG_DIR` or the UI).
 
-**Admin UI**: a bar under the header (`#workspace-path`/`#workspace-counts` in `index.html`, rendered by
-`renderWorkspaceBar()` in `admin.js`, refreshed as part of the same `loadAll()` every other change
+**Console UI**: a bar under the header (`#workspace-path`/`#workspace-counts` in `index.html`, rendered by
+`renderWorkspaceBar()` in `console.js`, refreshed as part of the same `loadAll()` every other change
 already triggers) shows the current workspace and endpoint/gateway counts; "Change workspace…" opens a
 small drawer (`#workspace-editor`) with a single text field, following the same
 `saveX()`-then-`closeDrawer()`-then-`await loadAll()` order every other editor in this file already uses.
 
 **Packing a real workspace in as the project's own default**: rather than pointing at a folder that
-lives *outside* the checkout (which is what the admin UI's "Change workspace" always produces — an
+lives *outside* the checkout (which is what the console UI's "Change workspace" always produces — an
 absolute path, since it's meant to reach anywhere on disk), a checkout can instead be made fully
 self-contained by moving a real `endpoints/`/`gateways.yaml` folder to replace the project's own
 `config/` folder directly, and setting `data/settings.json` to `{"configDir": "config"}` (or deleting
 the file/leaving `configDir` unset entirely, which falls through to the same
 `config/endpoints`/`config/gateways.yaml` default via step 3 above — pointing `configDir` at `"config"`
-explicitly is only needed if the admin UI's workspace bar should keep showing an active workspace rather
+explicitly is only needed if the console UI's workspace bar should keep showing an active workspace rather
 than reporting legacy/`null` mode). This avoids the fragility of an absolute path baked into a
 per-machine preference file: renaming or relocating the whole checkout (as happened during this
 project's own setup — see the Changelog) no longer risks a stale `configDir` pointing at a folder that
@@ -544,7 +544,7 @@ backend config plus a `ConnectorContext` (resolved gateways, resolved params, a 
 the raw request query/body for the two SQL modes that need them — see `connectors/types.ts`), return a
 plain JS value (object or array) ready for the output mapper. None of them know anything about endpoints,
 HTTP status codes for the *middleware's own* response, or output mapping — that separation is what lets
-`adminApi.ts`'s test endpoints call a connector directly (for "fetch a sample" during endpoint creation)
+`consoleApi.ts`'s test endpoints call a connector directly (for "fetch a sample" during endpoint creation)
 without a saved endpoint existing at all.
 
 `connectors/index.ts`'s `callBackend()` is the only entry point anything outside `connectors/` calls;
@@ -632,7 +632,7 @@ knex-instance-and-pool cache.
 therefore one connection pool — knex uses `tarn.js` internally), cached in a module-level
 `knexCache: Map<string, Knex>` keyed by **`<gateway name>::<JSON of its resolved config>`** — not
 just the name. That content-based key means editing a gateway's host/credentials/pool settings
-through the admin UI naturally computes a different key on the next call: `getKnex()` detects any
+through the console UI naturally computes a different key on the next call: `getKnex()` detects any
 other cache entry for the same gateway *name* with a *different* key, destroys it in the background
 (`.destroy().catch(() => undefined)`, best-effort, not awaited), and lazily builds a fresh instance
 under the new key. There is no pooling code of this project's own beyond that cache map — sizing,
@@ -641,12 +641,12 @@ gateway's `pool` field is omitted): `{ min: 2, max: 10 }` for pg/mysql2/mssql, a
 for sqlite3/better-sqlite3 (knex intentionally serializes access to a single-writer file database). A
 gateway's optional `pool` object (e.g. `{ min: 5, max: 20, idleTimeoutMillis: 30000 }`) is passed
 straight through to knex — the schema accepts it (`z.record(z.unknown())`) but as of this writing the
-admin UI's gateway editor form doesn't expose it as a dedicated field; it can be set today by
-editing `gateways.yaml` directly or via a raw `PUT /admin/api/gateways/:name` body.
+console UI's gateway editor form doesn't expose it as a dedicated field; it can be set today by
+editing `gateways.yaml` directly or via a raw `PUT /console/api/gateways/:name` body.
 
 Two call sites deliberately bypass this shared cache and open their own **standalone, throwaway**
 `knex()` instance instead, always torn down in a `finally` block right after use: `testSqlConnection()`
-(the admin UI's "Test connection" button) and `introspectSqlGateway()` (CRUD generation). Both may
+(the console UI's "Test connection" button) and `introspectSqlGateway()` (CRUD generation). Both may
 run against a gateway config that's mid-edit and never gets saved, so they can't safely touch the
 long-lived cache, and both are one-shot operations where opening a fresh connection is cheap relative
 to the correctness risk of reusing/polluting the real pool.
@@ -660,7 +660,7 @@ to the correctness risk of reusing/polluting the real pool.
 `crudGenerator.ts` generates (see [Auto-generated CRUD + stored-procedure endpoints](#auto-generated-crud--stored-procedure-endpoints)),
 but can also be written by hand. Unlike every other backend mode, these four operations read from
 `ctx.rawQuery`/`ctx.rawBody` — the caller's *actual* Express `req.query`/`req.body`, plumbed through
-by `dispatch.ts` and (for admin-UI test calls) `adminApi.ts` — rather than the declarative named
+by `dispatch.ts` and (for console-UI test calls) `consoleApi.ts` — rather than the declarative named
 `input`/`extractParams` pipeline every other endpoint uses. That pipeline only extracts named scalar
 values; bulk operations need a whole array of rows/updates/keys, which the scalar pipeline has no way
 to express.
@@ -690,7 +690,7 @@ to express.
 **Generated stored-procedure mode** (`backend.procedure` set) — unlike table-CRUD, procedure
 parameters flow through the *normal* `input`/`ctx.params` pipeline (each generated as `in: "body"`),
 since they're just scalar values; this is also why a generated procedure endpoint (unlike a generated
-table endpoint) works fine in the admin UI's "Try it" test panel. Builds `CALL name(:p1, :p2)` for
+table endpoint) works fine in the console UI's "Try it" test panel. Builds `CALL name(:p1, :p2)` for
 pg/mysql2 or `EXEC name :p1, :p2` for mssql (reusing the same named-binding support raw-query mode
 relies on), and throws for sqlite3/better-sqlite3, which have no stored-procedure concept at all.
 
@@ -722,7 +722,7 @@ standalone knex instance and discovers, per dialect:
 ## Auto-generated CRUD + stored-procedure endpoints
 
 `src/server/crudGenerator.ts`'s `generateCrudEndpointsForGateway()`, triggered by
-`POST /admin/api/gateways/:name/generate-crud` (and the admin UI's "Generate CRUD + procedure
+`POST /console/api/gateways/:name/generate-crud` (and the console UI's "Generate CRUD + procedure
 endpoints" button, shown only when editing an already-saved SQL gateway — generation introspects the
 version on disk, so a brand-new draft has nothing to introspect yet).
 
@@ -777,10 +777,10 @@ The generate-crud endpoint's response shape:
 }
 ```
 
-**Admin UI interaction with generated endpoints**: an endpoint whose backend has `table` or `procedure` set
+**Console UI interaction with generated endpoints**: an endpoint whose backend has `table` or `procedure` set
 (i.e. was created by this feature, or hand-written to look like it) renders as a **read-only summary**
 in the endpoint editor's Backend section rather than the normal editable fields for its type — see the
-branch in `admin.js`'s `renderBackendFields()` checking `backend.table || backend.procedure`. This
+branch in `console.js`'s `renderBackendFields()` checking `backend.table || backend.procedure`. This
 exists specifically to prevent a real bug: the SQL backend field renderer used to unconditionally
 render a raw-query textarea whose `_read()` always produced `{type:"sql", query: ...}` — opening a
 generated endpoint and clicking Save with zero edits would have silently replaced its
@@ -793,7 +793,7 @@ operation's `backend.operation` actually reads: `#test-raw-query-row` (→ `rawQ
 `#test-raw-body-row` (→ `rawBody`) for `bulkCreate`/`bulkUpdate`/`bulkDelete`, each pre-filled with a
 placeholder showing the exact expected shape (from `sql.ts`'s own validation messages, e.g.
 `{"rows": [...]}`). `fetchSample()` `JSON.parse`s whichever box is visible and non-empty and passes it
-through to `/admin/api/test-backend`, which already accepted `rawQuery`/`rawBody` (used by the live
+through to `/console/api/test-backend`, which already accepted `rawQuery`/`rawBody` (used by the live
 dispatcher the same way — see `dispatch.ts`) before the UI had any way to supply them. `#tryit-bulk-note`
 still explains why this endpoint doesn't use the normal parameter fields. A generated *procedure* endpoint
 is unaffected by any of this, since its params flow through the ordinary declarative `input` pipeline.
@@ -859,13 +859,13 @@ the parser was handed.
 **Status: phases 1-2 of the design in `AUTH_DESIGN_NOTES.md`.** `basicLogin`, `oauth2`
 (password/client_credentials grants), and `ldap` (LDAP/AD plain simple-bind) are implemented; SAML
 and the OAuth Authorization Code flow are designed but not built. A production, multi-instance
-deployment topology (shared config volume, rolling restart to apply changes, admin console as a
+deployment topology (shared config volume, rolling restart to apply changes, developer console as a
 separate dev-only build) is designed in `DEPLOYMENT_ARCHITECTURE_NOTES.md` but likewise not built --
 this phase runs as a single process with an in-memory session store, same as everything else in this
 app today.
 
 This is authentication for the endpoints an endpoint config's own `path` serves (`/api/...` or
-wherever), completely independent of `adminAuth.ts`'s `ADMIN_TOKEN` gate on `/admin/api/*` -- different
+wherever), completely independent of `consoleAuth.ts`'s `CONSOLE_TOKEN` gate on `/console/api/*` -- different
 audience (whoever calls the business endpoints vs. whoever configures this instance), different
 lifecycle, and neither should be confused with the other in code or in config.
 
@@ -931,14 +931,14 @@ lifecycle, and neither should be confused with the other in code or in config.
   tries again next time) and only hard-fails once the session has actually expired.
 - **`dispatch.ts`** integration: after extracting an endpoint's `input` params, it resolves the
   gateway `endpoint.backend` references (via `getBackendGatewayName()`, exported from
-  `connectors/index.ts` and also used by `adminApi.ts`'s gateway-delete dependency check), and if that
+  `connectors/index.ts` and also used by `consoleApi.ts`'s gateway-delete dependency check), and if that
   gateway has `requiresAuth`, requires and resolves a bearer token before calling `callBackend()`,
   injecting the resolved session's real backend token as `params.__authToken` -- a plain reserved
   param name flowing through the exact same `{param}` substitution (`paramSubst.ts`) every other param
   already uses, so a gateway config just writes `headers: { Authorization: "Bearer {__authToken}" }`
   with zero connector-specific code.
 - **`authRoutes.ts`** -- `POST /auth/login/:provider` and `POST /auth/logout`, mounted at `/auth` in
-  `app.ts` before the dynamic dispatcher. Neither route is behind `requireAdminAuth` or any bearer-
+  `app.ts` before the dynamic dispatcher. Neither route is behind `requireConsoleAuth` or any bearer-
   token gate of its own (logging in is how you *get* a token in the first place).
 
 **Token model**: opaque, not JWT -- a `crypto.randomBytes(32)` hex string with no meaning outside a
@@ -949,7 +949,7 @@ backend credential does matter).
 
 **`authProvidersRegistry.ts`** mirrors `gatewaysRegistry.ts` closely (raw vs. `${env.X}`-resolved
 views, redaction, "blank field on edit means unchanged", hot create/update/delete via
-`/admin/api/auth-providers`), sharing the actual redaction logic with it via the new
+`/console/api/auth-providers`), sharing the actual redaction logic with it via the new
 `secretRedaction.ts` rather than duplicating it. One difference worth knowing:
 `authProviderConfigSchema` is a *true* discriminated union (`kind` required on every branch), unlike
 `gatewayConfigSchema` (`kind` optional on 3 of 4 branches) -- so unlike `gatewaysRegistry.ts`'s
@@ -969,49 +969,49 @@ contains the substring `"token"` -- by this codebase's convention, a `*Path` fie
 JSONPath expression, never a literal secret, and redacting it would show `••••••••` in place of a
 perfectly non-sensitive value like `$.accessToken`.
 
-## Admin UI and Admin API
+## Developer Console
 
-**Auth** (`src/server/adminAuth.ts`): every `/admin/api/*` request must carry
-`Authorization: Bearer <ADMIN_TOKEN>`. If `ADMIN_TOKEN` isn't set in the environment at all, the admin
-API is disabled outright (`503 AdminDisabled`) rather than ever running unauthenticated — deliberate,
-since the admin API can configure an endpoint that calls an arbitrary URL or runs arbitrary SQL. The token
+**Auth** (`src/server/consoleAuth.ts`): every `/console/api/*` request must carry
+`Authorization: Bearer <CONSOLE_TOKEN>`. If `CONSOLE_TOKEN` isn't set in the environment at all, the console
+API is disabled outright (`503 ConsoleDisabled`) rather than ever running unauthenticated — deliberate,
+since the console API can configure an endpoint that calls an arbitrary URL or runs arbitrary SQL. The token
 comparison uses `crypto.timingSafeEqual` (after confirming equal length, since that function throws on
 a length mismatch rather than returning `false`) to avoid a timing side-channel on the comparison
-itself. The admin UI's static files (`/admin/*`, `index.html`/`admin.js`/`admin.css`) are served
+itself. The console UI's static files (`/console/*`, `index.html`/`console.js`/`console.css`) are served
 *without* this gate — there are no secrets in the frontend bundle; every actual API call the page makes
 carries whatever token the user typed into the login screen, stored in `localStorage` under
-`naimix-admin-token`.
+`naimix-console-token`.
 
 **Full endpoint reference:**
 
 | Method & path | Purpose |
 |---|---|
-| `GET /admin/api/meta` | Schema enum values (methods, backend types, transforms, SQL clients, param locations/types) — keeps the frontend's dropdowns from hardcoding (and drifting from) what `schema.ts` actually allows. |
-| `GET /admin/api/endpoints` | List every endpoint (full parsed config, not redacted — endpoints don't hold secrets directly). |
-| `GET /admin/api/endpoints/:id` | One endpoint's full config. |
-| `POST /admin/api/endpoints` | Create an endpoint. Body is a full endpoint config; validated, persisted to its nested file location, live immediately. |
-| `PUT /admin/api/endpoints/:id` | Update (or rename) an endpoint. Same body shape as POST; the old file is deleted/moved as needed. |
-| `DELETE /admin/api/endpoints/:id` | Delete an endpoint and its backing file (pruning now-empty folders). |
-| `POST /admin/api/endpoints/:id/test` | Run an already-saved endpoint live with caller-supplied param overrides (`{ params, rawQuery?, rawBody? }`); returns `{ raw, mapped }`. |
-| `POST /admin/api/test-backend` | Call a backend that isn't saved as an endpoint yet — `{ input, backend, params, rawQuery?, rawBody? }` → `{ raw }`. Used while building an endpoint, before Save. |
-| `POST /admin/api/test-mapping` | Re-apply an `output` config to an already-fetched sample (`{ raw, output }` → `{ mapped }`) without re-calling the backend — avoids re-running a non-idempotent write on every mapping-field keystroke. |
-| `POST /admin/api/reload` | Re-reads `config/endpoints/` and `gateways.yaml` from disk, for picking up hand-edited files. |
-| `GET /admin/api/settings` | `{ configDir, endpointsDir, gatewaysFile, endpointCount, gatewayCount }` — the workspace this instance is currently reading from (`configDir` is `null` in legacy mode). See [Workspace](#workspace). |
-| `PUT /admin/api/settings` | `{ configDir }` → repoints both registries at that folder, closes any SQL pools opened for the old one, persists the choice, and switches live immediately. `400` if the folder doesn't exist on disk. |
-| `GET /admin/api/gateways` | List every gateway, secrets redacted. |
-| `GET /admin/api/gateways/:name` | One gateway, secrets redacted. |
-| `POST /admin/api/gateways` | Create a gateway — `{ name, config }`, `409` if the name's already taken. |
-| `PUT /admin/api/gateways/:name` | Update a gateway — `{ config }`. A blank sensitive field means "keep the stored value". |
-| `POST /admin/api/gateways/test-connection` | Test real reachability (SQL only) — `{ name?, config }` → `{ ok: true }` or `{ ok: false, message }`. `name`, if given, lets a blank sensitive field in the draft fall back to that gateway's real stored secret. |
-| `POST /admin/api/gateways/:name/generate-crud` | Introspect + generate table-CRUD/procedure endpoints for a saved SQL gateway — see the dedicated section above. |
-| `DELETE /admin/api/gateways/:name` | Delete a gateway — `409` (with the list of dependent endpoint ids) if any endpoint still references it. |
-| `GET /admin/api/export/openapi.json` | Generates and downloads an OpenAPI 3.0.3 document for the current workspace — see [Export: OpenAPI spec + MCP server](#export-openapi-spec--mcp-server). |
-| `GET /admin/api/export/mcp-server` | Downloads the static `mcp-server/naimix-mcp-server.js` file — see the same section. |
+| `GET /console/api/meta` | Schema enum values (methods, backend types, transforms, SQL clients, param locations/types) — keeps the frontend's dropdowns from hardcoding (and drifting from) what `schema.ts` actually allows. |
+| `GET /console/api/endpoints` | List every endpoint (full parsed config, not redacted — endpoints don't hold secrets directly). |
+| `GET /console/api/endpoints/:id` | One endpoint's full config. |
+| `POST /console/api/endpoints` | Create an endpoint. Body is a full endpoint config; validated, persisted to its nested file location, live immediately. |
+| `PUT /console/api/endpoints/:id` | Update (or rename) an endpoint. Same body shape as POST; the old file is deleted/moved as needed. |
+| `DELETE /console/api/endpoints/:id` | Delete an endpoint and its backing file (pruning now-empty folders). |
+| `POST /console/api/endpoints/:id/test` | Run an already-saved endpoint live with caller-supplied param overrides (`{ params, rawQuery?, rawBody? }`); returns `{ raw, mapped }`. |
+| `POST /console/api/test-backend` | Call a backend that isn't saved as an endpoint yet — `{ input, backend, params, rawQuery?, rawBody? }` → `{ raw }`. Used while building an endpoint, before Save. |
+| `POST /console/api/test-mapping` | Re-apply an `output` config to an already-fetched sample (`{ raw, output }` → `{ mapped }`) without re-calling the backend — avoids re-running a non-idempotent write on every mapping-field keystroke. |
+| `POST /console/api/reload` | Re-reads `config/endpoints/` and `gateways.yaml` from disk, for picking up hand-edited files. |
+| `GET /console/api/settings` | `{ configDir, endpointsDir, gatewaysFile, endpointCount, gatewayCount }` — the workspace this instance is currently reading from (`configDir` is `null` in legacy mode). See [Workspace](#workspace). |
+| `PUT /console/api/settings` | `{ configDir }` → repoints both registries at that folder, closes any SQL pools opened for the old one, persists the choice, and switches live immediately. `400` if the folder doesn't exist on disk. |
+| `GET /console/api/gateways` | List every gateway, secrets redacted. |
+| `GET /console/api/gateways/:name` | One gateway, secrets redacted. |
+| `POST /console/api/gateways` | Create a gateway — `{ name, config }`, `409` if the name's already taken. |
+| `PUT /console/api/gateways/:name` | Update a gateway — `{ config }`. A blank sensitive field means "keep the stored value". |
+| `POST /console/api/gateways/test-connection` | Test real reachability (SQL only) — `{ name?, config }` → `{ ok: true }` or `{ ok: false, message }`. `name`, if given, lets a blank sensitive field in the draft fall back to that gateway's real stored secret. |
+| `POST /console/api/gateways/:name/generate-crud` | Introspect + generate table-CRUD/procedure endpoints for a saved SQL gateway — see the dedicated section above. |
+| `DELETE /console/api/gateways/:name` | Delete a gateway — `409` (with the list of dependent endpoint ids) if any endpoint still references it. |
+| `GET /console/api/export/openapi.json` | Generates and downloads an OpenAPI 3.0.3 document for the current workspace — see [Export: OpenAPI spec + MCP server](#export-openapi-spec--mcp-server). |
+| `GET /console/api/export/mcp-server` | Downloads the static `mcp-server/naimix-mcp-server.js` file — see the same section. |
 
 A zod validation failure anywhere in this router is caught by a dedicated error-handling middleware at
-the bottom of `createAdminApiRouter()` and turned into `400 { error: "ValidationError", message,
+the bottom of `createConsoleApiRouter()` and turned into `400 { error: "ValidationError", message,
 issues }`, where `issues` is zod's own `issues` array (each with a `path` naming the offending field) —
-this is what lets `admin.js`'s `api()` helper attribute an error to a specific form field rather than
+this is what lets `console.js`'s `api()` helper attribute an error to a specific form field rather than
 showing an opaque top-level message. `gatewayConfigSchema` is a plain `z.union` (not
 `z.discriminatedUnion`, since `kind` is optional on 3 of its 4 branches) — a union failure normally
 collapses to one opaque top-level `invalid_union` issue with an empty `path`, which is why
@@ -1030,10 +1030,10 @@ leave a form otherwise unchanged. This recursive merge walks the whole config tr
 applies uniformly to `commonParams` or any nested SQL `connection` field named like a secret, not just
 a few hardcoded top-level fields.
 
-**Frontend architecture** (`public/admin/`, plain HTML/CSS/JS, no build step, served via
+**Frontend architecture** (`public/console/`, plain HTML/CSS/JS, no build step, served via
 `express.static`):
 
-- `admin.js`'s `api()` is the single fetch wrapper every call goes through: attaches the bearer token,
+- `console.js`'s `api()` is the single fetch wrapper every call goes through: attaches the bearer token,
   logs the user out on a `401`, and turns a JSON error body into a thrown `Error` with a field-attributed
   message when `issues` is present.
 - **Split-pane layout** — a fixed-width sidebar (`.sidebar`) on the left holds two always-visible list
@@ -1055,7 +1055,7 @@ a few hardcoded top-level fields.
 - **Workspace bar** — a slim bar under the header (`renderWorkspaceBar()`, refreshed as part of the
   same `loadAll()` every other change already triggers) showing the current workspace and counts;
   "Change workspace…" opens a one-field drawer (`#workspace-editor`/`saveWorkspace()`) that calls
-  `PUT /admin/api/settings`. See [Workspace](#workspace). This settings dialog is the one place that
+  `PUT /console/api/settings`. See [Workspace](#workspace). This settings dialog is the one place that
   still uses the slide-in `.drawer` pattern — the endpoint and gateway editors are inline panel content,
   not drawers/modals.
 - **Backend Type is inferred from Gateway, not asked for separately** — `applyGatewayInferredType()`
@@ -1098,11 +1098,11 @@ a few hardcoded top-level fields.
   starts with the recomputed base; a hand-written path that happens to match the pattern will still
   reopen in auto mode — an accepted heuristic ambiguity, since there's no separate persisted flag for
   "how was this path made" (deliberately, to avoid a schema change for a UI-only feature).
-- **"Try it" test panel** — `fetchSample()` calls `/admin/api/test-backend` with the form's current
+- **"Try it" test panel** — `fetchSample()` calls `/console/api/test-backend` with the form's current
   (unsaved) input/backend config, plus `rawQuery`/`rawBody` parsed from the raw-query/raw-body textareas
   when a generated table endpoint has one visible (see "Auto-generated CRUD + stored-procedure endpoints"
   above), and caches the raw response (`LAST_RAW_SAMPLE`); `applyMappingToSample()` then calls
-  `/admin/api/test-mapping` against that cached sample as the output fields are edited, without re-hitting
+  `/console/api/test-mapping` against that cached sample as the output fields are edited, without re-hitting
   the real backend each time.
 - **Gateway detail/editor** — `renderGatewayKindFields()` swaps in fields per `kind`; the SQL kind adds
   a "Test connection" button (`testDbConnection()`) and, only when editing an already-saved gateway,
@@ -1110,11 +1110,11 @@ a few hardcoded top-level fields.
   the same way the endpoint editor does.
 - **Theme toggle** — a switch-style button in the top bar (`toggleTheme()`) flips between light and dark
   by setting `data-theme="light"|"dark"` on `<html>`, persisted in `localStorage` under
-  `naimix-admin-theme`. With no stored choice yet, `admin.css` follows the OS's `prefers-color-scheme`
+  `naimix-console-theme`. With no stored choice yet, `console.css` follows the OS's `prefers-color-scheme`
   instead (and keeps listening for OS-level changes via `matchMedia(...).addEventListener("change", …)`
   so the button's own sun/moon icon — driven by a separate `data-effective` attribute the JS keeps in
   sync, `updateThemeToggleIcon()` — stays correct even before the user has made an explicit choice).
-  Every color in `admin.css` is a CSS custom property on `:root`, redefined under both the
+  Every color in `console.css` is a CSS custom property on `:root`, redefined under both the
   `prefers-color-scheme: dark` media query and an explicit `:root[data-theme="dark"]` rule, so the two
   layers can never disagree about which palette is active.
 - **Expand/collapse controls** — both the endpoint folder tree and the editor's collapsible sections use
@@ -1147,7 +1147,7 @@ a few hardcoded top-level fields.
   which `applyGatewayInferredType()` calls on every gateway change and on editor open) opens the
   currently selected gateway's real definition through the same shared `showPopup()` used by the info
   icons, passing the `"gateway-preview"` modifier class for a wider popup. `buildGatewayPreview()` reads
-  straight from the in-memory `GATEWAYS` map (already secret-redacted by the admin API, so it's always
+  straight from the in-memory `GATEWAYS` map (already secret-redacted by the console API, so it's always
   safe to render as-is) and renders kind, the kind-specific fields (`baseUrl`/`headers` for json/xml,
   `wsdl` for soap, `client`/`connection`/`useNullAsDefault` for sql via the shared `kvList()` helper), and
   `commonParams` — without leaving the endpoint editor to go look the gateway up separately. It shares
@@ -1156,13 +1156,13 @@ a few hardcoded top-level fields.
 
 ### Export: OpenAPI spec + MCP server
 
-Two admin-only download routes let whoever's configuring a workspace hand it to another tool without
+Two console-only download routes let whoever's configuring a workspace hand it to another tool without
 writing any glue themselves: a standard OpenAPI document, and a ready-to-run MCP server. Both are
 generated/served fresh on every request — there's no ahead-of-time generation step to forget to re-run
 after a config change.
 
-**`GET /admin/api/export/openapi.json`** (`src/server/openapiGenerator.ts`'s `generateOpenApiDocument()`,
-called from `adminApi.ts` with `baseUrl` taken from the request itself — `${req.protocol}://${req.get
+**`GET /console/api/export/openapi.json`** (`src/server/openapiGenerator.ts`'s `generateOpenApiDocument()`,
+called from `consoleApi.ts` with `baseUrl` taken from the request itself — `${req.protocol}://${req.get
 ("host")}`) builds an OpenAPI 3.0.3 document from the three live registries: one path per configured
 endpoint (`:param` converted to `{param}` — the only path-param syntax difference between naimix's own
 Express-style paths and OpenAPI's), a `path`/`query`/`header`-location `input` param becoming an OpenAPI
@@ -1183,26 +1183,26 @@ confirmed against each of `basicLogin.ts`/`oauth2.ts`/`ldap.ts`'s own `login()`,
 covers every authed operation, since a session token is opaque and uniform regardless of which provider
 issued it.
 
-**`GET /admin/api/export/mcp-server`** just `res.download()`s a single static file,
+**`GET /console/api/export/mcp-server`** just `res.download()`s a single static file,
 `mcp-server/naimix-mcp-server.js` (repo root, a sibling of `src/`/`config/`/`test/` — deliberately outside
 `src/` so it's never swept into naimix's own `tsc`/esbuild builds), resolved via
-`path.resolve(__dirname, "../../mcp-server/...")`, which lands on the right file whether `adminApi.ts` is
+`path.resolve(__dirname, "../../mcp-server/...")`, which lands on the right file whether `consoleApi.ts` is
 running through `tsx` (`src/server/`) or compiled (`dist/server/`) — no build-script copy step needed,
 unlike the existing `customerService.wsdl` copy.
 
 That file is a **thin-proxy MCP client**, not a per-workspace code generator: it's the same static file
 for every naimix instance, and it discovers its tools at its own process *startup* rather than at
-download time, by calling the live instance's admin API (`GET /admin/api/endpoints`, `/gateways`,
-`/auth-providers`, authenticated with `NAIMIX_ADMIN_TOKEN` — the same value as that instance's own
-`ADMIN_TOKEN`). This means there is no "regenerate the MCP server" step after a config change — restarting
+download time, by calling the live instance's console API (`GET /console/api/endpoints`, `/gateways`,
+`/auth-providers`, authenticated with `NAIMIX_CONSOLE_TOKEN` — the same value as that instance's own
+`CONSOLE_TOKEN`). This means there is no "regenerate the MCP server" step after a config change — restarting
 the MCP client (or just the one process) re-discovers the current shape. It's a single dependency-free
 `.js` file (Node 18+, using the global `fetch`; naimix itself already requires Node 24+) implementing the
 MCP stdio JSON-RPC transport by hand — newline-delimited JSON-RPC 2.0 over stdin/stdout via
 `node:readline`, no `@modelcontextprotocol/sdk` — handling `initialize`, `notifications/initialized`,
 `tools/list`, `tools/call`, `ping`, and defensively-empty `resources/list`/`prompts/list`. Discovery is
-the *only* thing it uses the admin API for: every actual tool call it executes goes to the normal
+the *only* thing it uses the console API for: every actual tool call it executes goes to the normal
 caller-facing routes (`/auth/login/{provider}`, `/auth/logout`, and each endpoint's real path), never back
-through `/admin/api/*`. It builds one `endpoint_<sanitized-id>` tool per configured endpoint (its
+through `/console/api/*`. It builds one `endpoint_<sanitized-id>` tool per configured endpoint (its
 `inputSchema` built the same way as the OpenAPI generator's parameters/requestBody, `env`-location params
 excluded the same way), one `login_<sanitized-provider-name>` tool per auth provider (`username`/
 `password` inputs, or none at all for an oauth2 `client_credentials` provider), a `logout` tool (revokes
@@ -1213,14 +1213,14 @@ an endpoint whose gateway requires auth, with no matching session yet, returns a
 `login_*` tool to call first, rather than a bare 401 from the backend.
 
 **Caveat baked into the file's own header comment**: this only works against a naimix `dev` build.
-QA/Production expose no `/admin/api/*` at all, by design (see [Admin console made structurally absent
-from QA/Production, not just token-gated](#2026-09-23-same-day--admin-console-made-structurally-absent-from-qaproduction-not-just-token-gated)
+QA/Production expose no `/console/api/*` at all, by design (see [Developer console made structurally absent
+from QA/Production, not just token-gated](#2026-09-23-same-day--developer-console-made-structurally-absent-from-qaproduction-not-just-token-gated)
 below) — there's nothing for this script to discover from there.
 
-The admin UI's new "Export" sidebar section (`public/admin/index.html`, after "Active sessions") has two
-buttons wired in `admin.js` to a small `downloadFile(path, fallbackFilename)` helper: a plain `<a href>`
+The console UI's new "Export" sidebar section (`public/console/index.html`, after "Active sessions") has two
+buttons wired in `console.js` to a small `downloadFile(path, fallbackFilename)` helper: a plain `<a href>`
 can't carry the `Authorization` header these routes require, so it `fetch()`es the route with the stored
-admin token, reads the response as a `Blob`, and clicks a synthetic, throwaway `<a download>` pointed at
+console token, reads the response as a `Blob`, and clicks a synthetic, throwaway `<a download>` pointed at
 an object URL for it — the standard workaround for a browser download needing a custom header. It logs
 the user out on a `401`, same as the existing `api()` helper.
 
@@ -1229,14 +1229,14 @@ the user out on a `401`, same as the existing `api()` helper.
 | Variable | Purpose | Default |
 |---|---|---|
 | `PORT` | Port the middleware listens on. | `4000` |
-| `CONFIG_DIR` | Folder containing both `endpoints/` and `gateways.yaml` (see [Workspace](#workspace)). Only used when no workspace has yet been saved through the admin UI. | unset |
+| `CONFIG_DIR` | Folder containing both `endpoints/` and `gateways.yaml` (see [Workspace](#workspace)). Only used when no workspace has yet been saved through the console UI. | unset |
 | `ENDPOINTS_DIR` | Directory of endpoint config files, scanned recursively. Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. | `config/endpoints` |
 | `GATEWAYS_FILE` | Path to the gateways config file. Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. | `config/gateways.yaml` |
 | `AUTH_PROVIDERS_FILE` | Path to the auth providers config file. Ignored once `CONFIG_DIR` or a UI-chosen workspace is in effect. See [Caller authentication](#caller-authentication). | `config/authProviders.yaml` |
-| `SETTINGS_FILE` | Where the admin-UI-chosen workspace is persisted. Per-machine preference file, not meant for Git. | `data/settings.json` |
+| `SETTINGS_FILE` | Where the console-UI-chosen workspace is persisted. Per-machine preference file, not meant for Git. | `data/settings.json` |
 | `LOG_LEVEL` | pino log level (`fatal|error|warn|info|debug|trace`). | `info` |
-| `ADMIN_TOKEN` | Bearer token required for `/admin/api/*`. **Unset disables the admin API entirely** (503), it does not run unauthenticated. | unset |
-| `MAX_REQUEST_BODY_SIZE` | `limit` passed to both `express.json()` and `express.urlencoded()` in `app.ts` -- a string the `bytes` package parses (`"500kb"`, `"1gb"`, …) or a raw byte count. Read directly from `process.env` inside `app.ts` (not threaded through `CreateAppOptions`), same as `ADMIN_TOKEN`/`LOG_LEVEL`. | `10mb` |
+| `CONSOLE_TOKEN` | Bearer token required for `/console/api/*`. **Unset disables the console API entirely** (503), it does not run unauthenticated. | unset |
+| `MAX_REQUEST_BODY_SIZE` | `limit` passed to both `express.json()` and `express.urlencoded()` in `app.ts` -- a string the `bytes` package parses (`"500kb"`, `"1gb"`, …) or a raw byte count. Read directly from `process.env` inside `app.ts` (not threaded through `CreateAppOptions`), same as `CONSOLE_TOKEN`/`LOG_LEVEL`. | `10mb` |
 | `NODE_ENV` | When `production`, disables the `pino-pretty` dev transport (structured JSON logs instead). | unset |
 | `DEMO_JSON_BASE_URL`, `DEMO_XML_BASE_URL`, `DEMO_SOAP_WSDL_URL`, `DEMO_SQLITE_PATH`, `DEMO_OAUTH_CLIENT_SECRET` | Referenced via `${env.X}` by the shipped example `config/gateways.yaml` and `config/authProviders.yaml`, pointing at the mock backend (which also serves `/login` and `/oauth/token` for the auth demo -- see [Caller authentication](#caller-authentication)). Not meaningful once real gateways/providers replace the demo ones. | see `.env.example` |
 | `DEMO_LDAP_URL`, `DEMO_LDAP_BIND_PASSWORD`, `DEMO_LDAP_TOKEN_SECRET` | Referenced via `${env.X}` by the shipped `demoLdap` entry in `config/authProviders.yaml` -- point `DEMO_LDAP_URL` at a real local OpenLDAP test directory (`docker/openldap/README.md`, `npm run test-ldap`) or the automated test suite's in-process fake server. See [Caller authentication](#caller-authentication). | see `.env.example` |
@@ -1255,29 +1255,29 @@ fast with a clear error naming the missing variable (`envSubst.ts`).
   - `JSON backend`, `XML backend`, `SOAP backend`, `SQL backend` — each shipped example endpoint, called
     end-to-end against the real mock backend/SQLite file.
   - `unknown endpoints` — 404 behavior.
-  - `admin API auth` — missing/invalid token, and the `ADMIN_TOKEN`-unset-disables-the-API path.
-  - `admin API: endpoint CRUD takes effect immediately (no restart)` — create/read/update/delete an endpoint
+  - `console API auth` — missing/invalid token, and the `CONSOLE_TOKEN`-unset-disables-the-API path.
+  - `console API: endpoint CRUD takes effect immediately (no restart)` — create/read/update/delete an endpoint
     through the API and confirm the SAME running `app` instance serves the change on its very next
     request, plus id/path-collision rejection and the path-must-start-with-`/` field-attributed error.
   - `endpoint config files are organized into folders mirroring each endpoint's path` — the folder-layout
     feature specifically: correct nested location with a bracketed param segment, two endpoints sharing a
     path landing in one folder as separate files, a path change moving a file without pruning a folder
     a sibling endpoint still uses, and folder pruning once nothing remains in it.
-  - `admin API: test-call endpoints` — `/test-backend`, `/endpoints/:id/test`, `/test-mapping`.
-  - `admin API: gateway CRUD` — create/update/delete, redaction, the dependent-endpoint delete-refusal.
-  - `admin API: test-connection (DB)` — reachable/unreachable/non-SQL-kind cases.
+  - `console API: test-call endpoints` — `/test-backend`, `/endpoints/:id/test`, `/test-mapping`.
+  - `console API: gateway CRUD` — create/update/delete, redaction, the dependent-endpoint delete-refusal.
+  - `console API: test-connection (DB)` — reachable/unreachable/non-SQL-kind cases.
   - `gateway commonParams + env-sourced input params` — the merge-precedence rules for both
     features, verified against the mock backend's `/echo` endpoint (which reflects back whatever query
     params/headers it received) rather than mocked.
-  - `admin API: generate CRUD endpoints for a SQL gateway` — full generation against the 3-table demo
+  - `console API: generate CRUD endpoints for a SQL gateway` — full generation against the 3-table demo
     DB (asserting the exact created-endpoint-id set and the no-primary-key skip message), idempotent
     re-run (second call creates nothing), real filtering/pagination and bulk create/update/delete
     round-trips on the generated endpoints, and malformed-body 400s.
-  - `admin API: generate CRUD endpoints -- skip-and-report on a path conflict` — a second gateway
+  - `console API: generate CRUD endpoints -- skip-and-report on a path conflict` — a second gateway
     pointed at the same underlying SQLite file, with a pre-existing hand-written endpoint at a path a
     generated endpoint would also claim, proving generation skips exactly that one conflict while still
     creating everything else.
-  - `admin API: workspace switching` — uses its own fully separate `app` + pair of
+  - `console API: workspace switching` — uses its own fully separate `app` + pair of
     registries (never the shared ones the rest of the file depends on, since they'd otherwise be left
     pointed at the wrong workspace for every later `describe` block) against two throwaway folders: one a
     copy of the real project config, one starting empty. Covers `GET /settings` reporting the current
@@ -1294,7 +1294,7 @@ fast with a clear error naming the missing variable (`envSubst.ts`).
     unknown-username rejection, a full login-through-injection round trip against the in-process fake
     LDAP server asserting the injected token really is the signed stand-in JWT (decoded and checked for
     `sub`/`username`/`groups`), and the same wrong-provider-token rejection as the other two providers.
-  - `admin API: auth-provider CRUD` — list/redaction (including the `*Path`-is-never-a-secret
+  - `console API: auth-provider CRUD` — list/redaction (including the `*Path`-is-never-a-secret
     regression check), create/update/delete, the 409 conflict deleting a provider a gateway still
     requires, field-attributed 400s for a missing-required-field `oauth2` provider and for an `ldap`
     provider with neither bind mode (or both, ambiguously) fully configured, and a full ldap-provider
@@ -1307,7 +1307,7 @@ fast with a clear error naming the missing variable (`envSubst.ts`).
   number).
 
 **Manual/live-browser QA scripts are disposable and never shipped.** Whenever a change touches the
-admin UI (or anything else hard to fully exercise through the API-level test suite alone — e.g. a real
+console UI (or anything else hard to fully exercise through the API-level test suite alone — e.g. a real
 `knex(...).toSQL()` compilation check for a dialect with no live server available in this environment),
 a one-off Playwright (or plain `node -e`) script is written, run against a real running instance, and
 then **deleted** once it's confirmed passing — never committed. This has repeatedly caught real bugs a
@@ -1335,7 +1335,7 @@ reasoning and trade-offs.
   [knexjs.org](https://knexjs.org/) for its own documentation. This project relies on its dialect
   abstraction (one query-builder API across five databases), its `tarn.js`-based connection pooling,
   and its named-`:param` binding support in `.raw()`.
-- **`zod`** validates every config file and every admin API request body — `src/config/schema.ts` is
+- **`zod`** validates every config file and every console API request body — `src/config/schema.ts` is
   the source of truth for what's valid.
 - **`path-to-regexp@8`** is an explicit dependency (not just Express's own older bundled version) for
   matching an endpoint's `path` pattern against an incoming request — Express 4's bundled version and v8
@@ -1368,8 +1368,8 @@ reasoning and trade-offs.
   `AUTH_DESIGN_NOTES.md` but not built. Sessions live in one process's memory, so this doesn't yet work
   correctly behind more than one load-balanced instance — see `AUTH_DESIGN_NOTES.md`'s "Multi-instance /
   load balancing" and `DEPLOYMENT_ARCHITECTURE_NOTES.md`.
-- **A single shared `ADMIN_TOKEN`**, not per-user credentials or roles — anyone with the token has full
-  admin access (create/edit/delete any endpoint or gateway, including ones that call arbitrary SQL or
+- **A single shared `CONSOLE_TOKEN`**, not per-user credentials or roles — anyone with the token has full
+  console access (create/edit/delete any endpoint or gateway, including ones that call arbitrary SQL or
   URLs).
 - **Generated table-CRUD `list` filtering is exact-match only** — no `>`, `LIKE`, `IN` (beyond the
   special-cased `ids=` parameter), or OR-logic; a real search/filter UI beyond simple equality needs a
@@ -1382,16 +1382,16 @@ reasoning and trade-offs.
   at runtime gets a new cache entry rather than replacing the old one in place; the old client object is
   simply never called again but isn't explicitly torn down (acceptable since a SOAP client, unlike a SQL
   connection pool, holds no persistent resource worth explicitly releasing).
-- **The admin UI's gateway editor has no dedicated field for a SQL gateway's `pool` settings**,
+- **The console UI's gateway editor has no dedicated field for a SQL gateway's `pool` settings**,
   even though the schema and connector both support it — it can only be set today by hand-editing
-  `gateways.yaml` or a raw `PUT /admin/api/gateways/:name` body.
-- **Collapse/expand state in the admin UI (endpoint editor sections, the endpoints folder tree) is in-memory
+  `gateways.yaml` or a raw `PUT /console/api/gateways/:name` body.
+- **Collapse/expand state in the console UI (endpoint editor sections, the endpoints folder tree) is in-memory
   only** — it resets on a page reload. Consistent across the whole UI, an accepted simplicity tradeoff.
 - **A hand-typed endpoint path that happens to match the auto-generated pattern reopens in "auto" path
   mode** in the endpoint editor, even though it wasn't created that way — there's no separate persisted
-  flag distinguishing the two, by design (see [Admin UI and Admin API](#admin-ui-and-admin-api)).
+  flag distinguishing the two, by design (see [Console UI and Console API](#developer-console)).
 - **"Change workspace" switches the whole running instance, not per-request.** There is no per-request
-  workspace/tenant concept — every request to this process (data endpoints and admin API alike) is served
+  workspace/tenant concept — every request to this process (data endpoints and console API alike) is served
   from whichever single workspace is currently active. This is intentional (see
   [Workspace](#workspace): one process per person, on that person's own machine), but it does mean this
   process is not safe to point two different Git checkouts at "simultaneously" from two browser tabs —
@@ -1417,21 +1417,21 @@ gateway's `requiresAuth` names a provider, plus the always-on `/auth/login/{prov
 `/healthz`, and `/__endpoints` routes. New `mcp-server/naimix-mcp-server.js` (repo root, outside `src/` so
 it's never bundled into naimix's own build) is a single dependency-free file implementing the MCP stdio
 JSON-RPC protocol by hand (no `@modelcontextprotocol/sdk`) — it discovers a live instance's endpoints/
-gateways/auth providers at its own startup via the admin API, then builds `endpoint_*`/`login_*`/`logout`/
+gateways/auth providers at its own startup via the console API, then builds `endpoint_*`/`login_*`/`logout`/
 `list_endpoints` tools dynamically, executing real tool calls only against the normal caller-facing routes
-(never back through `/admin/api/*`). New admin routes `GET /admin/api/export/openapi.json` and
-`GET /admin/api/export/mcp-server` (`adminApi.ts`) serve these — both admin-token-gated like every other
-`/admin/api/*` route, and (like every admin route) structurally absent from the QA/Production builds with
-no extra work required, since `adminApi.ts` was already entirely outside `dataPlaneApp.ts`'s module graph.
+(never back through `/console/api/*`). New console routes `GET /console/api/export/openapi.json` and
+`GET /console/api/export/mcp-server` (`consoleApi.ts`) serve these — both console-token-gated like every other
+`/console/api/*` route, and (like every console route) structurally absent from the QA/Production builds with
+no extra work required, since `consoleApi.ts` was already entirely outside `dataPlaneApp.ts`'s module graph.
 Added `generateOpenApiDocument` to `scripts/checkDataPlaneBundle.js`'s forbidden-identifier list as
-defense in depth. New admin UI "Export" sidebar section (`public/admin/index.html`, after "Active
-sessions") with two buttons, wired in `admin.js` to a new `downloadFile()` helper that `fetch()`es the
-route with the stored admin token and clicks a synthetic `<a download>` against a `Blob` object URL, since
+defense in depth. New console UI "Export" sidebar section (`public/console/index.html`, after "Active
+sessions") with two buttons, wired in `console.js` to a new `downloadFile()` helper that `fetch()`es the
+route with the stored console token and clicks a synthetic `<a download>` against a `Blob` object URL, since
 a plain `<a href>` can't carry the `Authorization` header these routes need.
 
 Verified with `tsc --noEmit`, `npm run build:qa` and `npm run build:prod` (bundle audit still passes with
-the two new admin routes added), and `npx vitest run` — new `describe` blocks in `test/middleware.test.ts`
-covering both export routes (admin-auth required, OpenAPI document shape including the `sessionAuth`
+the two new console routes added), and `npx vitest run` — new `describe` blocks in `test/middleware.test.ts`
+covering both export routes (console-auth required, OpenAPI document shape including the `sessionAuth`
 security requirement on an authed endpoint and the provider-enumerated login path, and the MCP server
 file downloading with the right filename and content) plus two new entries in `test/dataPlane.test.ts`'s
 404 list confirming both routes are genuinely absent (not just rejected) from the QA/Production build;
@@ -1451,13 +1451,13 @@ identical to before except the startup log line now says `Naimix (QA data-plane)
 `Naimix (Production data-plane) listening...` depending on which target called it. Two new one-line entry
 files, `src/server/qaIndex.ts` and `src/server/prodIndex.ts`, each just call `startDataPlaneServer("qa")`/
 `startDataPlaneServer("prod")` -- the old `dataPlaneIndex.ts` is deleted, replaced by these two plus the
-shared function. `dataPlaneApp.ts` (the actual Express app -- still exactly one file, still admin-free)
+shared function. `dataPlaneApp.ts` (the actual Express app -- still exactly one file, still console-free)
 is unchanged; only the entry-point layer split.
 
 `package.json`'s `build:data-plane`/`start:data-plane`/`dev:data-plane` became six scripts:
 `build:qa`/`start:qa`/`dev:qa` (→ `dist-qa/server.js`) and `build:prod`/`start:prod`/`dev:prod` (→
 `dist-prod/server.js`), each esbuild-bundling its own entry point and running
-`scripts/checkDataPlaneBundle.js` against its own output independently -- so the admin-absence audit from
+`scripts/checkDataPlaneBundle.js` against its own output independently -- so the console-absence audit from
 the previous entry now runs, and can fail, for `qa` and `prod` separately rather than once for a single
 combined target. Updated that script's default bundle path and doc comments to stop assuming a single
 target. `.gitignore`'s `/dist-data-plane` became `/dist-qa` + `/dist-prod`.
@@ -1466,7 +1466,7 @@ Verified the same way as the previous entry, against both new targets independen
 clean; `npm run build:qa` and `npm run build:prod` both succeed with their own bundle-audit passing;
 both resulting binaries (`dist-qa/server.js`, `dist-prod/server.js`) started for real and hit with
 `curl` -- `/healthz` 200s on both, the startup log correctly reads "QA data-plane" for one and
-"Production data-plane" for the other, and `/admin`/`/admin/api/sessions` 404 on both. `test/
+"Production data-plane" for the other, and `/console`/`/console/api/sessions` 404 on both. `test/
 dataPlane.test.ts` needed no changes (it calls `createDataPlaneApp()` directly, unaffected by the entry-
 point split); full suite still 105 tests, same pre-existing unrelated `better-sqlite3` limitation on
 `middleware.test.ts` as every entry before this one.
@@ -1477,11 +1477,11 @@ separate) and the README's "Deploying to QA/Production" section (the two-row tab
 build-commands block now shows both `build:qa`/`build:prod`, "Project structure" lists `dataPlaneServer.ts`/
 `qaIndex.ts`/`prodIndex.ts` in place of `dataPlaneIndex.ts`).
 
-### 2026-09-23 (same day) — Admin console made structurally absent from QA/Production, not just token-gated
+### 2026-09-23 (same day) — Developer console made structurally absent from QA/Production, not just token-gated
 
-Padma asked whether the admin console API is installed at all when the server runs in QA/Production
-mode. The honest answer at the time was: yes — `createApp()` always mounted `/admin/*` in every
-environment, protected only by `requireAdminAuth` needing `ADMIN_TOKEN` set. `DEPLOYMENT_ARCHITECTURE_
+Padma asked whether the developer console API is installed at all when the server runs in QA/Production
+mode. The honest answer at the time was: yes — `createApp()` always mounted `/console/*` in every
+environment, protected only by `requireConsoleAuth` needing `CONSOLE_TOKEN` set. `DEPLOYMENT_ARCHITECTURE_
 NOTES.md` had already recorded a decision that this should instead be enforced structurally (a separate
 build target, not a runtime gate) but explicitly flagged that decision as "brainstorm only — nothing
 implemented." Padma called the current state a security issue and asked to implement the decided design
@@ -1491,15 +1491,15 @@ Split `app.ts` into a shared core plus two thin compositions, matching that docu
 two thin entry points" framing literally: new `src/server/coreApp.ts` exports `createBaseApp()` (cors,
 body parsing, `/healthz`, `/__endpoints`, a fresh `AuthService`) and `mountDataPlaneRoutes()` (`/auth`
 login/logout, the dynamic dispatcher) plus `mountTerminalHandlers()` (404 + error handler) — none of it
-imports `adminApi.ts` or `adminAuth.ts`, directly or transitively. `app.ts`'s `createApp()` (the
+imports `consoleApi.ts` or `consoleAuth.ts`, directly or transitively. `app.ts`'s `createApp()` (the
 development entry point, reached via the existing `src/server/index.ts`) now calls `createBaseApp()`,
-mounts the admin UI/API in between (exactly where it always was in the route order), then calls
+mounts the console UI/API in between (exactly where it always was in the route order), then calls
 `mountDataPlaneRoutes()`/`mountTerminalHandlers()` — behaviorally identical to before the refactor, which
 is what let the existing 101 tests (all of which exercise `createApp()`) pass unchanged as the
 regression check for this refactor. New `src/server/dataPlaneApp.ts` (`createDataPlaneApp()`) calls only
-`createBaseApp()` + `mountDataPlaneRoutes()` + `mountTerminalHandlers()` — never admin. New
-`src/server/dataPlaneIndex.ts` is the QA/Production entry point: no `ADMIN_TOKEN`, no `adminUiDir`, and
-deliberately no `SETTINGS_FILE`/"persisted workspace" support either (that's the admin console's own
+`createBaseApp()` + `mountDataPlaneRoutes()` + `mountTerminalHandlers()` — never console. New
+`src/server/dataPlaneIndex.ts` is the QA/Production entry point: no `CONSOLE_TOKEN`, no `consoleUiDir`, and
+deliberately no `SETTINGS_FILE`/"persisted workspace" support either (that's the developer console's own
 "Change workspace" feature for a developer's local instance, meaningless for a QA/Production instance
 reading a fixed shared volume per `DEPLOYMENT_ARCHITECTURE_NOTES.md`) — just `CONFIG_DIR` (or the legacy
 `ENDPOINTS_DIR`/`GATEWAYS_FILE`/`AUTH_PROVIDERS_FILE` trio) resolved once at startup.
@@ -1507,14 +1507,14 @@ reading a fixed shared volume per `DEPLOYMENT_ARCHITECTURE_NOTES.md`) — just `
 "Structurally absent" needed more than a conditional at runtime, since plain `tsc` compiles the whole
 `src/` tree regardless of which files a given process actually imports — a QA/Production deployment
 running `node dist/server/dataPlaneIndex.js` out of that same output directory would still have
-`adminApi.js` sitting right next to it on disk. Added a real second build target instead: `npm run
+`consoleApi.js` sitting right next to it on disk. Added a real second build target instead: `npm run
 build:data-plane` bundles `src/server/dataPlaneIndex.ts` with `esbuild` (`--bundle --packages=external`,
 so only first-party `src/` code is inlined — `node_modules`, including every native DB driver, stays
 external and must still be installed alongside the bundle) into a single `dist-data-plane/server.js`,
-then runs the new `scripts/checkDataPlaneBundle.js`, which greps that bundle for admin-only identifiers
-(`requireAdminAuth`, `createAdminApiRouter`, `AdminDisabled`, `ADMIN_TOKEN`, and others) and fails the
+then runs the new `scripts/checkDataPlaneBundle.js`, which greps that bundle for console-only identifiers
+(`requireConsoleAuth`, `createConsoleApiRouter`, `ConsoleDisabled`, `CONSOLE_TOKEN`, and others) and fails the
 build (non-zero exit) if any are found — a structural, automated check that this separation hasn't
-quietly regressed via some future change reintroducing an admin import into `dataPlaneApp.ts`'s module
+quietly regressed via some future change reintroducing an console import into `dataPlaneApp.ts`'s module
 graph, not just a comment asserting it holds. Added `esbuild` as a devDependency (an `npm install`
 without `--legacy-peer-deps` hit an unrelated pre-existing `npm`/`arborist` bug walking `vitest` 4.x's
 own optional-peer-dependency graph — worked around with `--legacy-peer-deps` for this one install; not a
@@ -1525,15 +1525,15 @@ either build output).
 Verified structurally and functionally, not just written and assumed correct: `tsc --noEmit` clean;
 `npm run build:data-plane` actually run, its own bundle-audit step passing; the resulting
 `dist-data-plane/server.js` started for real (`CONFIG_DIR=config`) and hit directly with `curl` —
-`/healthz` 200s, `/__endpoints` lists the real 60 configured endpoints, `/admin` and `/admin/` both 404
-(the plain "Not Found" JSON body from `mountTerminalHandlers()`, not `adminAuth.ts`'s "AdminDisabled"/
-"Unauthorized" shape — proof the route was never registered, not merely rejected), and `/admin/api/*`
+`/healthz` 200s, `/__endpoints` lists the real 60 configured endpoints, `/console` and `/console/` both 404
+(the plain "Not Found" JSON body from `mountTerminalHandlers()`, not `consoleAuth.ts`'s "ConsoleDisabled"/
+"Unauthorized" shape — proof the route was never registered, not merely rejected), and `/console/api/*`
 404s the same way. Also added `test/dataPlane.test.ts` (4 tests, calling `createDataPlaneApp()` directly)
 covering the same ground as an automated regression test: the caller-facing surface still works
-(`/healthz`, `/__endpoints`, `/auth/login` validation), a bare `GET /admin` 404s, every `/admin/api/*`
+(`/healthz`, `/__endpoints`, `/auth/login` validation), a bare `GET /console` 404s, every `/console/api/*`
 route 404s with the generic "Not Found" body, and — specifically guarding against a future "fix" that
-gates these routes with `requireAdminAuth` instead of never mounting them — the sessions route still
-404s even with `ADMIN_TOKEN` set in the environment and a matching bearer token sent. Ran the full suite
+gates these routes with `requireConsoleAuth` instead of never mounting them — the sessions route still
+404s even with `CONSOLE_TOKEN` set in the environment and a matching bearer token sent. Ran the full suite
 afterward (105 tests: 101 from before + 4 new); everything except `middleware.test.ts` passed, which hit
 this environment's already-documented `better-sqlite3`-on-Linux-VM limitation (unrelated to this change
 — `dataPlane.test.ts` itself doesn't touch SQLite/the mock backend at all, and passed cleanly).
@@ -1545,9 +1545,9 @@ rolling-restart supervision) explicitly still brainstorm-only, so the status ban
 says for what's actually still unbuilt. Added a new README "Deploying to QA/Production" section (the
 two-entry-point table, the `build:data-plane` how-to, what's different about config resolution), updated
 the "npm run build && npm start" quick-start line to clarify it's the development build, updated the
-`ADMIN_TOKEN` row in "Environment variables" and its `.env.example` comment to say it's development-build-
+`CONSOLE_TOKEN` row in "Environment variables" and its `.env.example` comment to say it's development-build-
 only, and updated "Project structure" to list the new files. See
-[Admin UI and Admin API](#admin-ui-and-admin-api) and `DEPLOYMENT_ARCHITECTURE_NOTES.md`'s "Installation:
+[Console UI and Console API](#developer-console) and `DEPLOYMENT_ARCHITECTURE_NOTES.md`'s "Installation:
 how development differs from QA/Production" for the full design reasoning.
 
 ### 2026-09-23 (same day) — Active sessions: dev-only real token visibility
@@ -1563,11 +1563,11 @@ explicitly.
 `SessionSummary` (`authService.ts`) gained three optional fields — `token` (the real bearer token a
 caller would send), `backendToken`, and `refreshToken` — populated by `listSessions()` only when
 `isDevMode()` is true; a production run omits all three exactly as before this change, with no separate
-flag to flip. `GET /admin/api/meta` now also reports a top-level `devMode` boolean mirroring the same
-check, so the admin UI knows without probing whether to bother rendering the dev-only parts of the
+flag to flip. `GET /console/api/meta` now also reports a top-level `devMode` boolean mirroring the same
+check, so the console UI knows without probing whether to bother rendering the dev-only parts of the
 Session detail panel.
 
-Admin UI: the Session detail view now shows a loud dev-mode warning banner plus a "Session token
+Console UI: the Session detail view now shows a loud dev-mode warning banner plus a "Session token
 (dev only)" / "Backend token (dev only)" / "Refresh token (dev only)" field group, gated on whether the
 session object actually carries those fields (the authoritative, request-scoped signal) rather than on
 the separately-fetched `META.devMode` flag, so the UI never invents a value the server didn't send. The
@@ -1580,12 +1580,12 @@ generally, and this suite runs with `NODE_ENV=test` (i.e. non-production), so th
 expected in the response. Replaced with a test asserting the dev-mode fields are populated by default in
 this suite, plus a new test that flips `process.env.NODE_ENV` to `"production"` for one request (restored
 in a `finally`) and confirms the same fields come back `undefined` — 101 tests total, up from 100.
-Verified with `tsc --noEmit` (clean) and `node --check` on `admin.js`; `vitest run` still can't execute in
+Verified with `tsc --noEmit` (clean) and `node --check` on `console.js`; `vitest run` still can't execute in
 this cloud sandbox for the unrelated, already-documented `better-sqlite3`-on-Linux-VM reason (see the
 Active sessions entry directly below), so Padma should confirm the new production-mode test with a local
 `npm test`.
 
-### 2026-09-23 (same day) — Admin UI: "Active sessions" viewer for the in-memory session store
+### 2026-09-23 (same day) — Console UI: "Active sessions" viewer for the in-memory session store
 
 Padma asked "Can you add a feature to see what is stored in memory for auth providers?" — scoped to a
 live view of caller sessions currently held by `SessionStore` (see
@@ -1598,14 +1598,14 @@ gained `listSessions()` and `revokeSession(id)`, plus a `SessionSummary` shape (
 claims, `createdAt`/`expiresAt`, `hasRefreshToken`) that deliberately excludes the real bearer token
 and the backend/refresh token it wraps — the same "never re-display a secret once it exists" stance the
 codebase already takes for `bindPassword`/`clientSecret`/`tokenSecret` via `secretRedaction.ts`, applied
-here to session tokens instead of config secrets. Since the admin UI still needs *some* stable
+here to session tokens instead of config secrets. Since the console UI still needs *some* stable
 identifier per session (to list rows and to revoke one), each session gets a one-way `id`:
 `sha256(token).slice(0, 16)` — enough to identify and revoke a session without ever letting the id be
-reversed back into the working token. New admin routes `GET /admin/api/sessions` and
-`DELETE /admin/api/sessions/:id` (`adminApi.ts`; `app.ts` now passes the already-constructed
-`AuthService` instance into `createAdminApiRouter`, alongside the registries it already received).
+reversed back into the working token. New console routes `GET /console/api/sessions` and
+`DELETE /console/api/sessions/:id` (`consoleApi.ts`; `app.ts` now passes the already-constructed
+`AuthService` instance into `createConsoleApiRouter`, alongside the registries it already received).
 
-Admin UI: a new "Active sessions" sidebar section (`gateway-list`/`gateway-row`, matching the visual
+Console UI: a new "Active sessions" sidebar section (`gateway-list`/`gateway-row`, matching the visual
 language already shared by gateways/endpoints/auth providers) with a Refresh button, and a read-only
 `session-detail` panel (provider, subject, created/expires timestamps, whether the session is
 refreshable, and its claims) reusing the existing single-active-panel (`showDetailView`/`closeDetail`)
@@ -1613,17 +1613,17 @@ and info-icon (`FIELD_INFO`) patterns. A "Revoke session" button in the detail p
 deletes the session and refreshes the list — a natural companion action once sessions are visible at
 all, not something separately requested but a small enough addition to include with the viewer itself.
 
-Verified via `tsc --noEmit` (clean) and `node --check` on the updated `admin.js`; added a
-`admin API: sessions` test block to `test/middleware.test.ts` covering the empty-list case, a session
+Verified via `tsc --noEmit` (clean) and `node --check` on the updated `console.js`; added a
+`console API: sessions` test block to `test/middleware.test.ts` covering the empty-list case, a session
 appearing after login with the token/backend-token never present anywhere in the response body, revoke-
-then-401-on-next-call, a 404 on revoking an unknown id, and that both routes require admin auth like
-every other `/admin/api/*` route. `vitest run` itself hit this environment's own pre-existing
+then-401-on-next-call, a 404 on revoking an unknown id, and that both routes require console auth like
+every other `/console/api/*` route. `vitest run` itself hit this environment's own pre-existing
 `better-sqlite3`-on-an-aarch64-Linux-verification-sandbox limitation (see the 2026-09-22 LDAP entry's
 Docker debugging session below for the general shape of that class of issue) rather than any problem in
 the new tests — Padma, worth a `npm test` on your own machine to get the real pass/fail signal on this
 one.
 
-### 2026-09-23 — Admin UI "Test Login" for auth providers; three real Docker/OpenLDAP bugs and one real LDAP security fix it surfaced
+### 2026-09-23 — Console UI "Test Login" for auth providers; three real Docker/OpenLDAP bugs and one real LDAP security fix it surfaced
 
 Padma asked to "add test option for auth providers" — clarified to: a "Test Login" button in the auth
 provider editor that exercises a provider's *current, possibly-unsaved* config against real credentials,
@@ -1635,7 +1635,7 @@ expiresAt? }` or `{ ok: false, message }`, but never the backend token a real lo
 config-validation failure (bad schema, unresolved `${env.*}`) is treated differently from a real
 login-attempt failure: the former surfaces as the existing 400 zod-error response, the latter as `{ ok:
 false }` with a message, so the UI can tell "this config is broken" from "this config is fine but these
-credentials don't work" apart. New route: `POST /admin/api/auth-providers/test-login`.
+credentials don't work" apart. New route: `POST /console/api/auth-providers/test-login`.
 
 Using this feature to test the newly-added `demoLdap` provider against the real `docker/openldap`
 directory (the fake in-process LDAP server used by the automated suite doesn't exercise the real Docker
@@ -1655,7 +1655,7 @@ image at all) surfaced a chain of environment and code issues, each fixed as it 
   actually reached Padma's checkout from an earlier session — Padma's own diagnosis ("bootstrap folder is
   empty") is what found this, not anything detected proactively. Recreated and delivered.
 - **`ldapts` error-message quality**: a real bind/search failure against OpenLDAP was surfacing to the
-  admin as the bare, unhelpful `{"ok":false,"message":" Code: 0x20"}` — `ldapts`'s own
+  developer as the bare, unhelpful `{"ok":false,"message":" Code: 0x20"}` — `ldapts`'s own
   `ResultCodeError` only falls back to a default message when the server's diagnostic text is
   `undefined`, not when it's an *empty string* (which is exactly what OpenLDAP sends for a `noSuchObject`
   it doesn't want to explain further — see the ACL note below). Fixed with a `runSearch()` wrapper
@@ -1705,13 +1705,13 @@ with the *exact same* fixture as `docker/openldap`'s bootstrap LDIF (same base D
 same three groups, same passwords), so the automated test suite doesn't depend on Docker at all. Wired
 into `test/middleware.test.ts`'s `beforeAll`/`afterAll` alongside the existing mock backend; added a
 `caller auth: ... > ldap provider (search-then-bind), end to end through a gateway` test block and
-`admin API: auth-provider CRUD` cases for the new schema validation and a full create/update/delete
+`console API: auth-provider CRUD` cases for the new schema validation and a full create/update/delete
 round trip (88 tests total, up from 64). Demo wiring: `demoLdap` in `config/authProviders.yaml`,
 `crmJsonAuthedLdap` in `config/gateways.yaml`, `config/endpoints/api/authed/ldap-echo.yaml`, and three
 new `DEMO_LDAP_*` vars in `.env.example` — log in with `jdoe`/`asmith`/`bwayne`, password
 `password123`.
 
-Extended the admin UI's Auth providers editor with an `ldap` kind: URL, a bind-mode selector toggling
+Extended the console UI's Auth providers editor with an `ldap` kind: URL, a bind-mode selector toggling
 between the direct- and search-then-bind field sets, optional group-lookup fields, a comma-separated
 extra-attributes field, a TLS-verification checkbox, and the stand-in token's secret/TTL — following
 the exact pattern `basicLogin`/`oauth2` already established (`AUTH_PROVIDER_KINDS`, `FIELD_INFO`
@@ -1724,7 +1724,7 @@ modes plus group/attribute claims directly against the fake LDAP server (catchin
 process — see below), a live end-to-end curl round trip (login → `{__authToken}`-injected signed JWT
 seen by the mock backend) against a real running instance pointed at the fake LDAP server, and a
 disposable Playwright script (per the project's disposable-QA-script convention) exercising the new
-admin UI fields, save/reopen/delete, and the gateway editor's Requires auth dropdown.
+console UI fields, save/reopen/delete, and the gateway editor's Requires auth dropdown.
 
 Two real bugs surfaced and fixed *in the test infrastructure*, not the production `ldap` provider,
 while building the fake LDAP server: (1) `req.dn` on a **bind** request comes back as a plain string in
@@ -1763,14 +1763,14 @@ an attribute search and a group-membership search (`member=<dn>`) return the exp
 commands used are the ones documented in `docker/openldap/README.md`'s "Quick smoke test" section, so
 Padma can re-run the same checks once the container's actually started with Docker.
 
-### 2026-09-21 (same day) — Auth providers get an admin UI screen; gateways get a `requiresAuth` dropdown
+### 2026-09-21 (same day) — Auth providers get an console UI screen; gateways get a `requiresAuth` dropdown
 
 Padma noticed that the just-shipped caller-authentication feature (below) was API/YAML-only: there was
 no way to create an auth provider or point a gateway at one without hand-editing
 `config/authProviders.yaml`/`config/gateways.yaml` or calling the REST API directly. Asked for both
 missing pieces to be added, mirroring the existing Gateways editor's conventions exactly.
 
-Added a new **Auth providers** sidebar section (`public/admin/index.html`/`admin.js`) — list, create,
+Added a new **Auth providers** sidebar section (`public/console/index.html`/`console.js`) — list, create,
 edit, delete — alongside Endpoints and Gateways, following the same list-row language
 (`.gateway-list`/`.gateway-row`, reused as-is) and the same "blank field on edit means unchanged"
 convention for `clientSecret` that gateway secrets already use. The editor renders different fields for
@@ -1782,10 +1782,10 @@ target/source/transform/default shape. The Gateway editor gained a **Requires au
 (`select[name=requiresAuth]`), populated from the auth-provider list, sitting right below the existing
 kind-specific fields and read into `config.requiresAuth` on save exactly like `commonParams` already is.
 
-No backend changes were needed — `/admin/api/auth-providers` and the `requiresAuth` gateway field were
+No backend changes were needed — `/console/api/auth-providers` and the `requiresAuth` gateway field were
 already fully built (see the entry below); this was purely wiring up existing API surface that had no
-UI yet. `AUTH_PROVIDER_KINDS`/`OAUTH_GRANT_TYPES` are hardcoded client-side in `admin.js`, matching the
-existing `GATEWAY_KINDS` convention (gateway kinds aren't served from `/admin/api/meta` either).
+UI yet. `AUTH_PROVIDER_KINDS`/`OAUTH_GRANT_TYPES` are hardcoded client-side in `console.js`, matching the
+existing `GATEWAY_KINDS` convention (gateway kinds aren't served from `/console/api/meta` either).
 
 Verified with a dedicated 16-check live-browser Playwright script (not shipped, per the project's
 disposable-QA-script convention) against a real running instance: the Auth providers section lists
@@ -1804,7 +1804,7 @@ middleware's own data endpoints against enterprise identity systems, with the mi
 real backend token and issuing its own opaque session token instead — captured in
 `AUTH_DESIGN_NOTES.md` across a long iterative Q&A (opaque vs. JWT, refresh handling, multi-instance/
 Redis, the OAuth Authorization Code redirect flow, a client-app registry for it). A follow-on
-brainstorm on production deployment topology (admin console as a separate dev-only build, config
+brainstorm on production deployment topology (developer console as a separate dev-only build, config
 promotion via Git branches to a shared volume, manual rolling restart to apply changes) went into a
 second document, `DEPLOYMENT_ARCHITECTURE_NOTES.md`, since it turned out to be broader than auth
 specifically. Once both were worked through to a decided state, Padma asked to implement phase 1 of
@@ -1824,8 +1824,8 @@ architecture writeup in [Caller authentication](#caller-authentication).
 Demo wiring added alongside: `config/authProviders.yaml` (`demoLogin`, `demoOAuth`), a new
 `crmJsonAuthed` gateway (`requiresAuth: demoLogin`), a new `json-authed-echo` endpoint, and two new
 mock-backend routes (`POST /login`, `POST /oauth/token`) so the whole flow — login, token injection,
-logout — is exercisable end to end without a real backend. `/admin/api/auth-providers` gets the same
-CRUD shape as `/admin/api/gateways` (no browser UI for it yet, API/YAML only). One redaction bug was
+logout — is exercisable end to end without a real backend. `/console/api/auth-providers` gets the same
+CRUD shape as `/console/api/gateways` (no browser UI for it yet, API/YAML only). One redaction bug was
 caught and fixed during this work: a field ending in `"Path"` (e.g. `tokenPath`) was being masked
 because its name contains the substring `"token"`, even though it holds a JSONPath expression, not a
 secret — see the note in [Caller authentication](#caller-authentication).
@@ -1837,13 +1837,13 @@ the rest of this app already is.
 
 ### 2026-09-16 (same day) — "Try it" panel can now test generated bulk table endpoints
 
-Padma reported that testing a POST endpoint from the admin UI's Test tab gave no way to enter a request
+Padma reported that testing a POST endpoint from the console UI's Test tab gave no way to enter a request
 body. Root cause: a generated table-CRUD endpoint (`list`/`bulkCreate`/`bulkUpdate`/`bulkDelete`, created
 by "Generate CRUD endpoints" on a gateway) doesn't use the normal declarative `input` params the Test tab
 already had fields for — it reads a whole `rows`/`updates`/`keys` array from the raw JSON body, or filters
 from the raw query string, straight off the real request (see `sql.ts`'s `listRows`/`bulkCreate`/
 `bulkUpdate`/`bulkDelete`). The Test tab used to just tell users to test these with curl/Postman instead
-(`#tryit-bulk-note`) — even though the server side (`/admin/api/test-backend`, `/admin/api/endpoints/:id/
+(`#tryit-bulk-note`) — even though the server side (`/console/api/test-backend`, `/console/api/endpoints/:id/
 test`) already accepted optional `rawQuery`/`rawBody` fields and passed them straight to `callBackend()`,
 unused by the UI.
 
@@ -1852,7 +1852,7 @@ Fixed by adding two JSON textareas to the Test tab (`#test-raw-query-row` / `#te
 params for `list`, Request body for the other three, each pre-filled with a placeholder showing the exact
 shape that operation's validation expects (e.g. `{"rows": [{"...": "..."}]}` for `bulkCreate`). `fetchSample()`
 `JSON.parse`s whichever box is visible and non-empty (with a friendly error naming which field failed, on
-bad JSON) and includes it as `rawQuery`/`rawBody` in the existing `/admin/api/test-backend` call. No server
+bad JSON) and includes it as `rawQuery`/`rawBody` in the existing `/console/api/test-backend` call. No server
 changes were needed — this only wires up a UI gap against an already-supported code path. Verified end to
 end with a generated `bulkCreate` endpoint against the demo SQLite database (a real row inserted via the
 Test tab's new Request body field) and confirmed `list` shows Query params instead while a normal
@@ -1864,17 +1864,18 @@ Padma decided on "Naimix" as the product's name (after considering "Naimish" and
 soft trademark overlap with the existing Naim Audio hi-fi brand and its meaning — Sanskrit for
 "momentary"/"transient" — being a poor fit for a server meant to run continuously). Renamed everywhere:
 the npm package name (`package.json`/`package-lock.json`, `lohitas-middleware` → `naimix`), the admin
-UI's page title/header/brand text (`public/admin/index.html`), the startup log line
+UI's page title/header/brand text (`public/console/index.html`), the startup log line
 (`src/server/index.ts`), and every doc title/prose reference (`README.md`, `TECHNICAL.md`,
 `TECH_STACK.md`). Also renamed the internal identifiers that carried the old name so nothing in the
-codebase still says "lohitas": the admin UI's `localStorage` keys (`lohitas-admin-token` →
-`naimix-admin-token`, `lohitas-admin-theme` → `naimix-admin-theme` — see notes above),  the mock SOAP
+codebase still says "lohitas": the console UI's `localStorage` keys (`lohitas-admin-token` →
+`naimix-admin-token` → `naimix-console-token`, `lohitas-admin-theme` → `naimix-admin-theme` →
+`naimix-console-theme` — see notes above, and the later Admin→Developer Console rename),  the mock SOAP
 backend's WSDL namespace/soapAction URLs (`lohitas.example.com` → `naimix.example.com`, in
 `src/mock-backend/customerService.wsdl`), and test-only scratch identifiers in
 `test/middleware.test.ts` (`LOHITAS_TEST_USER` env var, `lohitas-test-`/`lohitas-ws-test-` temp-dir
 prefixes).
 
-Renaming the two `localStorage` keys means anyone with the admin UI already open will see their saved
+Renaming the two `localStorage` keys means anyone with the console UI already open will see their saved
 token forgotten (re-enter it once) and their theme choice reset to the OS default, on their first load
 after this change ships — a one-time, harmless side effect of the rename, not a bug.
 
@@ -1886,15 +1887,15 @@ about the running system's behavior changed.
 Padma reported the error for some (not all) endpoints. Root cause: `app.ts` registered
 `express.json()`/`express.urlencoded()` with no `limit` option, so both silently fell back to
 body-parser's hardcoded default of exactly 100kb — any request body over that, on any endpoint (data
-endpoints and the admin API alike), fails with a bare `413 request entity too large` with no indication
+endpoints and the console API alike), fails with a bare `413 request entity too large` with no indication
 of why. "Some endpoints" is explained by which ones happen to send a bigger body: a sizable XML/SOAP
-payload, a bulk SQL write with many rows, a large admin UI save.
+payload, a bulk SQL write with many rows, a large console UI save.
 
 Fixed by giving both parsers an explicit `limit`, read from a new `MAX_REQUEST_BODY_SIZE` env var
 (default `10mb` — confirmed with Padma before implementing) directly inside `app.ts`, the same way
-`ADMIN_TOKEN`/`LOG_LEVEL` are already read directly in their own module rather than threaded through
+`CONSOLE_TOKEN`/`LOG_LEVEL` are already read directly in their own module rather than threaded through
 `CreateAppOptions`. Added a regression test (`test/middleware.test.ts`) posting a 200kb body through
-`/admin/api/test-mapping` — comfortably over the old 100kb ceiling, comfortably under the new 10mb one —
+`/console/api/test-mapping` — comfortably over the old 100kb ceiling, comfortably under the new 10mb one —
 and confirmed against a standalone Express app that the exact same request against the *old*
 (no-`limit`) config reproduces the reported `413`/`"request entity too large"` precisely. Also fixed two
 stray "Config folder"/"Change folder…" references in `.env.example` that had survived the 2026-09-02
@@ -1937,16 +1938,16 @@ logs contain the full, exact raw XML/SOAP envelope text.
 ### 2026-09-02 — Renamed "config folder" to "workspace" throughout
 
 Padma asked for the concept end users work with gateways and endpoints in — previously labeled "Config
-folder" — to be called "Workspace" instead. Applied everywhere: admin UI labels and internal ids
+folder" — to be called "Workspace" instead. Applied everywhere: console UI labels and internal ids
 (`index.html`'s "Config folder"/"Change folder…" → "Workspace"/"Change workspace…", the
 `#folder-editor`/`#folder-form`/`#change-folder-btn` drawer → `#workspace-editor`/`#workspace-form`/
-`#change-workspace-btn`, `admin.js`'s `openFolderEditor()`/`saveFolder()` →
+`#change-workspace-btn`, `console.js`'s `openFolderEditor()`/`saveFolder()` →
 `openWorkspaceEditor()`/`saveWorkspace()`), README.md/TECHNICAL.md section headings and prose (the
 "Config folder / workspaces" section is now just "Workspace"), and server-side code comments
-(`adminApi.ts`, `app.ts`, `index.ts`, `workspaceSettings.ts`) and test `describe`/`it` text.
+(`consoleApi.ts`, `app.ts`, `index.ts`, `workspaceSettings.ts`) and test `describe`/`it` text.
 
 Deliberately **not** renamed: the `configDir` field/variable name itself — it's a stable data contract
-(the `data/settings.json` shape, the `GET`/`PUT /admin/api/settings` JSON, the workspace-editor form's
+(the `data/settings.json` shape, the `GET`/`PUT /console/api/settings` JSON, the workspace-editor form's
 `name="configDir"` input) that's independent of what the concept is called in prose, and renaming it
 would be a breaking change to the settings file and HTTP API for no user-facing benefit. Also left alone:
 the unrelated "endpoint folder" tree grouping in the sidebar (`endpoint-folder-*` classes,
@@ -1971,19 +1972,19 @@ and having to fix a now-stale absolute `configDir` in `data/settings.json` each 
 (`src/server/index.ts`) now resolves a persisted `configDir` with `path.resolve(process.cwd(), ...)`
 before use, so a relative value (e.g. `"config"`, to point at the project's own bundled `config/` folder)
 resolves correctly and deliberately rather than only working by coincidence of what `path.join` produces
-on an unresolved relative string. The admin UI's "Change workspace" control is unaffected — it already
-always saves an absolute path (`adminApi.ts`), since it's meant to point anywhere on disk. See the new
+on an unresolved relative string. The console UI's "Change workspace" control is unaffected — it already
+always saves an absolute path (`consoleApi.ts`), since it's meant to point anywhere on disk. See the new
 "Packing a real workspace in as the project's own default" note in
 [Workspace](#workspace). Verified with `tsc --noEmit` and the full
 `vitest` suite (64/64 passing); functionally verified by moving a real `endpoints/`/`gateways.yaml`
 folder into `config/`, setting `configDir` to the relative `"config"`, and confirming
-`GET /admin/api/settings` reports the correctly-resolved absolute path with the right endpoint/gateway
+`GET /console/api/settings` reports the correctly-resolved absolute path with the right endpoint/gateway
 counts.
 
 ### 2026-08-31 — Fixed: info icons landing below the field title instead of beside it
 
 A real layout bug in the previous two entries below, only caught once the user checked it on their own
-running instance: every `label` in `admin.css` is `display: flex; flex-direction: column` (title stacked
+running instance: every `label` in `console.css` is `display: flex; flex-direction: column` (title stacked
 above its input) — and each *element* child of a flex container becomes its own flex item, while only a
 bare, contiguous run of *text* is grouped into one. Since `.info-icon` is a real `<button>` element (not
 text), `<label>Id <button class="info-icon">i</button><input></label>` produced three separate flex
@@ -1993,12 +1994,12 @@ title rather than beside it, exactly as the checkbox fields never had a problem 
 child count). Fixed by grouping each label's title text + icon (+ any trailing muted qualifier) inside
 one plain `<span class="field-title">` — a single flex item that lays out its own contents with normal
 inline text flow (wrapping naturally, no further flex needed) — added directly in `index.html` for the
-static fields and via a new `fieldTitle(...)` helper in `admin.js` for every dynamically-rendered one
+static fields and via a new `fieldTitle(...)` helper in `console.js` for every dynamically-rendered one
 (`renderBackendFields()`, `renderGatewayKindFields()`, `inputParamRow()`, `outputFieldRow()`). Also added
 a general (previously `.repeatable-row`-scoped only) `.checkbox-field { flex-direction: row }` rule so
 the gateway editor's standalone `useNullAsDefault` checkbox — the one `.checkbox-field` label not living
 inside a `.repeatable-row` — gets the same row treatment as the others. See the updated
-[Field info icons](#admin-ui-and-admin-api) bullet. Verified with `tsc --noEmit`, the full `vitest` suite
+[Field info icons](#developer-console) bullet. Verified with `tsc --noEmit`, the full `vitest` suite
 (64/64 passing), and a Playwright pass across the Basic, Backend (json and sql), Parameters, Output, and
 gateway-editor screens in both themes confirming every title+icon pair now renders on one line, and that
 opening/closing an info popup and the gateway quick-view popup still work correctly with the new markup.
@@ -2012,7 +2013,7 @@ any qualifier following the icon (e.g. "URL ⓘ (supports {param} placeholders)"
 field similarly now reads "Type (set by the selected gateway) ⓘ" instead of putting the hint after the
 icon. Second, a new "View gateway" button next to the Backend tab's Gateway select opens a popup showing
 the selected gateway's actual definition (kind, connection details, common params) — see the new
-[Gateway quick-view](#admin-ui-and-admin-api) bullet. The popup mechanism itself was generalized
+[Gateway quick-view](#developer-console) bullet. The popup mechanism itself was generalized
 (`showPopup()`) so both the field-help text and this richer, structured gateway view share one popup
 element. Verified with `tsc --noEmit`, the full `vitest` suite (64/64 passing), and a Playwright pass in
 both light and dark themes covering: the button starting disabled with no gateway selected; a JSON and a
@@ -2026,7 +2027,7 @@ Every field label across both editors — including the ones rendered dynamicall
 type and per repeatable row — now has a small "i" icon next to it. Clicking it pops up a short
 explanation of what that field is for, in a single reused popup positioned next to the clicked icon;
 clicking it again, clicking elsewhere, pressing Escape, resizing, or scrolling all close it. See the new
-[Field info icons](#admin-ui-and-admin-api) bullet for the implementation. Verified with `tsc --noEmit`,
+[Field info icons](#developer-console) bullet for the implementation. Verified with `tsc --noEmit`,
 the full `vitest` suite (64/64 passing), and a Playwright pass in both light and dark themes covering:
 opening a popup from a static field (Basic tab), from a dynamically-rendered backend field (Backend tab,
 json type), and from a repeatable Parameters row; toggling closed on a second click, an outside click,
@@ -2040,7 +2041,7 @@ backend, and picking a Type that disagreed with the selected gateway's kind woul
 endpoint at request time (wrong connector, wrong expected shape). Gateway now comes first and Type
 follows it automatically -- greyed out with a "(set by the selected gateway)" hint -- and is only left
 editable when no gateway is selected (a direct URL or inline-wsdl backend). See the updated
-[Admin UI and Admin API](#admin-ui-and-admin-api) section. Verified with `tsc --noEmit`, the full
+[Console UI and Console API](#developer-console) section. Verified with `tsc --noEmit`, the full
 `vitest` suite (64/64 passing), and a Playwright pass confirming: an existing endpoint's Type shows
 locked to its gateway's kind; a new endpoint with no gateway keeps Type editable; picking a gateway
 snaps Type to match and swaps in the right field set; clearing the gateway back to "(none)" re-enables
@@ -2052,15 +2053,15 @@ The endpoint detail/editor was still cluttered even after the split-pane redesig
 plus four sections (Input parameters, Backend, Output mapping, Try it) stacked vertically, mostly
 expanded by default. Replaced that with five tabs (Basic, Backend, Parameters, Output, Test) so only one
 section's fields show at a time; opening any endpoint always starts on Basic. See the updated
-[Admin UI and Admin API](#admin-ui-and-admin-api) section for the `invalid`-event tab-jump detail (a
+[Console UI and Console API](#developer-console) section for the `invalid`-event tab-jump detail (a
 required field on a non-active tab needs the editor to switch to it before the browser's native
 validation bubble tries to show). Verified with `tsc --noEmit`, the full `vitest` suite (64/64 passing),
 and a Playwright pass clicking through all five tabs plus the validation-jump case, in both themes.
 
-### 2026-08-30 — Admin UI redesign: split-pane layout, theme toggle, bigger controls
+### 2026-08-30 — Console UI redesign: split-pane layout, theme toggle, bigger controls
 
-Restructured the admin UI's layout and visual design; no API, schema, or config-file changes. See
-[Admin UI and Admin API](#admin-ui-and-admin-api) for the updated technical detail.
+Restructured the console UI's layout and visual design; no API, schema, or config-file changes. See
+[Console UI and Console API](#developer-console) for the updated technical detail.
 
 - **Split-pane layout** replaces the old tabbed, full-page views. A left sidebar lists Endpoints (the
   existing folder tree) and Gateways (now a row list instead of a table) side by side, always visible.
@@ -2092,20 +2093,20 @@ schema shape, request behavior, or feature changed — applied consistently acro
   An endpoint's `backend.connection: <name>` field is now `backend.gateway: <name>`.
 - **Config loader** (`src/config/loader.ts`): `loadEndpointConfigs()`/`loadGateways()`/
   `loadGatewaysRaw()` (were `loadRouteConfigs()`/`loadConnections()`).
-- **Server registries/dispatch/admin API**: `src/server/routeRegistry.ts` →
+- **Server registries/dispatch/console API**: `src/server/routeRegistry.ts` →
   `src/server/endpointRegistry.ts` (`RouteRegistry` class → `EndpointRegistry`);
   `src/server/connectionsRegistry.ts` → `src/server/gatewaysRegistry.ts` (`ConnectionsRegistry` class →
   `GatewaysRegistry`); `src/server/routeFileLayout.ts` → `src/server/endpointFileLayout.ts`
   (`routePathToFolderSegments()`/`computeRouteFile()` → `endpointPathToFolderSegments()`/
   `computeEndpointFile()`); `src/server/crudGenerator.ts`'s `generateCrudRoutesForConnection()` →
-  `generateCrudEndpointsForGateway()`. Admin API paths renamed: `/admin/api/routes` →
-  `/admin/api/endpoints`, `/admin/api/connections` → `/admin/api/gateways` (including sub-paths like
-  `/admin/api/connections/:name/generate-crud` → `/admin/api/gateways/:name/generate-crud`). The
+  `generateCrudEndpointsForGateway()`. Console API paths renamed: `/console/api/routes` →
+  `/console/api/endpoints`, `/console/api/connections` → `/console/api/gateways` (including sub-paths like
+  `/console/api/connections/:name/generate-crud` → `/console/api/gateways/:name/generate-crud`). The
   introspection endpoint `GET /__routes` → `GET /__endpoints`. Env vars `ROUTES_DIR`/`CONNECTIONS_FILE`
   → `ENDPOINTS_DIR`/`GATEWAYS_FILE`.
-- **Admin UI** (`public/admin/`): "Routes tab" → "Endpoints tab", "Connections tab" → "Gateways tab",
+- **Console UI** (`public/console/`): "Routes tab" → "Endpoints tab", "Connections tab" → "Gateways tab",
   "New route"/"New connection" → "New endpoint"/"New gateway", "Generate CRUD routes" → "Generate CRUD
-  endpoints", and the corresponding `admin.js` function/constant renames (`buildRouteTree()` →
+  endpoints", and the corresponding `console.js` function/constant renames (`buildRouteTree()` →
   `buildEndpointTree()`, `renderRoutesTree()`/`renderRouteTreeNode()` → `renderEndpointsTree()`/
   `renderEndpointTreeNode()`, `COLLAPSED_ROUTE_FOLDERS` → `COLLAPSED_ENDPOINT_FOLDERS`,
   `renderConnectionKindFields()` → `renderGatewayKindFields()`, `openRouteEditor()` →
@@ -2122,13 +2123,13 @@ schema shape, request behavior, or feature changed — applied consistently acro
    through), not this project's renamed entity concept, so it keeps knex's own field name even though
    the gateway that contains it was renamed. See [Gateway config reference](#gateway-config-reference)
    and [SQL connector](#sql-connector).
-2. The admin UI's "Test connection" button and its underlying `testDbConnection()` (frontend),
+2. The console UI's "Test connection" button and its underlying `testDbConnection()` (frontend),
    `testSqlConnection()` (`sql.ts`), and `GatewaysRegistry.testConnection()` method name are unchanged —
    "connection" there is generic reachability-testing terminology (as in "test the database
    connection"), not a reference to the renamed entity, so the wording and identifiers were left alone.
 
 Verified: `tsc --noEmit`/`npm run build` clean, full `vitest` suite green, and a manual QA pass against a
-running instance (served admin UI static assets, plus the full API surface — endpoint/gateway CRUD,
+running instance (served console UI static assets, plus the full API surface — endpoint/gateway CRUD,
 generate-crud, and all four live backend types) confirmed the new terminology end to end. The project
 config used for that pass was restored to its original state afterward.
 
@@ -2148,19 +2149,19 @@ instance at — the app itself never touches Git (no clone/commit/push from insi
   `getDir()`/`setDir()` and `getFilePath()`/`setFilePath()` — their backing path is now a mutable
   instance field (was `readonly`), so the *same* instances every other module already holds a reference
   to can be repointed at a different folder and reloaded in place, with the change visible to every
-  consumer (`dispatch.ts`, `adminApi.ts`) on the very next request.
-- New admin API endpoints `GET`/`PUT /admin/api/settings` (`adminApi.ts`) — `PUT` validates the folder
+  consumer (`dispatch.ts`, `consoleApi.ts`) on the very next request.
+- New console API endpoints `GET`/`PUT /console/api/settings` (`consoleApi.ts`) — `PUT` validates the folder
   exists on disk (`400` if not, naming the path), calls `closeAllSqlConnections()` to release any pooled
   SQL clients tied to the *old* workspace's gateways before switching, repoints both registries, and
   persists the choice via `saveWorkspaceSettings()`.
 - `src/server/index.ts`'s startup path resolution now checks, in order: a workspace persisted from a
-  previous admin-UI choice (`SETTINGS_FILE`, default `data/settings.json` — deliberately outside any
+  previous console-UI choice (`SETTINGS_FILE`, default `data/settings.json` — deliberately outside any
   workspace so it survives being swapped for a different one, and gitignored as a per-machine
   preference) → `CONFIG_DIR` env var → the original independent `ENDPOINTS_DIR`/`GATEWAYS_FILE` env
   vars, unchanged, as the final fallback.
-- Admin UI: a new workspace bar under the header (`renderWorkspaceBar()` in `admin.js`, markup in
-  `index.html`, styling in `admin.css`) shows the current workspace and endpoint/gateway counts; "Change
-  workspace…" opens a one-field drawer (`#workspace-editor`) that calls `PUT /admin/api/settings`,
+- Console UI: a new workspace bar under the header (`renderWorkspaceBar()` in `console.js`, markup in
+  `index.html`, styling in `console.css`) shows the current workspace and endpoint/gateway counts; "Change
+  workspace…" opens a one-field drawer (`#workspace-editor`) that calls `PUT /console/api/settings`,
   following the same `save-then-close-then-reload` order already used by the endpoint/gateway editors.
 - See [Workspace](#workspace) for the full design (including why a
   brand-new, still-empty folder works with no extra step, and why switching affects the whole running
@@ -2190,7 +2191,7 @@ closing the drawer — all 7 passed; screenshot confirmed clean rendering.
   mirroring each endpoint's own URL path (new `src/server/endpointFileLayout.ts`; `EndpointRegistry.upsert()`/
   `remove()` in `endpointRegistry.ts` rewritten to move files and prune empty folders correctly;
   `loader.ts`'s file discovery made recursive). The 7 pre-existing endpoints were migrated in place. The
-  admin UI's Endpoints tab now renders the same structure as a collapsible folder tree instead of a flat
+  console UI's Endpoints tab now renders the same structure as a collapsible folder tree instead of a flat
   table. See [Folder layout mirrors each endpoint's path](#folder-layout-mirrors-each-endpoints-path).
 - Added 4 new tests covering the move/prune logic specifically; a disposable Playwright script verified
   the new folder-tree UI, then was deleted per convention.
@@ -2219,7 +2220,7 @@ closing the drawer — all 7 passed; screenshot confirmed clean rendering.
   where the dialect supports it. New files: `src/connectors/sqlIntrospect.ts`,
   `src/server/crudGenerator.ts`; extended `sqlBackendSchema`/`SqlBackendConfig` with the generated
   table-CRUD and stored-procedure modes; extended `ConnectorContext` with `rawQuery`/`rawBody`; new
-  admin endpoint `POST /admin/api/gateways/:name/generate-crud`. See
+  console endpoint `POST /console/api/gateways/:name/generate-crud`. See
   [Auto-generated CRUD + stored-procedure endpoints](#auto-generated-crud--stored-procedure-endpoints) and
   [SQL connector](#sql-connector).
 - Caught and fixed a real bug before shipping: the endpoint editor's SQL backend field renderer would have
@@ -2244,18 +2245,18 @@ closing the drawer — all 7 passed; screenshot confirmed clean rendering.
 - Found and fixed a related bug: `gatewayConfigSchema`'s plain `z.union` validation failures
   surfaced as one opaque top-level error with no field attribution — added
   `parseGatewayConfig()` in `gatewaysRegistry.ts` to pick out the right branch's real field
-  issues. See [Admin UI and Admin API](#admin-ui-and-admin-api).
+  issues. See [Console UI and Console API](#developer-console).
 - Endpoint editor sections (Input parameters/Backend/Output mapping/Try it) made collapsible with live
   item counts in each header.
 - Added a "Test connection" button/endpoint for SQL gateways (`testSqlConnection()` in `sql.ts`,
-  `POST /admin/api/gateways/test-connection`), using a standalone throwaway knex instance. See
+  `POST /console/api/gateways/test-connection`), using a standalone throwaway knex instance. See
   [SQL connector](#sql-connector).
 
 ### 2026-08-26 — Path auto-generation, `in: "env"` input params, gateway `commonParams`
 
-- Admin UI: an endpoint's `Path` can auto-compute from its gateway + endpoint id, with a separate "extra
+- Console UI: an endpoint's `Path` can auto-compute from its gateway + endpoint id, with a separate "extra
   path" suffix for path params. Pure frontend feature, no schema change. See
-  [Admin UI and Admin API](#admin-ui-and-admin-api).
+  [Console UI and Console API](#developer-console).
 - New input param location `in: "env"`, sourced from `process.env` rather than the caller's request —
   `paramExtractor.ts`. See [Endpoint config reference](#endpoint-config-reference).
 - New gateway-level `commonParams`, merged under every endpoint call's resolved params as the
@@ -2263,10 +2264,10 @@ closing the drawer — all 7 passed; screenshot confirmed clean rendering.
 - Added a `GET /echo` endpoint to the mock backend to verify both features end-to-end against real
   resolved values rather than mocks.
 
-### 2026-08-25 — Admin UI: unhelpful endpoint-path validation error
+### 2026-08-25 — Console UI: unhelpful endpoint-path validation error
 
 - A missing leading `/` on an endpoint's `path` produced a raw Zod message with no indication of which
-  field was wrong. Fixed the admin UI's error display to read `issues[].path`, added an inline hint +
+  field was wrong. Fixed the console UI's error display to read `issues[].path`, added an inline hint +
   HTML `pattern` on the Path field, and locked in the response shape with a dedicated test.
 
 ### 2026-08-25 — EBADENGINE dependency fix, then reversed in favor of standardizing on Node 24
@@ -2276,14 +2277,14 @@ closing the drawer — all 7 passed; screenshot confirmed clean rendering.
   `engines: { node: ">=24.0.0" }`. See
   [Runtime requirements and dependencies](#runtime-requirements-and-dependencies).
 
-### 2026-08-25 — Admin UI
+### 2026-08-25 — Console UI
 
-- Full browser admin UI added at `/admin`, backed by a token-gated `/admin/api/*` REST API. Required a
+- Full browser console UI added at `/console`, backed by a token-gated `/console/api/*` REST API. Required a
   real architecture change: replaced static per-endpoint Express handler registration with the
   `EndpointRegistry`/`GatewaysRegistry` + dynamic dispatcher design described throughout this document,
-  which is what makes every admin-API mutation take effect immediately. See
+  which is what makes every console-API mutation take effect immediately. See
   [Hot-reloadable registries](#hot-reloadable-registries), [Request lifecycle](#request-lifecycle), and
-  [Admin UI and Admin API](#admin-ui-and-admin-api).
+  [Console UI and Console API](#developer-console).
 
 ### 2026-08-24 — Initial build
 

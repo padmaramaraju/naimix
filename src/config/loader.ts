@@ -99,7 +99,7 @@ export function loadEndpointConfigs(endpointsDir: string): LoadedEndpoints {
 }
 
 /** Loads gateways.yaml WITHOUT resolving ${env.X} placeholders -- used by
- * the admin UI so it can show/preserve "this field references an env var"
+ * the console UI so it can show/preserve "this field references an env var"
  * rather than the resolved secret. */
 export function loadGatewaysRaw(gatewaysFile: string): GatewaysFileParsed {
   if (!fs.existsSync(gatewaysFile)) {
@@ -121,7 +121,7 @@ export function loadGateways(gatewaysFile: string): GatewaysFileParsed {
 
 /** Loads authProviders.yaml WITHOUT resolving ${env.X} placeholders -- same
  * "show/preserve an env reference, don't resolve it" convention as
- * loadGatewaysRaw, for a future admin UI. */
+ * loadGatewaysRaw, for a future console UI. */
 export function loadAuthProvidersRaw(file: string): AuthProvidersFileParsed {
   if (!fs.existsSync(file)) {
     return { authProviders: {} };

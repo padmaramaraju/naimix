@@ -18,7 +18,7 @@ function bearerToken(req: Request): string | undefined {
  * A single Express middleware that serves EVERY configured endpoint, by
  * looking up the current EndpointRegistry on each request rather than having
  * one static Express handler per endpoint. This is what makes endpoints
- * created, edited, or deleted through the admin API take effect immediately:
+ * created, edited, or deleted through the console API take effect immediately:
  * there's no per-endpoint handler to add/replace/remove in Express's own
  * router, just an in-memory table this middleware reads fresh every time.
  */

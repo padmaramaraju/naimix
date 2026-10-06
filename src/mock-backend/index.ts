@@ -45,7 +45,7 @@ export async function startMockBackend(port: number, sqlitePath: string): Promis
 
   // ---- Echo (test/dev helper) ----
   // Reflects back whatever query params and headers it was called with, so
-  // tests (and manual "Try it" exploration in the admin UI) can confirm a
+  // tests (and manual "Try it" exploration in the console UI) can confirm a
   // {paramName} placeholder actually resolved to the value it should have --
   // useful for gateway commonParams and env-sourced input params, which
   // don't change what the fixed demo customer records look like.

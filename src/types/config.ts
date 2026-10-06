@@ -128,6 +128,10 @@ export interface JsonGatewayConfig {
   headers?: Record<string, string>;
   /** Available as {name} to every endpoint using this gateway. */
   commonParams?: Record<string, string>;
+  /** Names of commonParams entries to mask in the console UI/API --
+   * opt-in per entry (set explicitly when configuring the gateway), never
+   * inferred from a key's own name. See secretRedaction.ts. */
+  commonParamsMasked?: string[];
   /** Name of an authProviders entry. When set, every endpoint calling
    * through this gateway requires a valid `Authorization: Bearer <token>`
    * session token issued by that provider (see POST /auth/login/{name}) --
@@ -141,6 +145,7 @@ export interface XmlGatewayConfig {
   baseUrl: string;
   headers?: Record<string, string>;
   commonParams?: Record<string, string>;
+  commonParamsMasked?: string[];
   requiresAuth?: string;
 }
 
@@ -148,6 +153,7 @@ export interface SoapGatewayConfig {
   kind?: "soap";
   wsdl: string;
   commonParams?: Record<string, string>;
+  commonParamsMasked?: string[];
   requiresAuth?: string;
 }
 
@@ -160,6 +166,7 @@ export interface SqlGatewayConfig {
   useNullAsDefault?: boolean;
   pool?: Record<string, unknown>;
   commonParams?: Record<string, string>;
+  commonParamsMasked?: string[];
   requiresAuth?: string;
 }
 

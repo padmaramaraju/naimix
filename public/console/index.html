@@ -3,15 +3,15 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Naimix — Admin</title>
-<link rel="stylesheet" href="admin.css" />
+<title>Naimix — Console</title>
+<link rel="stylesheet" href="console.css" />
 </head>
 <body>
   <div id="login-screen" class="login-screen">
     <form id="login-form" class="login-card">
       <h1>Naimix</h1>
-      <p class="muted">Enter the admin token to manage endpoints and gateways.</p>
-      <input id="login-token" type="password" placeholder="Admin token" autocomplete="off" required />
+      <p class="muted">Enter the console token to manage endpoints and gateways.</p>
+      <input id="login-token" type="password" placeholder="Console token" autocomplete="off" required />
       <button type="submit" class="btn-primary">Sign in</button>
       <p id="login-error" class="error-text" hidden></p>
     </form>
@@ -19,7 +19,7 @@
 
   <div id="app" class="app" hidden>
     <header class="topbar">
-      <div class="brand">Naimix <span class="muted">/ admin</span></div>
+      <div class="brand">Naimix <span class="muted">/ console</span></div>
       <div class="topbar-actions">
         <button id="theme-toggle-btn" class="icon-btn-lg" type="button" title="Toggle color theme" aria-label="Toggle color theme">
           <span class="theme-icon theme-icon-sun" aria-hidden="true">☀️</span>
@@ -320,7 +320,7 @@
             <code>AUTH_DESIGN_NOTES.md</code>'s opaque-token design.
             <span id="session-detail-prod-note">
               The session's real bearer token and the backend token (or refresh token) it wraps are
-              never shown here, even to an admin -- only enough to identify and, if needed, revoke it.
+              never shown here, even to a developer -- only enough to identify and, if needed, revoke it.
             </span>
           </p>
 
@@ -402,6 +402,6 @@
 
   <div id="toast" class="toast" hidden></div>
 
-  <script src="admin.js"></script>
+  <script src="console.js"></script>
 </body>
 </html>

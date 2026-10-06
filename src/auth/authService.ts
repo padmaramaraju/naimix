@@ -10,7 +10,7 @@ import type { SessionRecord } from "./types";
 // AUTH_DESIGN_NOTES.md.
 const REFRESH_MARGIN_MS = 30_000;
 
-/** What the admin UI's session viewer gets for each active session. Outside
+/** What the console UI's session viewer gets for each active session. Outside
  * production (see `isDevMode()` below), this also carries the real session
  * token and the backend/refresh token it wraps, for local debugging -- e.g.
  * copying a token to replay a call by hand. In production those three
@@ -39,15 +39,15 @@ export interface SessionSummary {
   refreshToken?: string;
 }
 
-/** A non-reversible stand-in for a session token, safe to show in the admin
+/** A non-reversible stand-in for a session token, safe to show in the console
  * UI and to accept back from it for revocation: knowing this id doesn't let
  * anyone reconstruct or replay the real bearer token it's derived from. */
 function sessionId(token: string): string {
   return crypto.createHash("sha256").update(token).digest("hex").slice(0, 16);
 }
 
-/** Gates the dev-only fields on SessionSummary (and the /admin/api/meta
- * `devMode` flag the admin UI reads to decide whether to render them).
+/** Gates the dev-only fields on SessionSummary (and the /console/api/meta
+ * `devMode` flag the console UI reads to decide whether to render them).
  * Same "opt out of the sensitive behavior only in production" convention
  * `logger.ts` already uses for pretty- vs JSON-printing -- unset/anything
  * other than exactly "production" is treated as a non-production
@@ -100,7 +100,7 @@ export class AuthService {
     await this.store.delete(token);
   }
 
-  /** Every session currently held in memory -- for the admin UI's "what's
+  /** Every session currently held in memory -- for the console UI's "what's
    * actually stored" view (see AUTH_DESIGN_NOTES.md's opaque-token design:
    * this in-memory store is the only place a backend token or refresh
    * token ever lives). Outside production (see `isDevMode()`), this is a
@@ -125,7 +125,7 @@ export class AuthService {
   }
 
   /** Revokes one session by the opaque `id` listSessions() handed out
-   * (never the real token, which the admin UI never sees). Returns false
+   * (never the real token, which the console UI never sees). Returns false
    * if no currently-held session matches -- e.g. it already expired and
    * was swept, or was already revoked. */
   async revokeSession(id: string): Promise<boolean> {

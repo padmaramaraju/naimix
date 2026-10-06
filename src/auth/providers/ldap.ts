@@ -145,7 +145,7 @@ async function bindAs(client: Client, dn: string, password: string): Promise<voi
 /** Runs an ldapts search, converting any failure -- a missing/wrong base
  * DN, a malformed filter, an ACL denial, a network hiccup, ... -- into a
  * clear AuthError naming the base DN, instead of letting ldapts's own raw
- * error reach the caller/admin verbatim. Worth doing specifically because
+ * error reach the caller/console verbatim. Worth doing specifically because
  * ldapts's ResultCodeError builds its message as `${message} Code:
  * 0x${code}`, and falls back to a default message only when the server's
  * own diagnostic text is `undefined` -- an OpenLDAP server that replies

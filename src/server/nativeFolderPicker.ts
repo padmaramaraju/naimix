@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
  * Opens a native OS folder-picker dialog and resolves to the chosen
  * absolute path, or `null` if the user cancelled/closed it.
  *
- * This does NOT go through the `dialog-node` package the admin UI's
+ * This does NOT go through the `dialog-node` package the console UI's
  * "Browse..." button was originally built against. `dialog-node`'s only
  * relevant primitive is `fileselect()`, which wraps AppleScript's
  * `choose file` on macOS and `zenity --file-selection` on Linux -- both

@@ -15,7 +15,7 @@ import { closeAllSqlConnections } from "../src/connectors";
 import { logger } from "../src/server/logger";
 
 const MOCK_PORT = 5099;
-const ADMIN_TOKEN = "test-admin-token";
+const CONSOLE_TOKEN = "test-console-token";
 const TMP_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "naimix-test-"));
 const TMP_ENDPOINTS_DIR = path.join(TMP_DIR, "endpoints");
 const TMP_GATEWAYS_FILE = path.join(TMP_DIR, "gateways.yaml");
@@ -33,11 +33,11 @@ let gatewaysRegistry: GatewaysRegistry;
 let authProvidersRegistry: AuthProvidersRegistry;
 
 function authed(): Record<string, string> {
-  return { Authorization: `Bearer ${ADMIN_TOKEN}` };
+  return { Authorization: `Bearer ${CONSOLE_TOKEN}` };
 }
 
 beforeAll(async () => {
-  process.env.ADMIN_TOKEN = ADMIN_TOKEN;
+  process.env.CONSOLE_TOKEN = CONSOLE_TOKEN;
 
   // Point every {env.X} placeholder in config/*.yaml at this test's mock
   // backend/DB before the config files are loaded.
@@ -59,7 +59,7 @@ beforeAll(async () => {
 
   // Work off a disposable COPY of the real config, never the project's own
   // config/endpoints, config/gateways.yaml and config/authProviders.yaml --
-  // the admin API tests below create/edit/delete files, which must never
+  // the console API tests below create/edit/delete files, which must never
   // touch the real project.
   fs.cpSync(path.resolve(__dirname, "../config/endpoints"), TMP_ENDPOINTS_DIR, { recursive: true });
   fs.cpSync(path.resolve(__dirname, "../config/gateways.yaml"), TMP_GATEWAYS_FILE);
@@ -205,77 +205,77 @@ describe("unknown endpoints", () => {
   });
 });
 
-describe("admin API auth", () => {
+describe("console API auth", () => {
   it("rejects requests with no token", async () => {
-    const res = await request(app).get("/admin/api/endpoints");
+    const res = await request(app).get("/console/api/endpoints");
     expect(res.status).toBe(401);
   });
 
   it("rejects requests with the wrong token", async () => {
-    const res = await request(app).get("/admin/api/endpoints").set("Authorization", "Bearer wrong");
+    const res = await request(app).get("/console/api/endpoints").set("Authorization", "Bearer wrong");
     expect(res.status).toBe(401);
   });
 
   it("accepts requests with the right token", async () => {
-    const res = await request(app).get("/admin/api/endpoints").set(authed());
+    const res = await request(app).get("/console/api/endpoints").set(authed());
     expect(res.status).toBe(200);
   });
 });
 
-describe("admin API: endpoint CRUD takes effect immediately (no restart)", () => {
+describe("console API: endpoint CRUD takes effect immediately (no restart)", () => {
   const newEndpoint = {
-    id: "admin-created-endpoint",
-    description: "Created via the admin API in a test",
+    id: "console-created-endpoint",
+    description: "Created via the console API in a test",
     method: "GET",
-    path: "/api/admin-test/customers/:id",
+    path: "/api/console-test/customers/:id",
     input: [{ name: "id", in: "path", required: true, type: "string" }],
     backend: { type: "json", gateway: "crmJson", url: "/customers/{id}", method: "GET" },
     output: { fields: [{ target: "id", source: "$.id" }, { target: "name", source: "$.firstName" }] },
   };
 
   it("404s before the endpoint is created", async () => {
-    const res = await request(app).get("/api/admin-test/customers/1");
+    const res = await request(app).get("/api/console-test/customers/1");
     expect(res.status).toBe(404);
   });
 
   it("creates an endpoint and it's immediately callable", async () => {
-    const created = await request(app).post("/admin/api/endpoints").set(authed()).send(newEndpoint);
+    const created = await request(app).post("/console/api/endpoints").set(authed()).send(newEndpoint);
     expect(created.status).toBe(201);
-    expect(created.body.endpoint.id).toBe("admin-created-endpoint");
+    expect(created.body.endpoint.id).toBe("console-created-endpoint");
 
     // No app restart, no re-require -- same `app` instance, next request.
-    const called = await request(app).get("/api/admin-test/customers/1");
+    const called = await request(app).get("/api/console-test/customers/1");
     expect(called.status).toBe(200);
     expect(called.body).toEqual({ id: "1", name: "Ada" });
   });
 
   it("persisted the endpoint to a YAML file on disk", () => {
-    const file = endpointRegistry.getFile("admin-created-endpoint");
+    const file = endpointRegistry.getFile("console-created-endpoint");
     expect(file).toBeDefined();
     expect(fs.existsSync(file!)).toBe(true);
   });
 
   it("rejects a second endpoint reusing the same id", async () => {
-    const res = await request(app).post("/admin/api/endpoints").set(authed()).send(newEndpoint);
+    const res = await request(app).post("/console/api/endpoints").set(authed()).send(newEndpoint);
     expect(res.status).toBe(400);
   });
 
   it("rejects a second endpoint reusing the same method+path", async () => {
     const res = await request(app)
-      .post("/admin/api/endpoints")
+      .post("/console/api/endpoints")
       .set(authed())
-      .send({ ...newEndpoint, id: "admin-created-endpoint-2" });
+      .send({ ...newEndpoint, id: "console-created-endpoint-2" });
     expect(res.status).toBe(400);
   });
 
   it("rejects a path missing the leading slash, with a field-scoped issue the UI can point at", async () => {
     const res = await request(app)
-      .post("/admin/api/endpoints")
+      .post("/console/api/endpoints")
       .set(authed())
-      .send({ ...newEndpoint, id: "admin-created-endpoint-3", path: "admin-test/customers/:id" });
+      .send({ ...newEndpoint, id: "console-created-endpoint-3", path: "console-test/customers/:id" });
     expect(res.status).toBe(400);
     expect(res.body.error).toBe("ValidationError");
-    // The admin UI (admin.js `api()`) reads `issues[].path` to say *which*
+    // The console UI (console.js `api()`) reads `issues[].path` to say *which*
     // field is wrong -- keep this shape stable or that error message goes
     // back to being unattributed.
     const pathIssue = res.body.issues.find((i: { path: string[] }) => i.path.join(".") === "path");
@@ -288,18 +288,18 @@ describe("admin API: endpoint CRUD takes effect immediately (no restart)", () =>
       ...newEndpoint,
       output: { fields: [{ target: "customerId", source: "$.id" }] },
     };
-    const res = await request(app).put("/admin/api/endpoints/admin-created-endpoint").set(authed()).send(updated);
+    const res = await request(app).put("/console/api/endpoints/console-created-endpoint").set(authed()).send(updated);
     expect(res.status).toBe(200);
 
-    const called = await request(app).get("/api/admin-test/customers/2");
+    const called = await request(app).get("/api/console-test/customers/2");
     expect(called.body).toEqual({ customerId: "2" });
   });
 
   it("deletes the endpoint and it stops being callable", async () => {
-    const del = await request(app).delete("/admin/api/endpoints/admin-created-endpoint").set(authed());
+    const del = await request(app).delete("/console/api/endpoints/console-created-endpoint").set(authed());
     expect(del.status).toBe(204);
 
-    const called = await request(app).get("/api/admin-test/customers/1");
+    const called = await request(app).get("/api/console-test/customers/1");
     expect(called.status).toBe(404);
   });
 });
@@ -315,7 +315,7 @@ describe("endpoint config files are organized into folders mirroring each endpoi
   };
 
   it("creates the file under nested folders matching the path, with a bracketed param segment", async () => {
-    const res = await request(app).post("/admin/api/endpoints").set(authed()).send(folderEndpoint);
+    const res = await request(app).post("/console/api/endpoints").set(authed()).send(folderEndpoint);
     expect(res.status).toBe(201);
 
     const file = endpointRegistry.getFile("folder-layout-list");
@@ -327,7 +327,7 @@ describe("endpoint config files are organized into folders mirroring each endpoi
 
   it("puts a second endpoint on the SAME path into the same folder, as its own file", async () => {
     const res = await request(app)
-      .post("/admin/api/endpoints")
+      .post("/console/api/endpoints")
       .set(authed())
       .send({ ...folderEndpoint, id: "folder-layout-update", method: "PUT" });
     expect(res.status).toBe(201);
@@ -343,7 +343,7 @@ describe("endpoint config files are organized into folders mirroring each endpoi
     const oldDir = path.dirname(oldFile); // .../widgets/[id] -- folder-layout-update still lives here too
 
     const res = await request(app)
-      .put("/admin/api/endpoints/folder-layout-list")
+      .put("/console/api/endpoints/folder-layout-list")
       .set(authed())
       .send({ ...folderEndpoint, path: "/api/folder-test/gadgets/:id" });
     expect(res.status).toBe(200);
@@ -369,26 +369,26 @@ describe("endpoint config files are organized into folders mirroring each endpoi
     const updateDir = path.dirname(endpointRegistry.getFile("folder-layout-update")!); // .../widgets/[id]
     expect(listDir).not.toBe(updateDir);
 
-    await request(app).delete("/admin/api/endpoints/folder-layout-list").set(authed()).expect(204);
+    await request(app).delete("/console/api/endpoints/folder-layout-list").set(authed()).expect(204);
     expect(fs.existsSync(listDir)).toBe(false); // only file in "gadgets/[id]" -- pruned, "gadgets" too
     expect(fs.existsSync(path.dirname(listDir))).toBe(false);
     // "folder-test" survives: folder-layout-update is still under it.
     expect(fs.existsSync(path.join(TMP_ENDPOINTS_DIR, "api", "folder-test"))).toBe(true);
 
-    await request(app).delete("/admin/api/endpoints/folder-layout-update").set(authed()).expect(204);
+    await request(app).delete("/console/api/endpoints/folder-layout-update").set(authed()).expect(204);
     expect(fs.existsSync(updateDir)).toBe(false);
     // Now nothing under "folder-test" remains at all -- pruned too. Other
     // endpoints under "api/" (the project's own fixtures, and the earlier
-    // describe block's admin-created-endpoint) keep "api/" itself alive.
+    // describe block's console-created-endpoint) keep "api/" itself alive.
     expect(fs.existsSync(path.join(TMP_ENDPOINTS_DIR, "api", "folder-test"))).toBe(false);
     expect(fs.existsSync(TMP_ENDPOINTS_DIR)).toBe(true);
   });
 });
 
-describe("admin API: test-call endpoints", () => {
+describe("console API: test-call endpoints", () => {
   it("test-backend fetches a raw sample without a saved endpoint", async () => {
     const res = await request(app)
-      .post("/admin/api/test-backend")
+      .post("/console/api/test-backend")
       .set(authed())
       .send({
         input: [{ name: "id", in: "path", required: true, type: "string" }],
@@ -401,7 +401,7 @@ describe("admin API: test-call endpoints", () => {
 
   it("test-mapping applies an output config to a supplied sample", async () => {
     const res = await request(app)
-      .post("/admin/api/test-mapping")
+      .post("/console/api/test-mapping")
       .set(authed())
       .send({
         raw: { id: "1", firstName: "Ada" },
@@ -413,7 +413,7 @@ describe("admin API: test-call endpoints", () => {
 
   it("endpoints/:id/test runs a saved endpoint live", async () => {
     const res = await request(app)
-      .post("/admin/api/endpoints/json-customer-by-id/test")
+      .post("/console/api/endpoints/json-customer-by-id/test")
       .set(authed())
       .send({ params: { id: "3" } });
     expect(res.status).toBe(200);
@@ -424,12 +424,12 @@ describe("admin API: test-call endpoints", () => {
   it("accepts a request body well over body-parser's 100kb default (MAX_REQUEST_BODY_SIZE)", async () => {
     // Regression check for "request entity too large": app.ts used to leave
     // express.json()'s `limit` unset, silently capping every request (data
-    // endpoints and admin API alike) at body-parser's hardcoded 100kb
+    // endpoints and console API alike) at body-parser's hardcoded 100kb
     // default. 200kb here is comfortably over that old ceiling and
     // comfortably under the new 10mb default.
     const big = "x".repeat(200 * 1024);
     const res = await request(app)
-      .post("/admin/api/test-mapping")
+      .post("/console/api/test-mapping")
       .set(authed())
       .send({
         raw: { id: "1", note: big },
@@ -440,10 +440,10 @@ describe("admin API: test-call endpoints", () => {
   });
 });
 
-describe("admin API: gateway CRUD", () => {
+describe("console API: gateway CRUD", () => {
   it("creates a gateway", async () => {
     const res = await request(app)
-      .post("/admin/api/gateways")
+      .post("/console/api/gateways")
       .set(authed())
       .send({ name: "testGw", config: { kind: "json", baseUrl: "http://example.test" } });
     expect(res.status).toBe(201);
@@ -451,29 +451,120 @@ describe("admin API: gateway CRUD", () => {
 
   it("redacts a sensitive-looking literal field in list responses", async () => {
     await request(app)
-      .post("/admin/api/gateways")
+      .post("/console/api/gateways")
       .set(authed())
       .send({
         name: "secretGw",
         config: { kind: "sql", client: "better-sqlite3", connection: { filename: "x", password: "hunter2" } },
       });
-    const res = await request(app).get("/admin/api/gateways").set(authed());
+    const res = await request(app).get("/console/api/gateways").set(authed());
     expect(res.body.secretGw.connection.password).toBe("••••••••");
   });
 
+  it("never redacts commonParams, even for a sensitive-looking key name", async () => {
+    await request(app)
+      .post("/console/api/gateways")
+      .set(authed())
+      .send({
+        name: "commonParamsGw",
+        // "apiToken" would be masked if it were a top-level/connection
+        // field (see the test above) -- commonParams entries are plain
+        // {name} substitution values, never secrets, regardless of name.
+        config: {
+          kind: "json",
+          baseUrl: "http://example.test",
+          commonParams: { tenant: "acme", apiToken: "not-actually-secret" },
+        },
+      });
+
+    const listed = await request(app).get("/console/api/gateways").set(authed());
+    expect(listed.body.commonParamsGw.commonParams).toEqual({ tenant: "acme", apiToken: "not-actually-secret" });
+
+    const single = await request(app).get("/console/api/gateways/commonParamsGw").set(authed());
+    expect(single.body.commonParams).toEqual({ tenant: "acme", apiToken: "not-actually-secret" });
+
+    // Submitting an empty string for it must actually clear it, not be
+    // merged back to the previous value the way a real secret field's
+    // blank submission is (that "blank means unchanged" convention exists
+    // only because the UI shows real secrets redacted -- commonParams is
+    // never redacted, so there's nothing to preserve).
+    await request(app)
+      .put("/console/api/gateways/commonParamsGw")
+      .set(authed())
+      .send({ config: { kind: "json", baseUrl: "http://example.test", commonParams: { tenant: "acme", apiToken: "" } } });
+    const afterClear = await request(app).get("/console/api/gateways/commonParamsGw").set(authed());
+    expect(afterClear.body.commonParams).toEqual({ tenant: "acme", apiToken: "" });
+
+    await request(app).delete("/console/api/gateways/commonParamsGw").set(authed());
+  });
+
+  it("masks a commonParams entry only when its name is opted into commonParamsMasked", async () => {
+    await request(app)
+      .post("/console/api/gateways")
+      .set(authed())
+      .send({
+        name: "maskedParamsGw",
+        config: {
+          kind: "json",
+          baseUrl: "http://example.test",
+          commonParams: { tenant: "acme", apiKey: "shh-its-a-secret" },
+          commonParamsMasked: ["apiKey"],
+        },
+      });
+
+    const listed = await request(app).get("/console/api/gateways/maskedParamsGw").set(authed());
+    expect(listed.body.commonParams).toEqual({ tenant: "acme", apiKey: "••••••••" });
+
+    // Leaving the masked field blank on save must keep the stored value
+    // (same "blank means unchanged" convention every other masked field
+    // follows), while the unmasked "tenant" field saves whatever is sent.
+    await request(app)
+      .put("/console/api/gateways/maskedParamsGw")
+      .set(authed())
+      .send({
+        config: {
+          kind: "json",
+          baseUrl: "http://example.test",
+          commonParams: { tenant: "acme-updated", apiKey: "" },
+          commonParamsMasked: ["apiKey"],
+        },
+      });
+    const afterBlankSave = await request(app).get("/console/api/gateways/maskedParamsGw").set(authed());
+    expect(afterBlankSave.body.commonParams).toEqual({ tenant: "acme-updated", apiKey: "••••••••" });
+
+    // Unchecking "Mask" (submitting an empty commonParamsMasked list)
+    // stops redacting it going forward -- and since it's no longer
+    // masked, nothing merges a blank submission back to the old value.
+    await request(app)
+      .put("/console/api/gateways/maskedParamsGw")
+      .set(authed())
+      .send({
+        config: {
+          kind: "json",
+          baseUrl: "http://example.test",
+          commonParams: { tenant: "acme-updated", apiKey: "" },
+          commonParamsMasked: [],
+        },
+      });
+    const afterUnmask = await request(app).get("/console/api/gateways/maskedParamsGw").set(authed());
+    expect(afterUnmask.body.commonParams).toEqual({ tenant: "acme-updated", apiKey: "" });
+
+    await request(app).delete("/console/api/gateways/maskedParamsGw").set(authed());
+  });
+
   it("refuses to delete a gateway an endpoint still uses", async () => {
-    const res = await request(app).delete("/admin/api/gateways/crmJson").set(authed());
+    const res = await request(app).delete("/console/api/gateways/crmJson").set(authed());
     expect(res.status).toBe(409);
   });
 
   it("deletes an unused gateway", async () => {
-    const res = await request(app).delete("/admin/api/gateways/testGw").set(authed());
+    const res = await request(app).delete("/console/api/gateways/testGw").set(authed());
     expect(res.status).toBe(204);
   });
 
   it("rejects a json gateway with no baseUrl, naming the field", async () => {
     const res = await request(app)
-      .post("/admin/api/gateways")
+      .post("/console/api/gateways")
       .set(authed())
       .send({ name: "noUrlGw", config: { kind: "json" } });
     expect(res.status).toBe(400);
@@ -482,7 +573,7 @@ describe("admin API: gateway CRUD", () => {
 
   it("rejects a soap gateway with no wsdl, naming the field", async () => {
     const res = await request(app)
-      .post("/admin/api/gateways")
+      .post("/console/api/gateways")
       .set(authed())
       .send({ name: "noWsdlGw", config: { kind: "soap" } });
     expect(res.status).toBe(400);
@@ -555,13 +646,13 @@ describe("caller auth: POST /auth/login + a gateway's requiresAuth", () => {
     const endpointId = "oauth-test-echo";
 
     afterAll(async () => {
-      await request(app).delete(`/admin/api/endpoints/${endpointId}`).set(authed());
-      await request(app).delete(`/admin/api/gateways/${gatewayName}`).set(authed());
+      await request(app).delete(`/console/api/endpoints/${endpointId}`).set(authed());
+      await request(app).delete(`/console/api/gateways/${gatewayName}`).set(authed());
     });
 
     it("logs in via the password grant (real form-encoded RFC 6749 token exchange against the mock backend) and injects the resulting access token", async () => {
       const gw = await request(app)
-        .post("/admin/api/gateways")
+        .post("/console/api/gateways")
         .set(authed())
         .send({
           name: gatewayName,
@@ -570,7 +661,7 @@ describe("caller auth: POST /auth/login + a gateway's requiresAuth", () => {
       expect(gw.status).toBe(201);
 
       const endpoint = await request(app)
-        .post("/admin/api/endpoints")
+        .post("/console/api/endpoints")
         .set(authed())
         .send({
           id: endpointId,
@@ -653,9 +744,9 @@ describe("caller auth: POST /auth/login + a gateway's requiresAuth", () => {
   });
 });
 
-describe("admin API: sessions (live view of the in-memory session store)", () => {
+describe("console API: sessions (live view of the in-memory session store)", () => {
   it("lists no sessions when nobody is logged in", async () => {
-    const res = await request(app).get("/admin/api/sessions").set(authed());
+    const res = await request(app).get("/console/api/sessions").set(authed());
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
   });
@@ -666,7 +757,7 @@ describe("admin API: sessions (live view of the in-memory session store)", () =>
       .send({ username: "demo", password: "demo123" });
     expect(login.status).toBe(200);
 
-    const res = await request(app).get("/admin/api/sessions").set(authed());
+    const res = await request(app).get("/console/api/sessions").set(authed());
     expect(res.status).toBe(200);
     const session = res.body.find((s: { providerName: string }) => s.providerName === "demoLogin");
     expect(session).toBeDefined();
@@ -683,7 +774,7 @@ describe("admin API: sessions (live view of the in-memory session store)", () =>
     expect(session.backendToken).toBe("mock-backend-token-for-demo");
 
     // Clean up so this session doesn't leak into later tests in this block.
-    await request(app).delete(`/admin/api/sessions/${session.id}`).set(authed());
+    await request(app).delete(`/console/api/sessions/${session.id}`).set(authed());
   });
 
   it("withholds the session/backend/refresh tokens once NODE_ENV is exactly \"production\"", async () => {
@@ -696,7 +787,7 @@ describe("admin API: sessions (live view of the in-memory session store)", () =>
     process.env.NODE_ENV = "production";
     let res;
     try {
-      res = await request(app).get("/admin/api/sessions").set(authed());
+      res = await request(app).get("/console/api/sessions").set(authed());
     } finally {
       // Restore immediately so no later test in this file runs against a
       // "production" NODE_ENV by accident.
@@ -715,7 +806,7 @@ describe("admin API: sessions (live view of the in-memory session store)", () =>
     expect(JSON.stringify(session)).not.toContain(login.body.token);
     expect(JSON.stringify(session)).not.toContain("mock-backend-token-for-demo");
 
-    await request(app).delete(`/admin/api/sessions/${session.id}`).set(authed());
+    await request(app).delete(`/console/api/sessions/${session.id}`).set(authed());
   });
 
   it("revokes a session by id, and the caller's own token stops working immediately", async () => {
@@ -724,11 +815,11 @@ describe("admin API: sessions (live view of the in-memory session store)", () =>
       .send({ username: "demo", password: "demo123" });
     expect(login.status).toBe(200);
 
-    const list = await request(app).get("/admin/api/sessions").set(authed());
+    const list = await request(app).get("/console/api/sessions").set(authed());
     const session = list.body.find((s: { providerName: string }) => s.providerName === "demoLogin");
     expect(session).toBeDefined();
 
-    const revoke = await request(app).delete(`/admin/api/sessions/${session.id}`).set(authed());
+    const revoke = await request(app).delete(`/console/api/sessions/${session.id}`).set(authed());
     expect(revoke.status).toBe(204);
 
     const called = await request(app).get("/api/authed/echo").set("Authorization", `Bearer ${login.body.token}`);
@@ -736,21 +827,21 @@ describe("admin API: sessions (live view of the in-memory session store)", () =>
   });
 
   it("404s revoking a session id that doesn't exist", async () => {
-    const res = await request(app).delete("/admin/api/sessions/does-not-exist").set(authed());
+    const res = await request(app).delete("/console/api/sessions/does-not-exist").set(authed());
     expect(res.status).toBe(404);
   });
 
-  it("requires admin auth for both the list and revoke routes", async () => {
-    const list = await request(app).get("/admin/api/sessions");
+  it("requires console auth for both the list and revoke routes", async () => {
+    const list = await request(app).get("/console/api/sessions");
     expect(list.status).toBe(401);
-    const revoke = await request(app).delete("/admin/api/sessions/whatever");
+    const revoke = await request(app).delete("/console/api/sessions/whatever");
     expect(revoke.status).toBe(401);
   });
 });
 
-describe("admin API: auth-provider CRUD", () => {
+describe("console API: auth-provider CRUD", () => {
   it("lists the demo auth providers", async () => {
-    const res = await request(app).get("/admin/api/auth-providers").set(authed());
+    const res = await request(app).get("/console/api/auth-providers").set(authed());
     expect(res.status).toBe(200);
     expect(res.body.demoLogin.kind).toBe("basicLogin");
     expect(res.body.demoOAuth.kind).toBe("oauth2");
@@ -767,7 +858,7 @@ describe("admin API: auth-provider CRUD", () => {
 
   it("redacts a sensitive-looking literal field (a literal, non-${env.X} client secret)", async () => {
     await request(app)
-      .post("/admin/api/auth-providers")
+      .post("/console/api/auth-providers")
       .set(authed())
       .send({
         name: "literalSecretProvider",
@@ -779,14 +870,14 @@ describe("admin API: auth-provider CRUD", () => {
           clientSecret: "literal-secret-value",
         },
       });
-    const res = await request(app).get("/admin/api/auth-providers").set(authed());
+    const res = await request(app).get("/console/api/auth-providers").set(authed());
     expect(res.body.literalSecretProvider.clientSecret).toBe("••••••••");
-    await request(app).delete("/admin/api/auth-providers/literalSecretProvider").set(authed());
+    await request(app).delete("/console/api/auth-providers/literalSecretProvider").set(authed());
   });
 
   it("creates an auth provider", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers")
+      .post("/console/api/auth-providers")
       .set(authed())
       .send({
         name: "testProvider",
@@ -797,7 +888,7 @@ describe("admin API: auth-provider CRUD", () => {
 
   it("rejects a second provider reusing the same name", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers")
+      .post("/console/api/auth-providers")
       .set(authed())
       .send({
         name: "testProvider",
@@ -808,7 +899,7 @@ describe("admin API: auth-provider CRUD", () => {
 
   it("rejects an oauth2 provider missing required fields, naming them", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers")
+      .post("/console/api/auth-providers")
       .set(authed())
       .send({ name: "badOAuth", config: { kind: "oauth2", grantType: "client_credentials" } });
     expect(res.status).toBe(400);
@@ -818,7 +909,7 @@ describe("admin API: auth-provider CRUD", () => {
 
   it("rejects an ldap provider with neither bind mode fully configured", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers")
+      .post("/console/api/auth-providers")
       .set(authed())
       .send({ name: "badLdap", config: { kind: "ldap", url: "ldap://localhost:3389", tokenSecret: "s" } });
     expect(res.status).toBe(400);
@@ -828,7 +919,7 @@ describe("admin API: auth-provider CRUD", () => {
 
   it("rejects an ldap provider with both bind modes configured (ambiguous)", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers")
+      .post("/console/api/auth-providers")
       .set(authed())
       .send({
         name: "badLdap2",
@@ -848,7 +939,7 @@ describe("admin API: auth-provider CRUD", () => {
 
   it("creates, updates and deletes an ldap provider (direct-bind mode)", async () => {
     const create = await request(app)
-      .post("/admin/api/auth-providers")
+      .post("/console/api/auth-providers")
       .set(authed())
       .send({
         name: "testLdapProvider",
@@ -861,14 +952,14 @@ describe("admin API: auth-provider CRUD", () => {
       });
     expect(create.status).toBe(201);
 
-    const got = await request(app).get("/admin/api/auth-providers/testLdapProvider").set(authed());
+    const got = await request(app).get("/console/api/auth-providers/testLdapProvider").set(authed());
     expect(got.body.kind).toBe("ldap");
     // Defaults filled in by the schema.
     expect(got.body.tlsRejectUnauthorized).toBe(true);
     expect(got.body.tokenTtlSeconds).toBe(3600);
 
     const update = await request(app)
-      .put("/admin/api/auth-providers/testLdapProvider")
+      .put("/console/api/auth-providers/testLdapProvider")
       .set(authed())
       .send({
         config: {
@@ -881,37 +972,37 @@ describe("admin API: auth-provider CRUD", () => {
       });
     expect(update.status).toBe(200);
 
-    const deleted = await request(app).delete("/admin/api/auth-providers/testLdapProvider").set(authed());
+    const deleted = await request(app).delete("/console/api/auth-providers/testLdapProvider").set(authed());
     expect(deleted.status).toBe(204);
   });
 
   it("updates an existing provider", async () => {
     const res = await request(app)
-      .put("/admin/api/auth-providers/testProvider")
+      .put("/console/api/auth-providers/testProvider")
       .set(authed())
       .send({ config: { kind: "basicLogin", loginUrl: "http://example.test/login-v2", tokenPath: "$.token" } });
     expect(res.status).toBe(200);
 
-    const got = await request(app).get("/admin/api/auth-providers/testProvider").set(authed());
+    const got = await request(app).get("/console/api/auth-providers/testProvider").set(authed());
     expect(got.body.loginUrl).toBe("http://example.test/login-v2");
   });
 
   it("refuses to delete a provider a gateway still requires", async () => {
-    const res = await request(app).delete("/admin/api/auth-providers/demoLogin").set(authed());
+    const res = await request(app).delete("/console/api/auth-providers/demoLogin").set(authed());
     expect(res.status).toBe(409);
     expect(res.body.gateways).toContain("crmJsonAuthed");
   });
 
   it("deletes an unused provider", async () => {
-    const res = await request(app).delete("/admin/api/auth-providers/testProvider").set(authed());
+    const res = await request(app).delete("/console/api/auth-providers/testProvider").set(authed());
     expect(res.status).toBe(204);
   });
 });
 
-describe("admin API: test-connection (DB)", () => {
+describe("console API: test-connection (DB)", () => {
   it("reports ok for a reachable database", async () => {
     const res = await request(app)
-      .post("/admin/api/gateways/test-connection")
+      .post("/console/api/gateways/test-connection")
       .set(authed())
       .send({
         config: {
@@ -927,7 +1018,7 @@ describe("admin API: test-connection (DB)", () => {
 
   it("reports a failure message for an unreachable database, without a 500", async () => {
     const res = await request(app)
-      .post("/admin/api/gateways/test-connection")
+      .post("/console/api/gateways/test-connection")
       .set(authed())
       .send({
         config: {
@@ -944,7 +1035,7 @@ describe("admin API: test-connection (DB)", () => {
 
   it("says it's DB-only for a non-SQL gateway", async () => {
     const res = await request(app)
-      .post("/admin/api/gateways/test-connection")
+      .post("/console/api/gateways/test-connection")
       .set(authed())
       .send({ config: { kind: "json", baseUrl: "http://example.test" } });
     expect(res.status).toBe(200);
@@ -952,12 +1043,12 @@ describe("admin API: test-connection (DB)", () => {
   });
 });
 
-describe("admin API: auth-providers test-login", () => {
-  // The admin UI always submits the FULL config the form currently shows
+describe("console API: auth-providers test-login", () => {
+  // The console UI always submits the FULL config the form currently shows
   // (built by the kind-specific _read(), same as Save would send) --
   // never a partial object -- so these mirror that: the real demoLogin/
   // demoLdap shape, with any sensitive field left blank standing in for
-  // "the admin UI shows this field redacted/blank and didn't touch it".
+  // "the console UI shows this field redacted/blank and didn't touch it".
   const demoLoginConfig = {
     kind: "basicLogin",
     loginUrl: "${env.DEMO_JSON_BASE_URL}/login",
@@ -980,7 +1071,7 @@ describe("admin API: auth-providers test-login", () => {
 
   it("reports ok for a saved basicLogin provider, given the real demo credentials", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers/test-login")
+      .post("/console/api/auth-providers/test-login")
       .set(authed())
       .send({ name: "demoLogin", config: demoLoginConfig, credentials: { username: "demo", password: "demo123" } });
     expect(res.status).toBe(200);
@@ -989,7 +1080,7 @@ describe("admin API: auth-providers test-login", () => {
 
   it("reports a failure message (not a 500) for wrong credentials against a saved provider", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers/test-login")
+      .post("/console/api/auth-providers/test-login")
       .set(authed())
       .send({ name: "demoLogin", config: demoLoginConfig, credentials: { username: "demo", password: "wrong" } });
     expect(res.status).toBe(200);
@@ -999,7 +1090,7 @@ describe("admin API: auth-providers test-login", () => {
 
   it("reuses the saved bindPassword and tokenSecret when a draft edit of demoLdap leaves them blank", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers/test-login")
+      .post("/console/api/auth-providers/test-login")
       .set(authed())
       .send({ name: "demoLdap", config: demoLdapConfig, credentials: { username: "jdoe", password: "password123" } });
     expect(res.status).toBe(200);
@@ -1010,7 +1101,7 @@ describe("admin API: auth-providers test-login", () => {
 
   it("tests an unsaved draft config directly, with no `name` and full (non-blank) fields", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers/test-login")
+      .post("/console/api/auth-providers/test-login")
       .set(authed())
       .send({
         config: {
@@ -1031,7 +1122,7 @@ describe("admin API: auth-providers test-login", () => {
 
   it("reports a failure message for an unknown username against demoLdap", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers/test-login")
+      .post("/console/api/auth-providers/test-login")
       .set(authed())
       .send({ name: "demoLdap", config: demoLdapConfig, credentials: { username: "nobody", password: "password123" } });
     expect(res.status).toBe(200);
@@ -1041,7 +1132,7 @@ describe("admin API: auth-providers test-login", () => {
 
   it("never creates a session -- the response carries no token a caller could use", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers/test-login")
+      .post("/console/api/auth-providers/test-login")
       .set(authed())
       .send({ name: "demoLdap", config: demoLdapConfig, credentials: { username: "jdoe", password: "password123" } });
     expect(res.body.ok).toBe(true);
@@ -1054,7 +1145,7 @@ describe("admin API: auth-providers test-login", () => {
 
   it("rejects a malformed draft config the same way saving would (400 with field issues)", async () => {
     const res = await request(app)
-      .post("/admin/api/auth-providers/test-login")
+      .post("/console/api/auth-providers/test-login")
       .set(authed())
       .send({ config: { kind: "ldap", url: "ldap://localhost:3389", tokenSecret: "s" }, credentials: {} });
     expect(res.status).toBe(400);
@@ -1064,19 +1155,19 @@ describe("admin API: auth-providers test-login", () => {
 });
 
 describe("gateway commonParams + env-sourced input params", () => {
-  const endpointId = "admin-created-echo-endpoint";
+  const endpointId = "console-created-echo-endpoint";
   const gatewayName = "echoGw";
 
   afterAll(async () => {
-    await request(app).delete(`/admin/api/endpoints/${endpointId}`).set(authed());
-    await request(app).delete(`/admin/api/gateways/${gatewayName}`).set(authed());
+    await request(app).delete(`/console/api/endpoints/${endpointId}`).set(authed());
+    await request(app).delete(`/console/api/gateways/${gatewayName}`).set(authed());
   });
 
   it("merges a gateway's commonParams under, and an env-sourced input over, into the backend call", async () => {
     process.env.NAIMIX_TEST_USER = "u-42";
 
     const gw = await request(app)
-      .post("/admin/api/gateways")
+      .post("/console/api/gateways")
       .set(authed())
       .send({
         name: gatewayName,
@@ -1087,7 +1178,7 @@ describe("gateway commonParams + env-sourced input params", () => {
     expect(gw.status).toBe(201);
 
     const endpoint = await request(app)
-      .post("/admin/api/endpoints")
+      .post("/console/api/endpoints")
       .set(authed())
       .send({
         id: endpointId,
@@ -1132,16 +1223,16 @@ describe("gateway commonParams + env-sourced input params", () => {
   });
 });
 
-describe("admin API: export (OpenAPI spec + MCP server download)", () => {
-  it("requires admin auth for both export routes", async () => {
-    const openapi = await request(app).get("/admin/api/export/openapi.json");
+describe("console API: export (OpenAPI spec + MCP server download)", () => {
+  it("requires console auth for both export routes", async () => {
+    const openapi = await request(app).get("/console/api/export/openapi.json");
     expect(openapi.status).toBe(401);
-    const mcp = await request(app).get("/admin/api/export/mcp-server");
+    const mcp = await request(app).get("/console/api/export/mcp-server");
     expect(mcp.status).toBe(401);
   });
 
   it("generates a valid-shaped OpenAPI 3.0.3 document reflecting the live workspace", async () => {
-    const res = await request(app).get("/admin/api/export/openapi.json").set(authed());
+    const res = await request(app).get("/console/api/export/openapi.json").set(authed());
     expect(res.status).toBe(200);
     expect(res.headers["content-disposition"]).toMatch(/naimix-openapi\.json/);
     expect(res.body.openapi).toBe("3.0.3");
@@ -1179,29 +1270,29 @@ describe("admin API: export (OpenAPI spec + MCP server download)", () => {
   });
 
   it("downloads the MCP server as a runnable .js file", async () => {
-    const res = await request(app).get("/admin/api/export/mcp-server").set(authed());
+    const res = await request(app).get("/console/api/export/mcp-server").set(authed());
     expect(res.status).toBe(200);
     expect(res.headers["content-disposition"]).toMatch(/naimix-mcp-server\.js/);
     expect(res.text).toContain("#!/usr/bin/env node");
     expect(res.text).toContain("NAIMIX_BASE_URL");
-    expect(res.text).toContain("NAIMIX_ADMIN_TOKEN");
+    expect(res.text).toContain("NAIMIX_CONSOLE_TOKEN");
   });
 });
 
-describe("admin API: generate CRUD endpoints for a SQL gateway", () => {
+describe("console API: generate CRUD endpoints for a SQL gateway", () => {
   it("404s for a gateway that doesn't exist", async () => {
-    const res = await request(app).post("/admin/api/gateways/doesNotExist/generate-crud").set(authed());
+    const res = await request(app).post("/console/api/gateways/doesNotExist/generate-crud").set(authed());
     expect(res.status).toBe(404);
   });
 
   it("400s for a non-SQL gateway", async () => {
-    const res = await request(app).post("/admin/api/gateways/crmJson/generate-crud").set(authed());
+    const res = await request(app).post("/console/api/gateways/crmJson/generate-crud").set(authed());
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/SQL|database/i);
   });
 
   it("introspects demoDb and generates list/create/update/delete for every table, skipping bulk ops on a table with no primary key", async () => {
-    const res = await request(app).post("/admin/api/gateways/demoDb/generate-crud").set(authed());
+    const res = await request(app).post("/console/api/gateways/demoDb/generate-crud").set(authed());
     expect(res.status).toBe(200);
     expect(res.body.tablesFound).toBe(3);
     expect(res.body.proceduresFound).toBe(0);
@@ -1231,13 +1322,13 @@ describe("admin API: generate CRUD endpoints for a SQL gateway", () => {
     ]);
 
     // Every generated endpoint is immediately live and visible, same as any
-    // endpoint created through the ordinary admin API.
-    const endpoints = await request(app).get("/admin/api/endpoints").set(authed());
+    // endpoint created through the ordinary console API.
+    const endpoints = await request(app).get("/console/api/endpoints").set(authed());
     expect(endpoints.body.map((r: { id: string }) => r.id)).toEqual(expect.arrayContaining(createdIds));
   });
 
   it("re-running generation is idempotent: everything already created is skipped, nothing is duplicated", async () => {
-    const res = await request(app).post("/admin/api/gateways/demoDb/generate-crud").set(authed());
+    const res = await request(app).post("/console/api/gateways/demoDb/generate-crud").set(authed());
     expect(res.status).toBe(200);
     expect(res.body.created).toEqual([]);
     // 9 id conflicts (every endpoint from the first run except the "tags"
@@ -1325,20 +1416,20 @@ describe("admin API: generate CRUD endpoints for a SQL gateway", () => {
   });
 });
 
-describe("admin API: generate CRUD endpoints -- skip-and-report on a path conflict", () => {
+describe("console API: generate CRUD endpoints -- skip-and-report on a path conflict", () => {
   const gatewayName = "demoDb2";
 
   afterAll(async () => {
-    await request(app).delete(`/admin/api/endpoints/manual-${gatewayName}-customers-list`).set(authed());
+    await request(app).delete(`/console/api/endpoints/manual-${gatewayName}-customers-list`).set(authed());
     for (const suffix of ["customers-create", "customers-update", "customers-delete", "notes-list", "notes-create", "notes-update", "notes-delete", "tags-list", "tags-create"]) {
-      await request(app).delete(`/admin/api/endpoints/${gatewayName}-${suffix}`).set(authed());
+      await request(app).delete(`/console/api/endpoints/${gatewayName}-${suffix}`).set(authed());
     }
-    await request(app).delete(`/admin/api/gateways/${gatewayName}`).set(authed());
+    await request(app).delete(`/console/api/gateways/${gatewayName}`).set(authed());
   });
 
   it("skips only the endpoint whose path collides with a hand-written one, and still creates everything else", async () => {
     const gw = await request(app)
-      .post("/admin/api/gateways")
+      .post("/console/api/gateways")
       .set(authed())
       .send({
         name: gatewayName,
@@ -1349,7 +1440,7 @@ describe("admin API: generate CRUD endpoints -- skip-and-report on a path confli
     // A hand-written endpoint already claims GET /api/demoDb2/customers under
     // a different id -- generation must not overwrite or duplicate it.
     const manual = await request(app)
-      .post("/admin/api/endpoints")
+      .post("/console/api/endpoints")
       .set(authed())
       .send({
         id: `manual-${gatewayName}-customers-list`,
@@ -1360,7 +1451,7 @@ describe("admin API: generate CRUD endpoints -- skip-and-report on a path confli
       });
     expect(manual.status).toBe(201);
 
-    const res = await request(app).post(`/admin/api/gateways/${gatewayName}/generate-crud`).set(authed());
+    const res = await request(app).post(`/console/api/gateways/${gatewayName}/generate-crud`).set(authed());
     expect(res.status).toBe(200);
 
     const createdIds = res.body.created.map((r: { id: string }) => r.id);
@@ -1391,7 +1482,7 @@ describe("admin API: generate CRUD endpoints -- skip-and-report on a path confli
 // switch workspaces back and forth without ever touching the shared
 // `app`/`endpointRegistry`/`gatewaysRegistry` the rest of this file depends
 // on.
-describe("admin API: workspace switching", () => {
+describe("console API: workspace switching", () => {
   const WS_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), "naimix-ws-test-"));
   const FOLDER_A = path.join(WS_ROOT, "folder-a"); // populated: a copy of the real project config
   const FOLDER_B = path.join(WS_ROOT, "folder-b"); // exists, but starts empty -- a brand-new team repo
@@ -1441,20 +1532,20 @@ describe("admin API: workspace switching", () => {
   });
 
   it("reports the current workspace and counts", async () => {
-    const res = await request(wsApp).get("/admin/api/settings").set(authed());
+    const res = await request(wsApp).get("/console/api/settings").set(authed());
     expect(res.status).toBe(200);
     expect(res.body.configDir).toBe(FOLDER_A);
     expect(res.body.endpointCount).toBe(ENDPOINT_COUNT);
     expect(res.body.gatewayCount).toBeGreaterThan(0);
   });
 
-  it("requires admin authentication to browse folders", async () => {
-    const res = await request(wsApp).get("/admin/api/settings/folders");
+  it("requires console authentication to browse folders", async () => {
+    const res = await request(wsApp).get("/console/api/settings/folders");
     expect(res.status).toBe(401);
   });
 
   it("starts browsing at the current workspace and lists only directories", async () => {
-    const res = await request(wsApp).get("/admin/api/settings/folders").set(authed());
+    const res = await request(wsApp).get("/console/api/settings/folders").set(authed());
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       path: FOLDER_A,
@@ -1464,13 +1555,13 @@ describe("admin API: workspace switching", () => {
   });
 
   it("navigates to parent and empty folders without switching the workspace", async () => {
-    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir: WS_ROOT }).set(authed());
+    const res = await request(wsApp).get("/console/api/settings/folders").query({ dir: WS_ROOT }).set(authed());
     expect(res.status).toBe(200);
     expect(res.body.folders).toEqual([
       { name: "folder-a", path: FOLDER_A },
       { name: "folder-b", path: FOLDER_B },
     ]);
-    const empty = await request(wsApp).get("/admin/api/settings/folders").query({ dir: FOLDER_B }).set(authed());
+    const empty = await request(wsApp).get("/console/api/settings/folders").query({ dir: FOLDER_B }).set(authed());
     expect(empty.body).toEqual({ path: FOLDER_B, parent: WS_ROOT, folders: [] });
     expect(wsWorkspace.configDir).toBe(FOLDER_A);
     expect(fs.existsSync(WS_SETTINGS_FILE)).toBe(false);
@@ -1478,18 +1569,18 @@ describe("admin API: workspace switching", () => {
 
   it("stops parent navigation at the filesystem root", async () => {
     const root = path.parse(WS_ROOT).root;
-    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir: root }).set(authed());
+    const res = await request(wsApp).get("/console/api/settings/folders").query({ dir: root }).set(authed());
     expect(res.status).toBe(200);
     expect(res.body.parent).toBeNull();
   });
 
   it.each([MISSING_FOLDER, path.join(FOLDER_A, "gateways.yaml"), ""])("rejects an invalid browse path: %s", async dir => {
-    const res = await request(wsApp).get("/admin/api/settings/folders").query({ dir }).set(authed());
+    const res = await request(wsApp).get("/console/api/settings/folders").query({ dir }).set(authed());
     expect(res.status).toBe(400);
   });
 
-  it("requires admin authentication to open the folder picker", async () => {
-    const res = await request(wsApp).post("/admin/api/settings/select-folder");
+  it("requires console authentication to open the folder picker", async () => {
+    const res = await request(wsApp).post("/console/api/settings/select-folder");
     expect(res.status).toBe(401);
   });
 
@@ -1500,7 +1591,7 @@ describe("admin API: workspace switching", () => {
       return FOLDER_B;
     };
 
-    const res = await request(wsApp).post("/admin/api/settings/select-folder").set(authed()).send({});
+    const res = await request(wsApp).post("/console/api/settings/select-folder").set(authed()).send({});
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ configDir: FOLDER_B });
     // No startDir was given in the request body, so it should default to
@@ -1516,7 +1607,7 @@ describe("admin API: workspace switching", () => {
     };
 
     const res = await request(wsApp)
-      .post("/admin/api/settings/select-folder")
+      .post("/console/api/settings/select-folder")
       .set(authed())
       .send({ startDir: FOLDER_B });
     expect(res.status).toBe(200);
@@ -1526,7 +1617,7 @@ describe("admin API: workspace switching", () => {
   it("returns configDir: null when the user cancels the dialog", async () => {
     wsPickFolder = async () => null;
 
-    const res = await request(wsApp).post("/admin/api/settings/select-folder").set(authed()).send({});
+    const res = await request(wsApp).post("/console/api/settings/select-folder").set(authed()).send({});
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ configDir: null });
   });
@@ -1536,13 +1627,13 @@ describe("admin API: workspace switching", () => {
       throw new Error(`"zenity" isn't available on this machine, so the folder picker can't be shown. Type the path instead.`);
     };
 
-    const res = await request(wsApp).post("/admin/api/settings/select-folder").set(authed()).send({});
+    const res = await request(wsApp).post("/console/api/settings/select-folder").set(authed()).send({});
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/zenity/i);
   });
 
   it("rejects switching to a folder that doesn't exist on disk", async () => {
-    const res = await request(wsApp).put("/admin/api/settings").set(authed()).send({ configDir: MISSING_FOLDER });
+    const res = await request(wsApp).put("/console/api/settings").set(authed()).send({ configDir: MISSING_FOLDER });
     expect(res.status).toBe(400);
     expect(res.body.message).toMatch(/doesn't exist/i);
     // Nothing should have moved as a result of the rejected switch.
@@ -1550,7 +1641,7 @@ describe("admin API: workspace switching", () => {
   });
 
   it("switches to a different (empty) folder, loading zero endpoints/gateways without error", async () => {
-    const res = await request(wsApp).put("/admin/api/settings").set(authed()).send({ configDir: FOLDER_B });
+    const res = await request(wsApp).put("/console/api/settings").set(authed()).send({ configDir: FOLDER_B });
     expect(res.status).toBe(200);
     expect(res.body.configDir).toBe(FOLDER_B);
     expect(res.body.endpointCount).toBe(0);
@@ -1569,7 +1660,7 @@ describe("admin API: workspace switching", () => {
   });
 
   it("switches back to folder A and the original endpoints reappear", async () => {
-    const res = await request(wsApp).put("/admin/api/settings").set(authed()).send({ configDir: FOLDER_A });
+    const res = await request(wsApp).put("/console/api/settings").set(authed()).send({ configDir: FOLDER_A });
     expect(res.status).toBe(200);
     expect(res.body.endpointCount).toBe(ENDPOINT_COUNT);
 
@@ -1578,10 +1669,10 @@ describe("admin API: workspace switching", () => {
   });
 
   it("an endpoint saved while pointed at folder B is written under folder B, not folder A", async () => {
-    await request(wsApp).put("/admin/api/settings").set(authed()).send({ configDir: FOLDER_B });
+    await request(wsApp).put("/console/api/settings").set(authed()).send({ configDir: FOLDER_B });
 
     const created = await request(wsApp)
-      .post("/admin/api/endpoints")
+      .post("/console/api/endpoints")
       .set(authed())
       .send({
         id: "folder-b-only-endpoint",

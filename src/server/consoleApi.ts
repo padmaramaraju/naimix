@@ -18,7 +18,7 @@ import type { AuthService } from "../auth/authService";
 import type { Logger } from "./logger";
 import type { ResolvedParams } from "../connectors/paramSubst";
 
-export interface AdminApiDeps {
+export interface ConsoleApiDeps {
   endpointRegistry: EndpointRegistry;
   gatewaysRegistry: GatewaysRegistry;
   authProvidersRegistry: AuthProvidersRegistry;
@@ -51,7 +51,7 @@ function asyncHandler(fn: (req: Request, res: Response) => Promise<unknown>) {
   };
 }
 
-/** Builds input params directly from a plain object (the admin UI's "test
+/** Builds input params directly from a plain object (the console UI's "test
  * this endpoint" panel) instead of an Express Request, applying the same
  * required/default/type-coercion rules as a real request would. */
 function buildTestParams(input: InputParamDef[], supplied: Record<string, unknown>): ResolvedParams {
@@ -86,7 +86,7 @@ function buildTestParams(input: InputParamDef[], supplied: Record<string, unknow
   return result;
 }
 
-export function createAdminApiRouter({
+export function createConsoleApiRouter({
   endpointRegistry,
   gatewaysRegistry,
   authProvidersRegistry,
@@ -95,9 +95,9 @@ export function createAdminApiRouter({
   workspace,
   settingsFile,
   pickFolder = pickFolderNative,
-}: AdminApiDeps): Router {
+}: ConsoleApiDeps): Router {
   const router = Router();
-  const adminLogger = logger.child({ component: "admin-api" });
+  const consoleLogger = logger.child({ component: "console-api" });
 
   // Lists the schema's enum values so the browser UI never has to hardcode
   // (and risk drifting from) what src/config/schema.ts actually allows.
@@ -109,7 +109,7 @@ export function createAdminApiRouter({
       sqlClients: SQL_CLIENTS,
       paramLocations: ["path", "query", "header", "body", "env"],
       paramTypes: ["string", "number", "boolean"],
-      // Mirrors AuthService's own isDevMode() gate -- the admin UI reads
+      // Mirrors AuthService's own isDevMode() gate -- the console UI reads
       // this to decide whether to render the Active sessions panel's
       // token/backend-token/refresh-token columns and its dev-only warning
       // banner. The server-side gate in listSessions() is what actually
@@ -135,7 +135,7 @@ export function createAdminApiRouter({
     "/endpoints",
     asyncHandler(async (req, res) => {
       const { config, file } = endpointRegistry.upsert(req.body);
-      adminLogger.info(`Created endpoint ${config.method} ${config.path} (${config.id}) -> ${file}`);
+      consoleLogger.info(`Created endpoint ${config.method} ${config.path} (${config.id}) -> ${file}`);
       res.status(201).json({ endpoint: config, file });
     })
   );
@@ -147,7 +147,7 @@ export function createAdminApiRouter({
         return res.status(404).json({ error: "NotFound", message: `No endpoint "${req.params.id}"` });
       }
       const { config, file } = endpointRegistry.upsert(req.body, { excludeId: req.params.id });
-      adminLogger.info(`Updated endpoint ${config.method} ${config.path} (${config.id}) -> ${file}`);
+      consoleLogger.info(`Updated endpoint ${config.method} ${config.path} (${config.id}) -> ${file}`);
       res.json({ endpoint: config, file });
     })
   );
@@ -155,7 +155,7 @@ export function createAdminApiRouter({
   router.delete("/endpoints/:id", (req, res) => {
     const removed = endpointRegistry.remove(req.params.id);
     if (!removed) return res.status(404).json({ error: "NotFound", message: `No endpoint "${req.params.id}"` });
-    adminLogger.info(`Deleted endpoint ${req.params.id}`);
+    consoleLogger.info(`Deleted endpoint ${req.params.id}`);
     res.status(204).end();
   });
 
@@ -175,11 +175,11 @@ export function createAdminApiRouter({
       // declared `input` params above -- an advanced caller can exercise one
       // of those from this same test endpoint by passing `rawQuery`/`rawBody`
       // explicitly, since the "Try it" UI panel itself only has fields for
-      // scalar named params (see admin.js for the corresponding UI note).
+      // scalar named params (see console.js for the corresponding UI note).
       const raw = await callBackend(endpoint.backend, {
         gateways: gatewaysRegistry.getResolved(),
         params,
-        logger: adminLogger,
+        logger: consoleLogger,
         rawQuery: (req.body?.rawQuery ?? undefined) as Record<string, unknown> | undefined,
         rawBody: req.body?.rawBody,
       });
@@ -205,7 +205,7 @@ export function createAdminApiRouter({
       const raw = await callBackend(backend, {
         gateways: gatewaysRegistry.getResolved(),
         params,
-        logger: adminLogger,
+        logger: consoleLogger,
         rawQuery,
         rawBody,
       });
@@ -235,7 +235,7 @@ export function createAdminApiRouter({
   // ---- Workspace ----
   // Each user runs their own instance of this app on their own machine (no
   // login, no multi-tenant serving) and keeps endpoints+gateways in a local
-  // Git checkout of a shared team repo -- these two endpoints let the admin
+  // Git checkout of a shared team repo -- these two endpoints let the console
   // UI point THIS instance at any such folder. Checking in/out of Git stays
   // entirely outside the app; this only ever reads/writes plain files.
 
@@ -271,7 +271,7 @@ export function createAdminApiRouter({
   }));
 
   // Opens a native OS folder-picker dialog on the machine running THIS
-  // server (the admin UI's "Browse..." button) and returns the chosen
+  // server (the console UI's "Browse..." button) and returns the chosen
   // absolute path for the form to fill in -- it never saves anything
   // itself, same division of labor as the rest of this workspace-switching
   // flow (PUT /settings still does the actual switch). `configDir: null`
@@ -290,7 +290,7 @@ export function createAdminApiRouter({
       } catch (err) {
         // "Couldn't launch/run the picker" (missing zenity, unsupported OS,
         // ...) -- surfaced the same way a bad typed-in path is, since the
-        // admin UI shows either one inline in the same error slot.
+        // console UI shows either one inline in the same error slot.
         throw new ValidationError(err instanceof Error ? err.message : "Couldn't open the folder picker.");
       }
     })
@@ -323,7 +323,7 @@ export function createAdminApiRouter({
       workspace.configDir = configDir;
       saveWorkspaceSettings(settingsFile, { configDir });
 
-      adminLogger.info(`Switched workspace to "${configDir}"`);
+      consoleLogger.info(`Switched workspace to "${configDir}"`);
       res.json({
         configDir,
         endpointsDir,
@@ -360,7 +360,7 @@ export function createAdminApiRouter({
         return res.status(409).json({ error: "Conflict", message: `Gateway "${name}" already exists` });
       }
       gatewaysRegistry.upsert(name, config);
-      adminLogger.info(`Created gateway "${name}"`);
+      consoleLogger.info(`Created gateway "${name}"`);
       res.status(201).json({ name });
     })
   );
@@ -372,7 +372,7 @@ export function createAdminApiRouter({
         return res.status(404).json({ error: "NotFound", message: `No gateway "${req.params.name}"` });
       }
       gatewaysRegistry.upsert(req.params.name, req.body?.config ?? req.body);
-      adminLogger.info(`Updated gateway "${req.params.name}"`);
+      consoleLogger.info(`Updated gateway "${req.params.name}"`);
       res.json({ name: req.params.name });
     })
   );
@@ -403,7 +403,7 @@ export function createAdminApiRouter({
         return res.status(404).json({ error: "NotFound", message: `No gateway "${req.params.name}"` });
       }
       const summary = await generateCrudEndpointsForGateway(gatewaysRegistry, endpointRegistry, req.params.name);
-      adminLogger.info(
+      consoleLogger.info(
         `Generated CRUD endpoints for gateway "${req.params.name}": ${summary.created.length} created, ${summary.skipped.length} skipped`
       );
       res.json(summary);
@@ -422,7 +422,7 @@ export function createAdminApiRouter({
     }
     const removed = gatewaysRegistry.remove(name);
     if (!removed) return res.status(404).json({ error: "NotFound", message: `No gateway "${name}"` });
-    adminLogger.info(`Deleted gateway "${name}"`);
+    consoleLogger.info(`Deleted gateway "${name}"`);
     res.status(204).end();
   });
 
@@ -451,7 +451,7 @@ export function createAdminApiRouter({
         return res.status(409).json({ error: "Conflict", message: `Auth provider "${name}" already exists` });
       }
       authProvidersRegistry.upsert(name, config);
-      adminLogger.info(`Created auth provider "${name}"`);
+      consoleLogger.info(`Created auth provider "${name}"`);
       res.status(201).json({ name });
     })
   );
@@ -463,7 +463,7 @@ export function createAdminApiRouter({
         return res.status(404).json({ error: "NotFound", message: `No auth provider "${req.params.name}"` });
       }
       authProvidersRegistry.upsert(req.params.name, req.body?.config ?? req.body);
-      adminLogger.info(`Updated auth provider "${req.params.name}"`);
+      consoleLogger.info(`Updated auth provider "${req.params.name}"`);
       res.json({ name: req.params.name });
     })
   );
@@ -501,7 +501,7 @@ export function createAdminApiRouter({
     }
     const removed = authProvidersRegistry.remove(name);
     if (!removed) return res.status(404).json({ error: "NotFound", message: `No auth provider "${name}"` });
-    adminLogger.info(`Deleted auth provider "${name}"`);
+    consoleLogger.info(`Deleted auth provider "${name}"`);
     res.status(204).end();
   });
 
@@ -528,7 +528,7 @@ export function createAdminApiRouter({
     asyncHandler(async (req, res) => {
       const revoked = await authService.revokeSession(req.params.id);
       if (!revoked) return res.status(404).json({ error: "NotFound", message: `No active session "${req.params.id}"` });
-      adminLogger.info(`Revoked session "${req.params.id}"`);
+      consoleLogger.info(`Revoked session "${req.params.id}"`);
       res.status(204).end();
     })
   );
@@ -549,7 +549,7 @@ export function createAdminApiRouter({
 
   // The MCP server is a single static file checked into this repo (not
   // generated per-workspace) -- it discovers endpoints/gateways/auth
-  // providers itself, at its own startup, by calling this same admin API.
+  // providers itself, at its own startup, by calling this same console API.
   // See mcp-server/naimix-mcp-server.js's own header comment for the full
   // design and setup instructions.
   router.get("/export/mcp-server", (_req, res) => {

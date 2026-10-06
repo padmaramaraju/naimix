@@ -21,7 +21,7 @@ export interface EndpointMatch {
 /**
  * Holds the currently-active set of endpoints in memory and matches
  * incoming requests against them. Unlike registering one Express handler
- * per endpoint at startup, this can be mutated at runtime (by the admin
+ * per endpoint at startup, this can be mutated at runtime (by the console
  * API or by reloading config/endpoints/ from disk) and takes effect on
  * the very next request -- no server restart required.
  */
@@ -37,7 +37,7 @@ export class EndpointRegistry {
 
   /**
    * Repoints this registry at a different endpoints folder and reloads
-   * from it immediately -- used by the admin UI's "Change folder" feature
+   * from it immediately -- used by the console UI's "Change folder" feature
    * (see workspaceSettings.ts) so switching to a different Git checkout
    * takes effect on the very next request, same as any other config
    * change.

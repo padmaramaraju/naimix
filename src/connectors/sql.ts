@@ -4,7 +4,7 @@ import type { ConnectorContext, BackendResult } from "./types";
 import { ValidationError } from "../server/errors";
 
 // Keyed by "<gateway name>::<JSON of its resolved config>" rather than
-// just the gateway name, so editing a gateway through the admin UI
+// just the gateway name, so editing a gateway through the console UI
 // (different host/credentials/etc, same name) creates a fresh knex instance
 // instead of silently reusing one built from the old config.
 const knexCache = new Map<string, Knex>();
@@ -42,7 +42,7 @@ export async function closeAllSqlConnections(): Promise<void> {
  * Opens a standalone knex instance for `gw` (deliberately NOT the shared
  * `knexCache`, since a test connection may be an in-progress edit that never
  * gets saved), runs a trivial query, and always tears it down again -- used
- * by the admin UI's "Test connection" button, not by any endpoint call.
+ * by the console UI's "Test connection" button, not by any endpoint call.
  */
 export async function testSqlConnection(
   gw: SqlGatewayConfig
@@ -50,7 +50,7 @@ export async function testSqlConnection(
   // knex/driver construction itself can throw synchronously for a bad config
   // (e.g. better-sqlite3 opening an unwritable path) -- keep it inside the
   // try too, so a bad "Test connection" click always resolves to {ok:false}
-  // instead of an unhandled exception reaching the admin API as a 500.
+  // instead of an unhandled exception reaching the console API as a 500.
   let db: Knex | undefined;
   try {
     db = knex({
@@ -122,7 +122,7 @@ function normalizeSqlResult(result: unknown): unknown {
 }
 
 // ---- Generated table-CRUD operations ----
-// These back the endpoints created by the admin UI's "Generate CRUD endpoints"
+// These back the endpoints created by the console UI's "Generate CRUD endpoints"
 // button (see src/server/crudGenerator.ts) -- they read straight from the
 // caller's raw query string / JSON body rather than the declarative named
 // `input` params every other endpoint type uses, since bulk operations need a

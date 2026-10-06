@@ -15,9 +15,9 @@ function bearerToken(req: Request): string | undefined {
 }
 
 /**
- * Caller-facing auth routes -- deliberately separate from both /admin/api/*
+ * Caller-facing auth routes -- deliberately separate from both /console/api/*
  * (a different audience: whoever configures this instance, gated by
- * ADMIN_TOKEN) and the business endpoints served by the dynamic dispatcher.
+ * CONSOLE_TOKEN) and the business endpoints served by the dynamic dispatcher.
  * See AUTH_DESIGN_NOTES.md.
  */
 export function createAuthRouter(authService: AuthService, logger: Logger): Router {

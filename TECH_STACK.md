@@ -27,7 +27,7 @@ to `TECHNICAL.md`'s changelog pointing back here.
 | Logging | `pino` + `pino-pretty` | `^9.6.0` / `^13.0.0` | `winston`, `bunyan`, `console` |
 | Test runner | `vitest` + `supertest` | `^4.1.11` / `^7.2.2` | `jest` + `supertest`, `mocha`+`chai`, `node:test` |
 | Dev-mode execution | `tsx` | `^4.23.12` | `ts-node`, `nodemon` + `tsc --watch` |
-| Admin UI frontend | Plain HTML/CSS/JS, no framework, no build step | — | React/Vue + Vite, a server-rendered template engine |
+| Console UI frontend | Plain HTML/CSS/JS, no framework, no build step | — | React/Vue + Vite, a server-rendered template engine |
 | Config storage | YAML/JSON files on disk | — | A database table, a config-as-code TS/JS module |
 
 The sections below go through the reasoning for each row.
@@ -59,9 +59,9 @@ revisited mid-project — see `TECHNICAL.md`'s changelog entry for that decision
 
 This project's HTTP layer is unusually simple by framework standards: there's exactly one real
 runtime dispatcher (`src/server/dispatch.ts`'s single catch-all middleware, matching against an
-in-memory endpoint table) plus one admin CRUD API. It doesn't need a framework's routing engine to do
-much work at all — Express's router is barely used outside `express.static` for the admin UI and the
-`Router()` instance in `adminApi.ts`. That changes what actually matters in the comparison:
+in-memory endpoint table) plus one console CRUD API. It doesn't need a framework's routing engine to do
+much work at all — Express's router is barely used outside `express.static` for the console UI and the
+`Router()` instance in `consoleApi.ts`. That changes what actually matters in the comparison:
 
 - **Fastify** would be the throughput-oriented choice — it's measurably faster than Express for raw
   JSON request handling (roughly 2-3x in typical benchmarks) and has first-class TypeScript support
@@ -96,7 +96,7 @@ volume) would be the concrete trigger to revisit Fastify specifically.
 
 **Alternatives considered:** Joi, Yup, ajv (JSON Schema), io-ts, TypeBox.
 
-Zod does double duty in this project: it validates every config file and admin API request body *and*
+Zod does double duty in this project: it validates every config file and console API request body *and*
 its inferred types (`z.infer<typeof endpointConfigSchema>`) are the actual TypeScript types used
 throughout the codebase (`EndpointConfigParsed`, `GatewaysFileParsed`) — there's no separate
 hand-maintained type layer to keep in sync with the validation layer for the schemas defined with
@@ -262,7 +262,7 @@ fiddly, spec-heavy work not worth re-implementing when a maintained library alre
 **Alternatives considered:** `yaml` (the `eemeli/yaml` package).
 
 Both are solid, actively maintained choices for this project's needs (parsing endpoint/gateway config
-files, and round-tripping them back to disk on an admin API save via `yaml.dump()`). `js-yaml` was
+files, and round-tripping them back to disk on an console API save via `yaml.dump()`). `js-yaml` was
 picked mainly for being the longer-established, more widely depended-upon of the two, with a simpler
 single-function `load()`/`dump()` API that matches exactly how this project uses it (whole-document
 parse and whole-document serialize — no need for the `yaml` package's more granular
@@ -315,7 +315,7 @@ small amount of matching work this project actually does per request.
 
 `pino` is the fastest structured JSON logger in the Node ecosystem, and — more relevant to this
 project's own design than raw speed — its `.child({ ... })` API (used throughout `dispatch.ts` and
-`adminApi.ts` to attach an `endpointId` or `component` label to every log line for a given request/module)
+`consoleApi.ts` to attach an `endpointId` or `component` label to every log line for a given request/module)
 maps directly onto how this project wants to scope its logging. `pino-pretty` is used purely as a dev
 convenience transport (colorized, human-readable output when `NODE_ENV !== "production"`), while
 production gets pino's default fast structured JSON output straight to stdout, ready for any log
@@ -326,7 +326,7 @@ transport ecosystem (multiple simultaneous outputs, custom formats) — but that
 with materially worse raw throughput than pino, which matters more for a middleware that logs at least
 once per proxied request than for most application types. `bunyan` pioneered the structured-JSON
 approach pino builds on but is far less actively maintained today. Plain `console.log` was never a
-real option once "the admin API and every backend call need contextual, filterable log lines" was a
+real option once "the console API and every backend call need contextual, filterable log lines" was a
 requirement — that needs structure (level, scoped fields) `console.log` doesn't provide on its own.
 
 ## Testing: `vitest` + `supertest`
@@ -364,18 +364,18 @@ terminal and `nodemon dist/...` in another works, but is strictly more manual se
 end result. `tsx` is dev/build tooling only — it has no bearing on the production `npm run build`/
 `npm start` path, which compiles with plain `tsc` and runs the compiled JS directly.
 
-## Admin UI frontend: plain HTML/CSS/JS, no framework, no build step
+## Console UI frontend: plain HTML/CSS/JS, no framework, no build step
 
 **Alternatives considered:** React or Vue with a bundler (Vite, webpack); a server-rendered template
 engine (EJS, Handlebars) instead of a client-rendered SPA-lite.
 
-The admin UI (`public/admin/`) is genuinely simple by SPA standards — a two-list sidebar, an inline
+The console UI (`public/console/`) is genuinely simple by SPA standards — a two-list sidebar, an inline
 detail panel that doubles as both editors, a handful of repeatable list editors, a light/dark toggle —
 and is served directly via `express.static` with zero build step:
-edit `admin.js`, refresh the browser, done. A framework like React would bring real, felt benefits at a
-larger UI surface (component reuse, declarative state-to-DOM binding instead of `admin.js`'s manual
+edit `console.js`, refresh the browser, done. A framework like React would bring real, felt benefits at a
+larger UI surface (component reuse, declarative state-to-DOM binding instead of `console.js`'s manual
 `el()`/`innerHTML` DOM manipulation) — but it would also mean introducing a build pipeline (Vite or
-webpack, a `dist/admin` output directory, a decision about whether that build step runs at `npm run
+webpack, a `dist/console` output directory, a decision about whether that build step runs at `npm run
 build` time or needs its own separate step) for a UI that, as of this writing, is one ~1,150-line
 JavaScript file. That trade-off wasn't worth it yet. A server-rendered template engine was also
 considered and rejected: this UI needs real client-side interactivity (live path auto-generation,
@@ -383,8 +383,8 @@ tabbed/collapsible sections, a "Try it" panel that calls the API and re-renders 
 reload) that a template engine doesn't help with — it would only have helped with the *initial* HTML shape,
 which is the smallest part of what this UI actually does.
 
-**This is the item in this document most likely to need revisiting as the admin UI grows.** If
-`admin.js` roughly doubles in size, or state management (which sections are open, which endpoint is being
+**This is the item in this document most likely to need revisiting as the console UI grows.** If
+`console.js` roughly doubles in size, or state management (which sections are open, which endpoint is being
 edited, keeping the endpoints list in sync after a save) gets meaningfully harder to reason about by hand,
 that's the concrete signal to introduce a framework — not a fixed size threshold, but a felt one.
 
@@ -404,7 +404,7 @@ store the *description* of how to talk to other backends, one of which might its
 config-as-code JS/TS module (`export const endpoints = [...]`) would be diffable and hand-editable, but
 loses hot-reload-without-restart entirely (changing a JS module's exported value requires re-importing
 it, which Node doesn't support cleanly at runtime the way re-reading a YAML file does) and loses the
-admin UI's ability to safely write back a single endpoint's file without touching any other endpoint — a
+console UI's ability to safely write back a single endpoint's file without touching any other endpoint — a
 concern this project cares about enough to have built the whole
 [folder-layout](TECHNICAL.md#folder-layout-mirrors-each-endpoints-path) feature around keeping each
 endpoint's file independent and easy to locate.

@@ -1297,6 +1297,11 @@ function outputArrayFieldRow(field) {
     nestedList,
     el("div", { class: "array-field-footer" }, [addFieldBtn, addArrayBtn]),
   ]);
+  // Lets addToOutputFromTree() (see below) find this array's current Root
+  // and its nested-fields container without re-deriving either -- used to
+  // target a tree-picker "+" click at the right array scope instead of
+  // always the top level, at any nesting depth.
+  row._arrayMeta = { rootInput, nestedList };
   row._read = () => ({
     kind: "array",
     target: targetInput.value.trim(),
@@ -1419,26 +1424,82 @@ function uniqueTargetName(base, existingTargets) {
   return `${base}_${n}`;
 }
 
+/** Turns a Root pattern (as typed in an array field's Root input, e.g.
+ * "$.orders[*]") into a RegExp source matching any CONCRETE sample path
+ * it could be instantiated to -- "[*]" (a wildcard index) becomes
+ * "\[\d+\]" (the Test tab's tree always shows one concrete, indexed
+ * sample item, e.g. "$.orders[0]", never the wildcard itself), and
+ * everything else is escaped as a literal. */
+function jsonPathPatternToRegexSource(pattern) {
+  return pattern
+    .split(/(\[\*\])/)
+    .map((part) => (part === "[*]" ? "\\[\\d+\\]" : part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    .join("");
+}
+
+/** Walks every array field currently defined in the Output tab (at any
+ * nesting depth, since an array can contain another array) and finds the
+ * deepest one whose Root the given CONCRETE sample path (from the Test
+ * tab's tree) falls inside. `prefixPattern` is the regex source already
+ * matched by an enclosing array, if any -- a nested array's own Root is
+ * written relative to its parent item (same rule as everywhere else in
+ * this output-mapping engine -- see OutputArrayFieldDef's doc comment in
+ * src/types/config.ts), so its absolute pattern is the parent's matched
+ * prefix plus its own Root with the leading "$" (which stands for "this
+ * point") stripped.
+ *
+ * Returns `{ listEl, relativePath }` -- `listEl` is that array's own
+ * nested-fields container to add into, and `relativePath` is `path`
+ * rewritten to be relative to one item of that array, the same way a
+ * nested array field's own source/root already has to be written -- or
+ * `null` if `path` isn't inside any array defined yet, which keeps the
+ * original top-level-only behavior for anything outside one (including
+ * the very first "+" click on an array node, before it exists as a row
+ * here at all). */
+function findEnclosingArrayScope(path, containerEl = document.getElementById("output-fields-list"), prefixPattern = "\\$") {
+  for (const row of containerEl.children) {
+    const meta = row._arrayMeta;
+    if (!meta) continue;
+    const rootValue = meta.rootInput.value.trim();
+    if (!rootValue) continue;
+    const pattern = prefixPattern + jsonPathPatternToRegexSource(rootValue.replace(/^\$/, ""));
+    const m = path.match(new RegExp("^" + pattern));
+    if (!m) continue;
+    const candidate = { listEl: meta.nestedList, relativePath: "$" + path.slice(m[0].length) };
+    return findEnclosingArrayScope(path, meta.nestedList, pattern) || candidate;
+  }
+  return null;
+}
+
 /** The actual "Add to Output" action, fired by a tree node's right-click
- * or its "+" button. Always adds to the top-level output.fields -- a leaf
- * becomes a value field, an array becomes a new (initially empty) nested
- * array field whose own fields are then filled in by hand below it. */
+ * or its "+" button. If the clicked node falls inside an array that's
+ * already been added (at any depth), the new field is added INTO that
+ * array's own fields, with its source/root rewritten relative to that
+ * array's item -- otherwise it's added at the top level, same as before
+ * (which is always true for the very first "+" on an array node itself,
+ * since the array doesn't exist as a scope to be "inside" until this
+ * call creates it). A leaf becomes a value field, an array becomes a new
+ * (initially empty) nested array field whose own fields are then filled
+ * in the same way -- by clicking "+" on ITS children in the tree, now
+ * landing in the right place instead of back at the top. */
 function addToOutputFromTree(path, kind, keyLabel) {
-  const listEl = document.getElementById("output-fields-list");
+  const scope = findEnclosingArrayScope(path);
+  const listEl = scope ? scope.listEl : document.getElementById("output-fields-list");
+  const effectivePath = scope ? scope.relativePath : path;
   const existingTargets = new Set([...listEl.children].map((r) => r._read().target));
   const target = uniqueTargetName(sanitizeTargetName(keyLabel), existingTargets);
 
   if (kind === "array") {
-    const root = /(\[\*\]|\[\d+\])$/.test(path) ? path : `${path}[*]`;
+    const root = /(\[\*\]|\[\d+\])$/.test(effectivePath) ? effectivePath : `${effectivePath}[*]`;
     const row = outputFieldRow({ kind: "array", target, root, fields: [] });
     listEl.appendChild(row);
     refreshSectionCounts();
     toast(`Added array field "${target}" -- fill in its fields below.`);
   } else {
-    const row = outputFieldRow({ target, source: path });
+    const row = outputFieldRow({ target, source: effectivePath });
     listEl.appendChild(row);
     refreshSectionCounts();
-    toast(`Added "${target}" from ${path}`);
+    toast(scope ? `Added "${target}" inside the array above, from ${effectivePath}` : `Added "${target}" from ${path}`);
   }
   applyMappingToSample();
 }

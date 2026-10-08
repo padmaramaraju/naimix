@@ -65,10 +65,17 @@ export function saveWorkspaceSettings(settingsFile: string, settings: WorkspaceS
  */
 export function resolveConfigDir(
   configDir: string
-): { endpointsDir: string; gatewaysFile: string; authProvidersFile: string } {
+): { endpointsDir: string; gatewaysFile: string; authProvidersFile: string; transformsDir: string } {
   return {
     endpointsDir: path.join(configDir, "endpoints"),
     gatewaysFile: path.join(configDir, "gateways.yaml"),
     authProvidersFile: path.join(configDir, "authProviders.yaml"),
+    // Custom transform functions -- see TRANSFORM_FUNCTIONS_DESIGN_NOTES.md.
+    // A <name>.ts source file and its compiled <name>.js sibling live here,
+    // side by side with endpoints/ and gateways.yaml, in the SAME configDir
+    // git repo -- that's the whole point (see that doc's "git parity with
+    // endpoints/gateways" section). Doesn't need to exist: FunctionRegistry
+    // treats a missing folder as "no functions", same as an empty one.
+    transformsDir: path.join(configDir, "transforms"),
   };
 }

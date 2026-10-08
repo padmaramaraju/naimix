@@ -10,11 +10,14 @@ backend:
   method: GET
   timeoutMs: 10000
 output:
-  root: $[*]
   fields:
-    - target: id
-      source: $.id
-    - target: name
-      source: $.firstName
-    - target: city
-      source: $.city
+    - kind: array
+      target: customers
+      root: $[*]
+      fields:
+        - target: id
+          source: $.id
+        - target: name
+          source: $.firstName
+        - target: city
+          source: $.city

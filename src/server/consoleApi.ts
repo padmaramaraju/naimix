@@ -6,6 +6,8 @@ import { endpointConfigSchema, backendSchema, outputSchema, inputParamSchema } f
 import type { InputParamDef } from "../types/config";
 import { callBackend, closeAllSqlConnections, getBackendGatewayName } from "../connectors";
 import { mapResponse } from "../transform/mapper";
+import { collectFunctionNames } from "../transform/functionRefs";
+import { compileFunctionSource, runInSandbox } from "./functionCompiler";
 import { ValidationError } from "./errors";
 import { generateCrudEndpointsForGateway } from "./crudGenerator";
 import { generateOpenApiDocument } from "./openapiGenerator";
@@ -14,6 +16,7 @@ import { resolveConfigDir, saveWorkspaceSettings } from "./workspaceSettings";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
+import type { FunctionRegistry } from "../transform/functionRegistry";
 import type { AuthService } from "../auth/authService";
 import type { Logger } from "./logger";
 import type { ResolvedParams } from "../connectors/paramSubst";
@@ -22,6 +25,7 @@ export interface ConsoleApiDeps {
   endpointRegistry: EndpointRegistry;
   gatewaysRegistry: GatewaysRegistry;
   authProvidersRegistry: AuthProvidersRegistry;
+  functionRegistry: FunctionRegistry;
   authService: AuthService;
   logger: Logger;
   /** Mutable holder for "which workspace is this instance currently
@@ -90,6 +94,7 @@ export function createConsoleApiRouter({
   endpointRegistry,
   gatewaysRegistry,
   authProvidersRegistry,
+  functionRegistry,
   authService,
   logger,
   workspace,
@@ -183,7 +188,7 @@ export function createConsoleApiRouter({
         rawQuery: (req.body?.rawQuery ?? undefined) as Record<string, unknown> | undefined,
         rawBody: req.body?.rawBody,
       });
-      const mapped = mapResponse(raw, endpoint.output);
+      const mapped = mapResponse(raw, endpoint.output, { functions: functionRegistry, params });
       res.json({ raw, mapped });
     })
   );
@@ -219,18 +224,131 @@ export function createConsoleApiRouter({
   router.post("/test-mapping", (req, res) => {
     const bodySchema = z.object({ raw: z.unknown(), output: outputSchema });
     const { raw, output } = bodySchema.parse(req.body);
-    res.json({ mapped: mapResponse(raw, output) });
+    res.json({ mapped: mapResponse(raw, output, { functions: functionRegistry }) });
   });
 
   router.post(
     "/reload",
     asyncHandler(async (_req, res) => {
+      // Functions reload FIRST: endpointRegistry's own reload validates
+      // every transform/postProcess name reference against whatever the
+      // function registry currently has loaded (see endpointRegistry.ts),
+      // so a transform function someone just hand-edited on disk (outside
+      // the Console's own save flow -- e.g. a git pull) needs to be picked
+      // up before that check runs, not after.
+      const { errors: functionErrors } = functionRegistry.loadFromDisk();
       const { errors } = endpointRegistry.reloadFromDisk();
       gatewaysRegistry.reloadFromDisk();
       authProvidersRegistry.reloadFromDisk();
-      res.json({ endpointCount: endpointRegistry.list().length, errors });
+      res.json({ endpointCount: endpointRegistry.list().length, errors, functionErrors });
     })
   );
+
+  // ---- Custom transform functions ----
+  // See TRANSFORM_FUNCTIONS_DESIGN_NOTES.md. These four routes are the
+  // ENTIRE dynamic-reload surface for this feature -- nothing in
+  // dataPlaneApp.ts/opsApi.ts (QA/Production) exposes anything like them,
+  // by design (see FunctionRegistry's own doc comment).
+
+  router.get("/functions", (_req, res) => {
+    res.json({ names: functionRegistry.list() });
+  });
+
+  // Reads back the .ts SOURCE (not the compiled .js) for editing -- the
+  // Console always edits/displays the original author-written code.
+  router.get("/functions/:name", (req, res) => {
+    const name = req.params.name;
+    if (!functionRegistry.has(name)) {
+      return res.status(404).json({ error: "NotFound", message: `No function "${name}"` });
+    }
+    const sourceFile = path.join(functionRegistry.getDir(), `${name}.ts`);
+    let code = "";
+    try {
+      code = fs.readFileSync(sourceFile, "utf8");
+    } catch {
+      // The compiled .js loaded fine but its .ts source is missing (e.g.
+      // hand-added outside the Console) -- not an error, just nothing to
+      // show in the editor.
+    }
+    res.json({ name, code });
+  });
+
+  // Runs typed-but-not-yet-saved code in the sandbox (see
+  // functionCompiler.ts's runInSandbox) against a sample value/ctx the
+  // Console already has on hand (either a value picked from the Test
+  // tab's fetched sample, or the currently-mapped output, for a
+  // postProcess function under test) -- lets someone iterate on a
+  // function's logic before it's ever written to disk or wired into a
+  // real endpoint.
+  router.post(
+    "/functions/test",
+    asyncHandler(async (req, res) => {
+      const bodySchema = z.object({
+        code: z.string().min(1),
+        value: z.unknown(),
+        ctx: z
+          .object({ item: z.unknown().optional(), raw: z.unknown().optional(), params: z.record(z.unknown()).optional() })
+          .optional()
+          .default({}),
+      });
+      const { code, value, ctx } = bodySchema.parse(req.body);
+      const compiled = compileFunctionSource(code);
+      res.json(runInSandbox(compiled, value, ctx));
+    })
+  );
+
+  // Compiles + persists a function: writes BOTH <name>.ts (the source, as
+  // written) and <name>.js (compiled via compileFunctionSource) to
+  // <configDir>/transforms/, then immediately hot-reloads it into this
+  // dev server's own live registry (FunctionRegistry.reloadOne) so an
+  // endpoint referencing it works on the very next request -- see
+  // FunctionRegistry's own doc comment for why this reload path only
+  // ever runs here, never in QA/Production.
+  router.put(
+    "/functions/:name",
+    asyncHandler(async (req, res) => {
+      const name = req.params.name;
+      if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(name)) {
+        throw new ValidationError(
+          `Function name "${name}" is invalid -- use letters, digits, "_" or "-", starting with a letter.`
+        );
+      }
+      const { code } = z.object({ code: z.string().min(1) }).parse(req.body);
+      const compiled = compileFunctionSource(code);
+
+      const dir = functionRegistry.getDir();
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(path.join(dir, `${name}.ts`), code, "utf8");
+      fs.writeFileSync(path.join(dir, `${name}.js`), compiled, "utf8");
+      functionRegistry.reloadOne(name);
+
+      consoleLogger.info(`Saved transform function "${name}"`);
+      res.json({ name });
+    })
+  );
+
+  router.delete("/functions/:name", (req, res) => {
+    const name = req.params.name;
+    if (!functionRegistry.has(name)) {
+      return res.status(404).json({ error: "NotFound", message: `No function "${name}"` });
+    }
+    const dependents = endpointRegistry.list().filter((e) => collectFunctionNames(e.output).includes(name));
+    if (dependents.length > 0) {
+      return res.status(409).json({
+        error: "Conflict",
+        message: `Function "${name}" is used by ${dependents.length} endpoint(s)`,
+        endpoints: dependents.map((e) => e.id),
+      });
+    }
+    const dir = functionRegistry.getDir();
+    for (const ext of [".ts", ".js"]) {
+      const file = path.join(dir, `${name}${ext}`);
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    }
+    functionRegistry.remove(name);
+    consoleLogger.info(`Deleted transform function "${name}"`);
+    res.status(204).end();
+  });
 
   // ---- Workspace ----
   // Each user runs their own instance of this app on their own machine (no
@@ -309,7 +427,7 @@ export function createConsoleApiRouter({
         );
       }
 
-      const { endpointsDir, gatewaysFile, authProvidersFile } = resolveConfigDir(configDir);
+      const { endpointsDir, gatewaysFile, authProvidersFile, transformsDir } = resolveConfigDir(configDir);
 
       // Any SQL gateway pools opened for the OLD folder's gateways (e.g. an
       // open sqlite file handle, or a live pg/mysql pool) are no longer
@@ -317,6 +435,13 @@ export function createConsoleApiRouter({
       // now rather than leaking them until process exit.
       await closeAllSqlConnections();
 
+      // Functions repoint+reload BEFORE endpoints: the new workspace's
+      // endpoints may reference function names that only exist in ITS
+      // transforms/ folder (not the old workspace's), and endpointRegistry
+      // validates those names against whatever functionRegistry currently
+      // holds (see endpointRegistry.ts) -- so the registry has to already
+      // be pointed at the new folder by the time endpoints reload.
+      functionRegistry.setDir(transformsDir);
       const { errors: endpointErrors } = endpointRegistry.setDir(endpointsDir);
       gatewaysRegistry.setFilePath(gatewaysFile);
       authProvidersRegistry.setFilePath(authProvidersFile);

@@ -108,19 +108,95 @@ export const backendSchema = z
     }
   });
 
-export const outputFieldSchema = z.object({
-  target: z.string().min(1),
-  source: z.string().min(1),
-  default: z.unknown().optional(),
-  transform: z
-    .enum(["toString", "toNumber", "toBoolean", "trim", "upper", "lower"])
-    .optional(),
-});
+// `.strict()` on both branches below is what makes a plain z.union
+// unambiguous without needing a discriminatedUnion (which, combined with
+// z.lazy's own recursive-type workaround, runs into TS inference zod can't
+// resolve): a value-shaped object has `source` (which the array branch
+// doesn't declare, so `.strict()` rejects it) and is missing the array
+// branch's required `root`/`fields`; an array-shaped object fails the
+// value branch the same way, in reverse. z.union tries each branch in
+// turn and keeps the first one that actually validates, so this is enough
+// to route every input to the right branch with no explicit discriminant
+// check of our own.
+// A custom transform function is referenced by name, not written inline --
+// see FunctionTransformRef's doc comment in src/types/config.ts. The name
+// itself isn't checked here (zod only knows the request shape, not which
+// functions the FunctionRegistry has actually loaded); that check happens
+// in endpointRegistry.ts, the same place a bad gateway name is caught, so
+// one broken reference is a load error for that one file rather than a
+// silent no-op at request time.
+export const functionRefSchema = z.object({ kind: z.literal("function"), name: z.string().min(1) }).strict();
 
-export const outputSchema = z.object({
-  root: z.string().optional(),
-  fields: z.array(outputFieldSchema).min(1),
-});
+export const outputTransformSchema = z.union([
+  z.enum(["toString", "toNumber", "toBoolean", "trim", "upper", "lower"]),
+  functionRefSchema,
+]);
+
+const outputValueFieldSchema = z
+  .object({
+    // Optional, not required -- every endpoint/claims field written before
+    // OutputArrayFieldDef existed has no `kind` at all, and must keep
+    // parsing as a value field exactly as it always did.
+    kind: z.literal("value").optional(),
+    target: z.string().min(1),
+    source: z.string().min(1),
+    default: z.unknown().optional(),
+    transform: outputTransformSchema.optional(),
+  })
+  .strict();
+
+// z.infer of the lazy recursive union below can't be derived automatically
+// (that's exactly what z.lazy's own docs warn about -- TS can't resolve a
+// type that references itself through a function), so this interface is
+// written by hand and the lazy schema is annotated against it with
+// z.ZodType<...>, same shape as (and meant to stay in lockstep with)
+// OutputArrayFieldDef/OutputFieldDef in src/types/config.ts.
+interface OutputArrayFieldParsed {
+  kind: "array";
+  target: string;
+  root: string;
+  fields: OutputFieldParsed[];
+}
+type OutputFieldParsed = z.infer<typeof outputValueFieldSchema> | OutputArrayFieldParsed;
+
+const outputArrayFieldSchema: z.ZodType<OutputArrayFieldParsed> = z.lazy(() =>
+  z
+    .object({
+      kind: z.literal("array"),
+      target: z.string().min(1),
+      root: z.string().min(1),
+      fields: z.array(outputFieldSchema).min(1),
+    })
+    .strict()
+);
+
+/**
+ * A single output field is either a value extraction (outputValueFieldSchema)
+ * or a nested array (outputArrayFieldSchema) -- see OutputArrayFieldDef's own
+ * doc comment in src/types/config.ts for why arrays need to nest.
+ */
+export const outputFieldSchema: z.ZodType<OutputFieldParsed> = z.lazy(() =>
+  z.union([outputArrayFieldSchema, outputValueFieldSchema])
+);
+
+export const outputSchema = z
+  .object({
+    fields: z.array(outputFieldSchema).min(1),
+    // Named custom function run once on the whole mapped output -- see
+    // OutputConfig.postProcess's doc comment in src/types/config.ts.
+    postProcess: z.object({ name: z.string().min(1) }).strict().optional(),
+  })
+  // Strict on purpose: there used to be a top-level `root` (a JSONPath that
+  // pre-scoped the whole response AND switched the output to a top-level
+  // array -- see git history / TRANSFORM_FUNCTIONS_DESIGN_NOTES.md-adjacent
+  // discussion). It's been removed in favor of one consistent rule at every
+  // level: a field's `source`/`root` is always relative to its own parent
+  // (the real backend response at the top level, one level deeper for each
+  // nested array). Staying strict means a config that still has a stray
+  // `root:` here fails loudly at load/save time instead of having it
+  // silently stripped and the endpoint quietly stop being scoped the way
+  // its author expects.
+  .strict();
 
 export const endpointConfigSchema = z.object({
   id: z.string().min(1),

@@ -206,11 +206,12 @@ const FIELD_INFO = {
   paramType: "The value is coerced to this type (string, number, or boolean) before it's used.",
   paramRequired: "If on, a request missing this parameter is rejected with a 400 error before the backend is ever called.",
   paramDefault: "The value used when the caller doesn't supply one and it isn't required.",
-  outputRoot: "An optional JSONPath selecting a collection to map, e.g. $.items[*], for a list response. Leave blank to map a single object.",
   outputTarget: "The field name in this endpoint's JSON response -- can be nested, e.g. name.first.",
   outputSource: "A JSONPath into the backend's raw response, e.g. $.firstName.",
   outputTransform: "An optional conversion applied to the extracted value before it's placed in the response.",
   outputDefault: "The value used when Source doesn't match anything in the backend's response.",
+  outputArrayRoot: "A JSONPath selecting a collection, evaluated relative to this field's own parent item -- the real backend response itself at the top level, or one level deeper for a nested array inside another array. Each match is mapped through this array's own nested fields below, e.g. $.orders[*].",
+  outputPostProcess: "An optional named custom function run once on the entire mapped output above (not just one field) -- use it to add or remove top-level fields, or to walk and rewrite an array, after every field above has already been extracted. The same functions available here can also be picked as a single field's Transform.",
   gatewayName: "A unique identifier for this gateway (letters, digits, _ and - only). Endpoints reference it by this exact name in their Gateway field.",
   gatewayKind: "The type of backend this gateway connects to -- json, xml, soap, or sql. Determines which fields below apply and which connector handles requests through it.",
   gatewayBaseUrl: "The base URL every endpoint using this gateway calls relative to, e.g. https://api.example.com.",
@@ -1023,15 +1024,198 @@ function inputParamRow(param) {
   return row;
 }
 
+const CUSTOM_FUNCTION_OPTION = "__function__";
+const NEW_FUNCTION_OPTION = "__new__";
+
+/**
+ * Shared "custom function" sub-editor, used both by a value field's
+ * Transform select (when set to "Custom function...") and by the
+ * endpoint-level Post-process section below -- both store/read the exact
+ * same { kind: "function", name } shape (see FunctionTransformRef/
+ * OutputConfig.postProcess in src/types/config.ts), so one control
+ * suffices for both. Renders a <select> of every function already saved
+ * on this server (re-fetched fresh each time one of these is built, so a
+ * function saved a moment ago in a different row shows up here too) plus
+ * "+ New function...", and an inline editor (code + a hand-typed sample
+ * value + Test/Save) for creating a new one or editing whichever is
+ * currently selected. See TRANSFORM_FUNCTIONS_DESIGN_NOTES.md.
+ */
+function buildFunctionPicker(initialName) {
+  const nameSelect = el("select", {}, []);
+  const editBtn = el("button", { type: "button", class: "btn-secondary btn-sm" }, ["✎ Edit"]);
+  const panel = el("div", { class: "function-editor-panel" }, []);
+  panel.hidden = true;
+  const wrapper = el("div", { class: "function-picker" }, [
+    el("div", { class: "function-picker-row" }, [nameSelect, editBtn]),
+    panel,
+  ]);
+
+  function updateEditBtn() {
+    editBtn.hidden = !nameSelect.value || nameSelect.value === NEW_FUNCTION_OPTION;
+  }
+
+  async function loadNames(selectValue) {
+    let names = [];
+    try {
+      names = (await api("GET", "/console/api/functions")).names;
+    } catch {
+      // Non-fatal -- the picker still works for whatever's already selected.
+    }
+    const want = selectValue !== undefined ? selectValue : nameSelect.value;
+    nameSelect.innerHTML = "";
+    nameSelect.appendChild(el("option", { value: "" }, ["(choose a function)"]));
+    for (const n of names) nameSelect.appendChild(el("option", { value: n }, [n]));
+    nameSelect.appendChild(el("option", { value: NEW_FUNCTION_OPTION }, ["+ New function…"]));
+    if (want && [...nameSelect.options].some((o) => o.value === want)) nameSelect.value = want;
+    updateEditBtn();
+  }
+  loadNames(initialName);
+
+  function openPanel(name, code) {
+    panel.innerHTML = "";
+    panel.hidden = false;
+    const isNew = !name;
+    const nameInput = el("input", { placeholder: "e.g. normalizePrice", value: name || "" });
+    nameInput.disabled = !isNew;
+    const codeArea = el(
+      "textarea",
+      { rows: 10 },
+      []
+    );
+    codeArea.value =
+      code ||
+      'function transform(data, ctx) {\n  // data: this field\'s value, or (for a post-process\n  // function) the whole mapped output.\n  // ctx: { item, raw, params }\n  return data;\n}\n';
+    const sampleArea = el("textarea", { rows: 3 }, []);
+    sampleArea.value = "null";
+    const resultBox = el("pre", { class: "code-block" }, ["—"]);
+    const errorBox = el("p", { class: "error-text" }, []);
+    const testBtn = el("button", { type: "button", class: "btn-secondary btn-sm" }, ["Test"]);
+    const saveBtn = el("button", { type: "button", class: "btn-primary btn-sm" }, ["Save"]);
+    const cancelBtn = el("button", { type: "button", class: "btn-secondary btn-sm" }, ["Cancel"]);
+
+    testBtn.onclick = async () => {
+      resultBox.textContent = "Running…";
+      try {
+        const value = looseParse(sampleArea.value);
+        const res = await api("POST", "/console/api/functions/test", { code: codeArea.value, value, ctx: {} });
+        resultBox.textContent = JSON.stringify(res, null, 2);
+      } catch (err) {
+        resultBox.textContent = "Error: " + err.message;
+      }
+    };
+
+    saveBtn.onclick = async () => {
+      const finalName = isNew ? nameInput.value.trim() : name;
+      if (!/^[A-Za-z][A-Za-z0-9_-]*$/.test(finalName)) {
+        errorBox.textContent = 'Function name must start with a letter, then only letters, digits, "_" or "-".';
+        return;
+      }
+      errorBox.textContent = "";
+      try {
+        await api("PUT", `/console/api/functions/${encodeURIComponent(finalName)}`, { code: codeArea.value });
+        await loadNames(finalName);
+        panel.hidden = true;
+      } catch (err) {
+        errorBox.textContent = err.message;
+      }
+    };
+
+    cancelBtn.onclick = () => {
+      panel.hidden = true;
+      if (isNew) loadNames("");
+    };
+
+    panel.append(
+      el("label", {}, ["Function name", nameInput]),
+      el("label", {}, ["Code", codeArea]),
+      el("label", {}, ["Sample value to test with (JSON)", sampleArea]),
+      el("div", { class: "function-editor-actions" }, [testBtn, saveBtn, cancelBtn]),
+      el("p", { class: "muted" }, ["Result:"]),
+      resultBox,
+      errorBox
+    );
+  }
+
+  nameSelect.addEventListener("change", async () => {
+    if (nameSelect.value === NEW_FUNCTION_OPTION) {
+      openPanel(null, null);
+      return;
+    }
+    panel.hidden = true;
+    updateEditBtn();
+  });
+
+  editBtn.onclick = async () => {
+    const name = nameSelect.value;
+    if (!name) return;
+    try {
+      const { code } = await api("GET", `/console/api/functions/${encodeURIComponent(name)}`);
+      openPanel(name, code);
+    } catch (err) {
+      alert("Could not load function: " + err.message);
+    }
+  };
+
+  // Re-fetches the dropdown's options from the server without disturbing
+  // whatever's currently selected -- used after a top-level "Reload" (see
+  // the reload-btn handler below), since that reloads the server-side
+  // FunctionRegistry but has no other way to reach a picker that was
+  // already mounted (and fetched its options) before the reload ran.
+  wrapper._refresh = () => loadNames();
+
+  return {
+    wrapper,
+    getName: () => (nameSelect.value && nameSelect.value !== NEW_FUNCTION_OPTION ? nameSelect.value : ""),
+    refreshNames: () => loadNames(),
+  };
+}
+
+/**
+ * An output field row is either a value extraction (the original shape --
+ * Target/Source/Transform/Default) or, when `field.kind === "array"`, a
+ * nested collection: Target/Root plus its own nested, recursively-rendered
+ * fields list (which can itself contain more array rows, to any depth).
+ * See OutputArrayFieldDef's doc comment in src/types/config.ts.
+ *
+ * `transform` can be one of the built-in enum values OR a custom function
+ * reference ({ kind: "function", name } -- see FunctionTransformRef in
+ * src/types/config.ts); picking "Custom function..." in the Transform
+ * select reveals buildFunctionPicker()'s inline editor in place of (not
+ * in addition to) the plain enum choice.
+ */
 function outputFieldRow(field) {
   field = field || { target: "", source: "", default: "", transform: "" };
+
+  if (field.kind === "array") return outputArrayFieldRow(field);
+
+  const isFunctionTransform = !!(field.transform && typeof field.transform === "object" && field.transform.kind === "function");
+
   const targetInput = el("input", { placeholder: "e.g. name.first", value: field.target });
-  const sourceInput = el("input", { placeholder: "e.g. $.firstName", value: field.source });
+  const sourceInput = el("input", { placeholder: "e.g. $.firstName", value: field.source || "" });
   const transformSelect = el("select", {}, []);
   populateSelect(transformSelect, META.transforms, { includeBlank: true });
-  transformSelect.value = field.transform || "";
+  transformSelect.appendChild(el("option", { value: CUSTOM_FUNCTION_OPTION }, ["Custom function…"]));
+  transformSelect.value = isFunctionTransform ? CUSTOM_FUNCTION_OPTION : field.transform || "";
   const defaultInput = el("input", { placeholder: "default (optional)", value: field.default ?? "" });
-  const removeBtn = el("button", { type: "button", class: "btn-secondary btn-sm remove-btn", onclick: () => { row.remove(); refreshSectionCounts(); } }, ["✕"]);
+
+  const functionPicker = buildFunctionPicker(isFunctionTransform ? field.transform.name : "");
+  functionPicker.wrapper.hidden = !isFunctionTransform;
+  transformSelect.addEventListener("change", () => {
+    functionPicker.wrapper.hidden = transformSelect.value !== CUSTOM_FUNCTION_OPTION;
+  });
+
+  const removeBtn = el(
+    "button",
+    {
+      type: "button",
+      class: "btn-secondary btn-sm remove-btn",
+      onclick: () => {
+        row.remove();
+        refreshSectionCounts();
+      },
+    },
+    ["✕"]
+  );
 
   const row = el("div", { class: "repeatable-row" }, [
     el("label", {}, [fieldTitle("Target ", infoIcon("outputTarget")), targetInput]),
@@ -1039,14 +1223,248 @@ function outputFieldRow(field) {
     el("label", {}, [fieldTitle("Transform ", infoIcon("outputTransform")), transformSelect]),
     el("label", {}, [fieldTitle("Default ", infoIcon("outputDefault")), defaultInput]),
     removeBtn,
+    functionPicker.wrapper,
   ]);
   row._read = () => ({
     target: targetInput.value.trim(),
     source: sourceInput.value.trim(),
-    ...(transformSelect.value ? { transform: transformSelect.value } : {}),
+    ...(transformSelect.value === CUSTOM_FUNCTION_OPTION
+      ? functionPicker.getName()
+        ? { transform: { kind: "function", name: functionPicker.getName() } }
+        : {}
+      : transformSelect.value
+        ? { transform: transformSelect.value }
+        : {}),
     ...(defaultInput.value !== "" ? { default: looseParse(defaultInput.value) } : {}),
   });
   return row;
+}
+
+/** A nested-array output field row -- see outputFieldRow()'s own doc
+ * comment. Rendered with its own nested repeatable-list of child rows
+ * (value rows and/or further array rows), with "+ Add field"/"+ Add array"
+ * controls scoped to that nested list for filling it in by hand. */
+function outputArrayFieldRow(field) {
+  const targetInput = el("input", { placeholder: "e.g. orders", value: field.target || "" });
+  const rootInput = el("input", { placeholder: "e.g. $.orders[*]", value: field.root || "" });
+
+  const nestedList = el("div", { class: "repeatable-list nested-fields-list" }, []);
+  for (const f of field.fields || []) nestedList.appendChild(outputFieldRow(f));
+
+  const addFieldBtn = el(
+    "button",
+    {
+      type: "button",
+      class: "btn-secondary btn-sm",
+      onclick: () => {
+        nestedList.appendChild(outputFieldRow());
+        refreshSectionCounts();
+      },
+    },
+    ["+ Add field"]
+  );
+  const addArrayBtn = el(
+    "button",
+    {
+      type: "button",
+      class: "btn-secondary btn-sm",
+      onclick: () => {
+        nestedList.appendChild(outputFieldRow({ kind: "array", target: "", root: "", fields: [] }));
+        refreshSectionCounts();
+      },
+    },
+    ["+ Add array"]
+  );
+  const removeBtn = el(
+    "button",
+    {
+      type: "button",
+      class: "btn-secondary btn-sm remove-btn",
+      onclick: () => {
+        row.remove();
+        refreshSectionCounts();
+      },
+    },
+    ["✕ Remove array"]
+  );
+
+  const row = el("div", { class: "repeatable-row array-field-row" }, [
+    el("div", { class: "array-field-header" }, [
+      el("label", {}, [fieldTitle("Target ", infoIcon("outputTarget")), targetInput]),
+      el("label", {}, [fieldTitle("Root ", infoIcon("outputArrayRoot"), " (JSONPath, relative to the parent item)"), rootInput]),
+      el("div", { class: "array-field-header-actions" }, [removeBtn]),
+    ]),
+    nestedList,
+    el("div", { class: "array-field-footer" }, [addFieldBtn, addArrayBtn]),
+  ]);
+  row._read = () => ({
+    kind: "array",
+    target: targetInput.value.trim(),
+    root: rootInput.value.trim(),
+    fields: [...nestedList.children].map((r) => r._read()).filter(isValidOutputFieldRead),
+  });
+
+  return row;
+}
+
+/** A row read back as invalid (no target, or a value row with no source /
+ * an array row with no root) is dropped rather than saved/tested -- same
+ * "incomplete row is silently ignored, not an error" behavior the flat
+ * `.filter((f) => f.target && f.source)` had before array fields existed,
+ * just kind-aware now that `source` isn't the only field shape. */
+function isValidOutputFieldRead(f) {
+  if (!f || !f.target) return false;
+  return f.kind === "array" ? !!f.root : !!f.source;
+}
+
+/* ---------------------------------------------------------------------
+ * Test tab sample-response picker -- lets someone building output.fields
+ * right-click (or tap the "+" that appears on hover) a value or array in
+ * the real, already-fetched sample response instead of hand-typing
+ * JSONPath expressions. Always adds into the top-level output.fields --
+ * a nested array field's own fields are filled in by hand (its "+ Add
+ * field"/"+ Add array" buttons), using the picker's tree purely to find
+ * the right JSONPath to type.
+ * ------------------------------------------------------------------- */
+
+/** Turns an object/array key into the exact next JSONPath segment
+ * jsonpath-plus expects -- `.key` for a plain identifier, `['key']` for
+ * anything else (spaces, hyphens, etc.), `[n]` for an array index. */
+function jsonPathSegmentFor(key, isArrayIndex) {
+  if (isArrayIndex) return `[${key}]`;
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(String(key)) ? `.${key}` : `['${String(key).replace(/'/g, "\\'")}']`;
+}
+
+function jsonTreeAddButton(path, kind, keyLabel) {
+  return el(
+    "button",
+    {
+      type: "button",
+      class: "json-tree-add-btn",
+      title: "Add to Output",
+      "aria-label": "Add to Output",
+      onclick: (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        addToOutputFromTree(path, kind, keyLabel);
+      },
+    },
+    ["+"]
+  );
+}
+
+/** Right-click is the primary "Add to Output" gesture (the task this UI
+ * exists for); the "+" button next to every node is the same action for
+ * trackpad/discoverability, since a context menu is easy to miss. */
+function wireJsonTreeNodeActions(rowEl, path, kind, keyLabel) {
+  rowEl.addEventListener("contextmenu", (ev) => {
+    ev.preventDefault();
+    addToOutputFromTree(path, kind, keyLabel);
+  });
+}
+
+/** Recursively renders one node of the fetched (and, once armed past the
+ * top level, re-scoped) sample response as a collapsible tree. Only
+ * leaves and arrays get an "Add to Output" affordance -- a plain object
+ * node isn't independently addable (nest it via a dotted Target instead,
+ * same as the manual-entry form already supports). */
+function renderJsonTreeNode(value, pathSegments, keyLabel, depth) {
+  const path = "$" + pathSegments.join("");
+  const isArray = Array.isArray(value);
+  const isObject = value !== null && typeof value === "object" && !isArray;
+
+  if (!isArray && !isObject) {
+    const valueText = value === undefined ? "undefined" : JSON.stringify(value);
+    const row = el("div", { class: "json-tree-row json-tree-leaf", "data-path": path }, [
+      el("span", { class: "json-tree-key" }, [keyLabel]),
+      el("span", { class: "json-tree-value" }, [valueText]),
+      jsonTreeAddButton(path, "value", keyLabel),
+    ]);
+    wireJsonTreeNodeActions(row, path, "value", keyLabel);
+    return row;
+  }
+
+  const entries = isArray ? value.map((v, i) => [i, v]) : Object.entries(value);
+  const summaryText = isArray ? `Array(${entries.length})` : `Object{${entries.length}}`;
+  const summaryRow = el("summary", { class: "json-tree-row" }, [
+    el("span", { class: "json-tree-key" }, [keyLabel]),
+    el("span", { class: "json-tree-summary" }, [summaryText]),
+    isArray ? jsonTreeAddButton(path, "array", keyLabel) : null,
+  ]);
+  if (isArray) wireJsonTreeNodeActions(summaryRow, path, "array", keyLabel);
+
+  const childrenWrap = el("div", { class: "json-tree-children" }, []);
+  for (const [k, v] of entries) {
+    childrenWrap.appendChild(renderJsonTreeNode(v, [...pathSegments, jsonPathSegmentFor(k, isArray)], String(k), depth + 1));
+  }
+
+  const details = el("details", { class: "json-tree-node" }, [summaryRow, childrenWrap]);
+  if (depth < 1) details.open = true;
+  return details;
+}
+
+/** Turns a raw key/label into a safe default Target: dots/brackets in a
+ * backend field name would otherwise be read back as nested-path
+ * separators by setDeep() (see mapper.ts), silently producing the wrong
+ * output shape. */
+function sanitizeTargetName(name) {
+  const s = String(name ?? "").trim().replace(/[.[\]]/g, "_");
+  return s || "field";
+}
+
+function uniqueTargetName(base, existingTargets) {
+  if (!existingTargets.has(base)) return base;
+  let n = 2;
+  while (existingTargets.has(`${base}_${n}`)) n++;
+  return `${base}_${n}`;
+}
+
+/** The actual "Add to Output" action, fired by a tree node's right-click
+ * or its "+" button. Always adds to the top-level output.fields -- a leaf
+ * becomes a value field, an array becomes a new (initially empty) nested
+ * array field whose own fields are then filled in by hand below it. */
+function addToOutputFromTree(path, kind, keyLabel) {
+  const listEl = document.getElementById("output-fields-list");
+  const existingTargets = new Set([...listEl.children].map((r) => r._read().target));
+  const target = uniqueTargetName(sanitizeTargetName(keyLabel), existingTargets);
+
+  if (kind === "array") {
+    const root = /(\[\*\]|\[\d+\])$/.test(path) ? path : `${path}[*]`;
+    const row = outputFieldRow({ kind: "array", target, root, fields: [] });
+    listEl.appendChild(row);
+    refreshSectionCounts();
+    toast(`Added array field "${target}" -- fill in its fields below.`);
+  } else {
+    const row = outputFieldRow({ target, source: path });
+    listEl.appendChild(row);
+    refreshSectionCounts();
+    toast(`Added "${target}" from ${path}`);
+  }
+  applyMappingToSample();
+}
+
+/** Re-renders the Test tab's sample tree from the raw sample response,
+ * unscoped -- there's no separate top-level root to pre-scope it anymore
+ * (see mapper.ts's mapResponse()): output.fields are always relative to
+ * this same real response, exactly what this tree shows. A field that
+ * needs a narrower scope (an array field's own Root) is filled in by hand
+ * below, using this tree purely to find the right JSONPath to type. */
+async function refreshJsonTree() {
+  const treeEl = document.getElementById("test-raw-tree");
+  const hintEl = document.getElementById("json-tree-hint");
+  if (!treeEl || !hintEl) return;
+
+  if (!HAS_RAW_SAMPLE) {
+    treeEl.innerHTML = "";
+    hintEl.hidden = false;
+    hintEl.textContent = "Fetch a sample response above to enable picking fields below.";
+    return;
+  }
+
+  hintEl.hidden = true;
+  hintEl.textContent = "";
+  treeEl.innerHTML = "";
+  treeEl.appendChild(renderJsonTreeNode(LAST_RAW_SAMPLE, [], "(root)", 0));
 }
 
 function syncTestParams() {
@@ -1243,6 +1661,7 @@ function openEndpointEditor(endpointId) {
   document.getElementById("test-raw-body").value = "";
   document.getElementById("apply-mapping-btn").disabled = true;
   HAS_RAW_SAMPLE = false;
+  refreshJsonTree();
 
   const form = document.getElementById("endpoint-form");
   form.id.value = endpoint?.id || "";
@@ -1279,10 +1698,15 @@ function openEndpointEditor(endpointId) {
   inputList.innerHTML = "";
   for (const p of endpoint?.input || []) inputList.appendChild(inputParamRow(p));
 
-  form.outputRoot.value = endpoint?.output?.root || "";
   const outputList = document.getElementById("output-fields-list");
   outputList.innerHTML = "";
   for (const f of endpoint?.output?.fields || []) outputList.appendChild(outputFieldRow(f));
+
+  const postProcessContainer = document.getElementById("output-postprocess-container");
+  postProcessContainer.innerHTML = "";
+  const postProcessPicker = buildFunctionPicker(endpoint?.output?.postProcess?.name || "");
+  postProcessContainer._picker = postProcessPicker;
+  postProcessContainer.appendChild(postProcessPicker.wrapper);
 
   switchEndpointTab("basic"); // always open on the same tab, regardless of what was showing last time
 
@@ -1322,14 +1746,15 @@ function openEndpointEditor(endpointId) {
 function readEndpointForm() {
   const form = document.getElementById("endpoint-form");
   const input = [...document.getElementById("input-params-list").children].map((r) => r._read()).filter((p) => p.name);
-  const fields = [...document.getElementById("output-fields-list").children].map((r) => r._read()).filter((f) => f.target && f.source);
+  const fields = [...document.getElementById("output-fields-list").children].map((r) => r._read()).filter(isValidOutputFieldRead);
 
   const backend = document.getElementById("backend-fields")._read();
   const gw = form.backendGateway.value;
   if (gw) backend.gateway = gw;
 
   const output = { fields };
-  if (form.outputRoot.value.trim()) output.root = form.outputRoot.value.trim();
+  const postProcessName = document.getElementById("output-postprocess-container")._picker?.getName();
+  if (postProcessName) output.postProcess = { name: postProcessName };
 
   return {
     id: form.id.value.trim(),
@@ -1401,6 +1826,7 @@ async function fetchSample() {
     HAS_RAW_SAMPLE = true;
     document.getElementById("test-raw-output").textContent = JSON.stringify(raw, null, 2);
     document.getElementById("apply-mapping-btn").disabled = false;
+    await refreshJsonTree();
     await applyMappingToSample();
   } catch (err) {
     document.getElementById("test-raw-output").textContent = "Error: " + err.message;
@@ -1411,10 +1837,10 @@ async function fetchSample() {
 async function applyMappingToSample() {
   if (!HAS_RAW_SAMPLE) return;
   try {
-    const form = document.getElementById("endpoint-form");
-    const fields = [...document.getElementById("output-fields-list").children].map((r) => r._read()).filter((f) => f.target && f.source);
+    const fields = [...document.getElementById("output-fields-list").children].map((r) => r._read()).filter(isValidOutputFieldRead);
     const output = { fields };
-    if (form.outputRoot.value.trim()) output.root = form.outputRoot.value.trim();
+    const postProcessName = document.getElementById("output-postprocess-container")._picker?.getName();
+    if (postProcessName) output.postProcess = { name: postProcessName };
     const { mapped } = await api("POST", "/console/api/test-mapping", { raw: LAST_RAW_SAMPLE, output });
     document.getElementById("test-mapped-output").textContent = JSON.stringify(mapped, null, 2);
   } catch (err) {
@@ -2009,8 +2435,19 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("reload-btn").addEventListener("click", async () => {
     try {
       const result = await api("POST", "/console/api/reload");
-      toast(`Reloaded — ${result.endpointCount} endpoint(s)${result.errors.length ? `, ${result.errors.length} error(s)` : ""}`, result.errors.length > 0);
+      const functionErrors = result.functionErrors || [];
+      const parts = [`${result.endpointCount} endpoint(s)`];
+      if (result.errors.length) parts.push(`${result.errors.length} endpoint error(s)`);
+      if (functionErrors.length) parts.push(`${functionErrors.length} function error(s)`);
+      toast(`Reloaded — ${parts.join(", ")}`, result.errors.length > 0 || functionErrors.length > 0);
       await loadAll();
+      // loadAll() only re-renders the sidebar lists -- an already-open
+      // endpoint editor's function picker(s) fetched their dropdown
+      // options once, when that editor/row was mounted, and won't see
+      // what Reload just (re)loaded on their own.
+      document.querySelectorAll(".function-picker").forEach((w) => {
+        if (typeof w._refresh === "function") w._refresh();
+      });
     } catch (err) {
       toast(err.message, true);
     }
@@ -2070,6 +2507,11 @@ document.addEventListener("DOMContentLoaded", () => {
   });
   document.getElementById("add-output-btn").addEventListener("click", () => {
     document.getElementById("output-fields-list").appendChild(outputFieldRow());
+    refreshSectionCounts();
+  });
+  document.getElementById("add-output-array-btn")?.addEventListener("click", () => {
+    document.getElementById("output-fields-list").appendChild(outputFieldRow({ kind: "array", target: "", root: "", fields: [] }));
+    refreshSectionCounts();
   });
   document.getElementById("add-common-param-btn").addEventListener("click", () => {
     document.getElementById("gateway-common-params-list")._addRow("", "");

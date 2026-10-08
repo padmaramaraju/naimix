@@ -7,6 +7,7 @@ import { requireConsoleAuth } from "./consoleAuth";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
+import type { FunctionRegistry } from "../transform/functionRegistry";
 import type { Logger } from "./logger";
 
 /**
@@ -28,6 +29,7 @@ export interface CreateAppOptions {
   endpointRegistry: EndpointRegistry;
   gatewaysRegistry: GatewaysRegistry;
   authProvidersRegistry: AuthProvidersRegistry;
+  functionRegistry: FunctionRegistry;
   logger: Logger;
   /** Directory containing the console UI's static files (index.html, etc). */
   consoleUiDir?: string;
@@ -49,6 +51,7 @@ export function createApp({
   endpointRegistry,
   gatewaysRegistry,
   authProvidersRegistry,
+  functionRegistry,
   logger,
   consoleUiDir,
   workspace,
@@ -74,6 +77,7 @@ export function createApp({
       endpointRegistry,
       gatewaysRegistry,
       authProvidersRegistry,
+      functionRegistry,
       authService,
       logger,
       workspace: workspace ?? {},
@@ -88,7 +92,7 @@ export function createApp({
   // own comment on why the order among these particular routes doesn't
   // actually matter: dispatch.ts's middleware calls next() for anything it
   // doesn't recognize as a configured endpoint path).
-  mountDataPlaneRoutes(app, { endpointRegistry, gatewaysRegistry, authService, logger });
+  mountDataPlaneRoutes(app, { endpointRegistry, gatewaysRegistry, functionRegistry, authService, logger });
   mountTerminalHandlers(app, logger);
 
   return app;

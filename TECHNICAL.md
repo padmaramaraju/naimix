@@ -192,9 +192,11 @@ For a live (non-console) request, e.g. `GET /api/json/customers/1`:
 5. **The connector** resolves `{paramName}` placeholders in its own config (URL, headers, SOAP args,
    XML body template — via `paramSubst.ts`), calls the real backend, and returns a plain JS
    value (object or array) — no endpoint-specific knowledge lives in the connector layer.
-6. **`transform/mapper.ts`**'s `mapResponse()` applies the endpoint's `output` config: if `output.root` is
-   set, it's a JSONPath selecting an array, and every field's JSONPath `source` is evaluated once per
-   item; otherwise the whole response is mapped once into a single object.
+6. **`transform/mapper.ts`**'s `mapResponse()` applies the endpoint's `output` config, mapping the
+   whole raw response into a single object via `output.fields`. A field that needs to be a JSON array
+   is an `OutputArrayFieldDef` (`kind: array`) like any other field -- its JSONPath `root` selects the
+   array (relative to the real response at the top level, or to its own parent item when nested), and
+   its own `fields` are evaluated once per matched item.
 7. **`dispatch.ts`** sends the mapped result as JSON. Any thrown error (`ValidationError`,
    `BackendError`, or an unexpected exception wrapped as a 502) is passed to `next(err)` and handled by
    `app.ts`'s centralized error handler, which logs it (`warn` for 4xx, `error` for 5xx) and responds
@@ -569,8 +571,8 @@ resolved directly against that string. The request is made with `responseType: "
 response body is parsed with `fast-xml-parser`'s `XMLParser` (configured with
 `ignoreAttributes: false`, `attributeNamePrefix: "@_"`, `trimValues: true`, `parseTagValue: false`,
 `parseAttributeValue: false`) into a plain JS object before being handed to the mapper. Repeated
-sibling XML tags become a JS array automatically (this is what `output.root` is for — see the
-`xml-customers-list` example endpoint). One caveat worth knowing: a single occurrence of a repeatable
+sibling XML tags become a JS array automatically (this is what a top-level `OutputArrayFieldDef` is
+for — see the `xml-customers-list` example endpoint). One caveat worth knowing: a single occurrence of a repeatable
 tag parses as a plain object, not a one-element array — a mapping that assumes an array for a
 collection endpoint should be tested against both a multi-item and a single-item response if that's a
 real possibility for that backend.
@@ -801,15 +803,15 @@ is unaffected by any of this, since its params flow through the ordinary declara
 ## Output mapping engine
 
 `src/transform/mapper.ts`. Takes an endpoint's `output` config and the raw value a connector returned, and
-produces the JSON the caller actually gets. Two modes:
+produces the JSON the caller actually gets. One mode, always: the whole raw response is passed to
+`mapItem()` once, producing a single JSON object. There's no separate top-level construct for "the
+response as a whole is an array" -- a field that needs to be a JSON array is an `OutputArrayFieldDef`
+(`kind: array`), the same mechanism used for a nested collection, just at the top level: its JSONPath
+`root` (via the `jsonpath-plus` package, `wrap: true`) selects an array of items from the raw response
+(or, nested, from its own parent item), and `mapItem()` runs independently for each item and the result
+is written at that field's own `target` name (e.g. `{ "items": [...] }`, never a bare `[...]`).
 
-- **`output.root` set** — a JSONPath expression (via the `jsonpath-plus` package, `wrap: true`)
-  selects an array of items from the raw response; `mapItem()` runs independently for each item, and
-  the endpoint returns a JSON array.
-- **`output.root` omitted** — the whole raw response is passed to `mapItem()` once, and the endpoint
-  returns a single JSON object.
-
-For each `field` in `output.fields`, in order: `extractSource()` evaluates `field.source` (a JSONPath
+For each plain `field` in `output.fields`, in order: `extractSource()` evaluates `field.source` (a JSONPath
 expression) against the item (or whole response); if there's no match, `field.default` is used
 instead; if a value was found either way, `field.transform` (`toString | toNumber | toBoolean | trim |
 upper | lower` — each a small, permissive coercion that falls back to the original value on failure
@@ -833,8 +835,8 @@ can lose or distort, worth knowing when a mapping doesn't behave as expected:
 - **Cardinality ambiguity** — a tag that occurs once parses as a plain object; the same tag occurring
   twice or more parses as an array. A `source`/`root` written and tested against a single-item sample
   can silently stop matching (or start matching differently) once a response happens to contain a
-  different number of items. `output.root` exists partly to make this explicit for collection
-  endpoints, but a nested repeatable element deeper in the tree has the same risk.
+  different number of items. A top-level `OutputArrayFieldDef` exists partly to make this explicit for
+  collection endpoints, but a nested repeatable element deeper in the tree has the same risk.
 - **Mixed content** (text interleaved with child elements) loses its exact position — `fast-xml-parser`
   puts element and text content into separate keys, so `<p>Hello <b>world</b>, bye</p>` produces
   `{b: "world", "#text": "Hello, bye"}`, not something that preserves "world" as being between "Hello"
@@ -1300,8 +1302,8 @@ fast with a clear error naming the missing variable (`envSubst.ts`).
     provider with neither bind mode (or both, ambiguously) fully configured, and a full ldap-provider
     create/update/delete round trip.
 - **`test/mapper.test.ts`** — unit tests for `mapResponse()`: single-object mapping, `default` on a
-  missing source, every `transform`, `output.root` array mapping, and indexing into a top-level array
-  with no `root`.
+  missing source, every `transform`, a top-level `OutputArrayFieldDef`'s array mapping, and indexing
+  into a top-level array response with a plain `source`.
 - **`test/paramExtractor.test.ts`** — unit tests for `extractParams()`: extraction+coercion across all
   locations, `default` application, and the `ValidationError` cases (missing required, uncoercible
   number).

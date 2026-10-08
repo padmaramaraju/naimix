@@ -1,12 +1,16 @@
+import path from "node:path";
 import express, { type Express, type Request, type Response, type NextFunction } from "express";
 import cors from "cors";
 import { createDynamicDispatcher } from "./dispatch";
 import { createAuthRouter } from "./authRoutes";
+import { requireOpsAuth } from "./opsAuth";
+import { createOpsApiRouter } from "./opsApi";
 import { AuthService } from "../auth/authService";
 import { InMemorySessionStore } from "../auth/sessionStore";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
+import type { FunctionRegistry } from "../transform/functionRegistry";
 import type { Logger } from "./logger";
 
 /**
@@ -20,6 +24,15 @@ import type { Logger } from "./logger";
  * expose the console API, rather than merely not calling it. See
  * "Installation: how development differs from QA/Production" in
  * DEPLOYMENT_ARCHITECTURE_NOTES.md.
+ *
+ * The Ops Console is a different matter, deliberately: createBaseApp()
+ * mounts it directly (see below), on purpose, in every target -- dev, QA,
+ * and Production alike. It's not the developer console under another
+ * name; see OPS_CONSOLE_DESIGN_NOTES.md for why it's a separate concept
+ * with its own token (OPS_TOKEN) and its own, much narrower, mostly
+ * read-only surface. scripts/checkDataPlaneBundle.js's own comment has
+ * the matching note for why its FORBIDDEN list doesn't -- and shouldn't --
+ * also cover Ops Console identifiers.
  *
  * app.ts (the full/development app) builds on top of createBaseApp() by
  * mounting the console UI/API in between mountDataPlaneRoutes() and
@@ -82,6 +95,13 @@ export function createBaseApp({ endpointRegistry, gatewaysRegistry, authProvider
     );
   });
 
+  // Ops Console -- present in every target (dev/QA/Production) on purpose,
+  // unlike the developer console. Its own static UI, its own token
+  // (OPS_TOKEN via requireOpsAuth), gated independently of everything
+  // above. See the module doc comment above and OPS_CONSOLE_DESIGN_NOTES.md.
+  app.use("/ops", express.static(path.resolve(process.cwd(), "public/ops")));
+  app.use("/ops/api", requireOpsAuth, createOpsApiRouter());
+
   return { app, authService };
 }
 
@@ -94,7 +114,19 @@ export function createBaseApp({ endpointRegistry, gatewaysRegistry, authProvider
  */
 export function mountDataPlaneRoutes(
   app: Express,
-  { endpointRegistry, gatewaysRegistry, authService, logger }: { endpointRegistry: EndpointRegistry; gatewaysRegistry: GatewaysRegistry; authService: AuthService; logger: Logger }
+  {
+    endpointRegistry,
+    gatewaysRegistry,
+    functionRegistry,
+    authService,
+    logger,
+  }: {
+    endpointRegistry: EndpointRegistry;
+    gatewaysRegistry: GatewaysRegistry;
+    functionRegistry: FunctionRegistry;
+    authService: AuthService;
+    logger: Logger;
+  }
 ): void {
   // Caller-facing login/logout -- a different audience from /console/api
   // (whoever configures this instance) and from the business endpoints
@@ -104,7 +136,7 @@ export function mountDataPlaneRoutes(
   // Every configured endpoint is served by one dynamic handler that reads the
   // registry fresh per request (see dispatch.ts) -- this is what lets
   // endpoints created/edited via the console API go live without a restart.
-  app.use(createDynamicDispatcher(endpointRegistry, gatewaysRegistry, authService, logger));
+  app.use(createDynamicDispatcher(endpointRegistry, gatewaysRegistry, functionRegistry, authService, logger));
 }
 
 /**

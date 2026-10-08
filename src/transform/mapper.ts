@@ -1,5 +1,20 @@
 import { JSONPath } from "jsonpath-plus";
-import type { FieldTransform, OutputConfig, OutputFieldDef } from "../types/config";
+import type { OutputConfig, OutputFieldDef, OutputTransform } from "../types/config";
+import type { FunctionRegistry } from "./functionRegistry";
+
+/** Threaded through mapItem()/mapResponse() to resolve a `kind: "function"`
+ * transform/postProcess reference (see OutputTransform/OutputConfig.postProcess
+ * in src/types/config.ts). Optional and defaults to nothing resolvable --
+ * every existing call site (auth providers' `claims` mapItem() calls,
+ * every pre-existing test) keeps working unchanged, since a config with no
+ * function references never looks at `functions` at all. `params` is the
+ * endpoint's resolved input params for this request, passed through to a
+ * custom function's `ctx` for the (quite real) case where a transform
+ * wants to know the caller's own input, not just the backend response. */
+export interface MapperOptions {
+  functions?: FunctionRegistry;
+  params?: Record<string, unknown>;
+}
 
 /** Splits "name.first" or "tags[0].label" into ["name","first"] / ["tags","0","label"] */
 function splitTargetPath(target: string): string[] {
@@ -23,8 +38,26 @@ function setDeep(obj: Record<string, unknown>, target: string, value: unknown): 
   cursor[segments[segments.length - 1]] = value;
 }
 
-function applyTransform(value: unknown, transform?: FieldTransform): unknown {
+function applyTransform(
+  value: unknown,
+  transform: OutputTransform | undefined,
+  ctx: { item: unknown; raw: unknown; params?: Record<string, unknown> },
+  functions?: FunctionRegistry
+): unknown {
   if (value === undefined || value === null || !transform) return value;
+
+  if (typeof transform === "object") {
+    // kind: "function" -- see FunctionTransformRef in src/types/config.ts.
+    const fn = functions?.get(transform.name);
+    if (!fn) {
+      throw new Error(
+        `Custom transform function "${transform.name}" is not available` +
+          (functions ? "" : " (no function registry was configured)")
+      );
+    }
+    return fn(value, ctx);
+  }
+
   switch (transform) {
     case "toString":
       return String(value);
@@ -60,15 +93,38 @@ export function extractJsonPath(json: unknown, source: string): unknown {
 /** Applies a list of OutputFieldDef extractions to a single JSON value,
  * producing one plain object. Exported for reuse by the auth providers'
  * `claims` extraction (see src/types/config.ts), which uses the identical
- * shape as an endpoint's output.fields. */
-export function mapItem(item: unknown, fields: OutputFieldDef[]): Record<string, unknown> {
+ * shape as an endpoint's output.fields.
+ *
+ * An OutputArrayFieldDef ("kind: array") field is handled by recursing:
+ * its `root` is evaluated against this same `item` (the same per-item
+ * context every sibling value field's `source` is evaluated against), and
+ * each match is itself mapped through the array field's own `fields` --
+ * which may contain further array fields, to any depth. This is what lets
+ * an endpoint's output hold more than one array, and arrays nested inside
+ * arrays (e.g. customers[].orders[]). */
+export function mapItem(
+  item: unknown,
+  fields: OutputFieldDef[],
+  opts: MapperOptions = {},
+  raw: unknown = item
+): Record<string, unknown> {
   const out: Record<string, unknown> = {};
+  const ctx = { item, raw, params: opts.params };
   for (const field of fields) {
+    if (field.kind === "array") {
+      const subItems = JSONPath({ path: field.root, json: item as object, wrap: true }) as unknown[];
+      setDeep(
+        out,
+        field.target,
+        subItems.map((subItem) => mapItem(subItem, field.fields, opts, raw))
+      );
+      continue;
+    }
     let value = extractJsonPath(item, field.source);
     if (value === undefined) {
       value = field.default;
     } else {
-      value = applyTransform(value, field.transform);
+      value = applyTransform(value, field.transform, ctx, opts.functions);
     }
     if (value !== undefined) {
       setDeep(out, field.target, value);
@@ -78,15 +134,30 @@ export function mapItem(item: unknown, fields: OutputFieldDef[]): Record<string,
 }
 
 /**
- * Applies a declarative output config to a raw backend response.
- * - If `output.root` is set, it's a JSONPath selecting an array of items;
- *   each item is mapped independently and the result is a JSON array.
- * - Otherwise the whole response is mapped once into a single JSON object.
+ * Applies a declarative output config to a raw backend response, mapping
+ * it once into a single JSON object via `output.fields` -- every
+ * `source`/nested-array `root` in those fields is evaluated relative to
+ * this same real, unscoped response (see OutputArrayFieldDef's doc
+ * comment in src/types/config.ts). A field that itself needs to produce
+ * a JSON array uses an OutputArrayFieldDef ("kind: array") like any other
+ * field, the same mechanism at any depth -- there's no separate top-level
+ * construct for "the response as a whole is an array": that field is just
+ * named like any other, e.g. `{ items: [...] }` rather than a bare `[...]`.
  */
-export function mapResponse(response: unknown, output: OutputConfig): unknown {
-  if (output.root) {
-    const items = JSONPath({ path: output.root, json: response as object, wrap: true }) as unknown[];
-    return items.map((item) => mapItem(item, output.fields));
+export function mapResponse(response: unknown, output: OutputConfig, opts: MapperOptions = {}): unknown {
+  let result: unknown = mapItem(response, output.fields, opts, response);
+
+  if (output.postProcess) {
+    const fn = opts.functions?.get(output.postProcess.name);
+    if (!fn) {
+      throw new Error(
+        `Custom post-process function "${output.postProcess.name}" is not available` +
+          (opts.functions ? "" : " (no function registry was configured)")
+      );
+    }
+    result = fn(result, { raw: response, params: opts.params });
   }
-  return mapItem(response, output.fields);
+
+  return result;
 }
+

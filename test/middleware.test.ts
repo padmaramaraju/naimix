@@ -8,6 +8,7 @@ import jwt from "jsonwebtoken";
 import { startMockBackend, type MockBackendHandle } from "../src/mock-backend";
 import { startFakeLdapServer, type FakeLdapServerHandle } from "../src/mock-backend/ldapServer";
 import { EndpointRegistry } from "../src/server/endpointRegistry";
+import { FunctionRegistry } from "../src/transform/functionRegistry";
 import { GatewaysRegistry } from "../src/server/gatewaysRegistry";
 import { AuthProvidersRegistry } from "../src/server/authProvidersRegistry";
 import { createApp } from "../src/server/app";
@@ -65,13 +66,14 @@ beforeAll(async () => {
   fs.cpSync(path.resolve(__dirname, "../config/gateways.yaml"), TMP_GATEWAYS_FILE);
   fs.cpSync(path.resolve(__dirname, "../config/authProviders.yaml"), TMP_AUTH_PROVIDERS_FILE);
 
-  endpointRegistry = new EndpointRegistry(TMP_ENDPOINTS_DIR);
+  const functionRegistry = new FunctionRegistry(path.join(TMP_DIR, "transforms"));
+  endpointRegistry = new EndpointRegistry(TMP_ENDPOINTS_DIR, functionRegistry);
   gatewaysRegistry = new GatewaysRegistry(TMP_GATEWAYS_FILE);
   authProvidersRegistry = new AuthProvidersRegistry(TMP_AUTH_PROVIDERS_FILE);
   const { errors } = endpointRegistry.reloadFromDisk();
   expect(errors, `endpoint config errors: ${JSON.stringify(errors)}`).toHaveLength(0);
 
-  app = createApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger });
+  app = createApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, functionRegistry, logger });
 });
 
 afterAll(async () => {
@@ -126,11 +128,11 @@ describe("JSON backend", () => {
     expect(res.status).toBe(404);
   });
 
-  it("maps a list response via output.root", async () => {
+  it("maps a list response via a top-level OutputArrayFieldDef", async () => {
     const res = await request(app).get("/api/json/customers");
     expect(res.status).toBe(200);
-    expect(res.body).toHaveLength(3);
-    expect(res.body[0]).toEqual({ id: "1", name: "Ada", city: "London" });
+    expect(res.body.customers).toHaveLength(3);
+    expect(res.body.customers[0]).toEqual({ id: "1", name: "Ada", city: "London" });
   });
 });
 
@@ -146,7 +148,7 @@ describe("XML backend", () => {
     });
   });
 
-  it("maps a collection response via output.root", async () => {
+  it("maps a collection response via a top-level OutputArrayFieldDef", async () => {
     const res = await request(app).get("/api/xml/customers");
     expect(res.status).toBe(200);
     // Text values come back exactly as written in the XML (parseTagValue:
@@ -155,11 +157,13 @@ describe("XML backend", () => {
     // mapping" section for why: fast-xml-parser's default guessing would
     // silently corrupt anything that merely looks numeric but isn't (e.g.
     // a zero-padded id like "007").
-    expect(res.body).toEqual([
-      { id: "1", name: "Ada", status: "ACTIVE" },
-      { id: "2", name: "Grace", status: "ACTIVE" },
-      { id: "3", name: "Alan", status: "INACTIVE" },
-    ]);
+    expect(res.body).toEqual({
+      customers: [
+        { id: "1", name: "Ada", status: "ACTIVE" },
+        { id: "2", name: "Grace", status: "ACTIVE" },
+        { id: "3", name: "Alan", status: "INACTIVE" },
+      ],
+    });
   });
 });
 
@@ -187,14 +191,16 @@ describe("SQL backend", () => {
     });
   });
 
-  it("maps every row via output.root for a list endpoint", async () => {
+  it("maps every row via a top-level OutputArrayFieldDef for a list endpoint", async () => {
     const res = await request(app).get("/api/sql/customers");
     expect(res.status).toBe(200);
-    expect(res.body).toEqual([
-      { id: "1", name: "Ada", status: "ACTIVE" },
-      { id: "2", name: "Grace", status: "ACTIVE" },
-      { id: "3", name: "Alan", status: "INACTIVE" },
-    ]);
+    expect(res.body).toEqual({
+      customers: [
+        { id: "1", name: "Ada", status: "ACTIVE" },
+        { id: "2", name: "Grace", status: "ACTIVE" },
+        { id: "3", name: "Alan", status: "INACTIVE" },
+      ],
+    });
   });
 });
 
@@ -1509,7 +1515,8 @@ describe("console API: workspace switching", () => {
     fs.cpSync(path.resolve(__dirname, "../config/authProviders.yaml"), path.join(FOLDER_A, "authProviders.yaml"));
     fs.mkdirSync(FOLDER_B, { recursive: true }); // no endpoints/ or gateways.yaml inside yet, on purpose
 
-    wsEndpointRegistry = new EndpointRegistry(path.join(FOLDER_A, "endpoints"));
+    const wsFunctionRegistry = new FunctionRegistry(path.join(FOLDER_A, "transforms"));
+    wsEndpointRegistry = new EndpointRegistry(path.join(FOLDER_A, "endpoints"), wsFunctionRegistry);
     wsGatewaysRegistry = new GatewaysRegistry(path.join(FOLDER_A, "gateways.yaml"));
     wsAuthProvidersRegistry = new AuthProvidersRegistry(path.join(FOLDER_A, "authProviders.yaml"));
     wsEndpointRegistry.reloadFromDisk();
@@ -1518,6 +1525,7 @@ describe("console API: workspace switching", () => {
       endpointRegistry: wsEndpointRegistry,
       gatewaysRegistry: wsGatewaysRegistry,
       authProvidersRegistry: wsAuthProvidersRegistry,
+      functionRegistry: wsFunctionRegistry,
       logger,
       workspace: wsWorkspace,
       settingsFile: WS_SETTINGS_FILE,

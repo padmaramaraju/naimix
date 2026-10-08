@@ -91,25 +91,79 @@ export type FieldTransform =
   | "upper"
   | "lower";
 
-export interface OutputFieldDef {
+/** References a named custom transform function instead of one of the
+ * built-in FieldTransform enum values -- see TRANSFORM_FUNCTIONS_DESIGN_NOTES.md
+ * for the full design. `name` must match a function the FunctionRegistry
+ * has loaded (compiled from <configDir>/transforms/<name>.js); a name with
+ * no matching function fails config validation (see
+ * src/transform/functionRefs.ts + endpointRegistry.ts), the same "a bad
+ * reference is a load error, not a silent no-op" convention a bad gateway
+ * name already gets.
+ *
+ * The same function may be referenced from a field's `transform` AND from
+ * an endpoint's top-level `postProcess` -- both call it with the identical
+ * `(data, ctx) => data` shape (see mapper.ts's applyTransform()/
+ * mapResponse()), just with different `data`/`ctx.item` depending on which
+ * one invoked it. There is nothing in storage that pins a function to
+ * "field-only" or "endpoint-only". */
+export interface FunctionTransformRef {
+  kind: "function";
+  name: string;
+}
+
+export type OutputTransform = FieldTransform | FunctionTransformRef;
+
+/** Extracts one scalar value out of the backend response via JSONPath and
+ * places it at `target` in the output -- the original (and still default)
+ * field shape. `kind` is omittable and absent on every endpoint config
+ * written before OutputArrayFieldDef existed; src/config/schema.ts treats
+ * a missing `kind` as "value" so every pre-existing config keeps parsing
+ * unchanged. */
+export interface OutputValueFieldDef {
+  kind?: "value";
   /** Dot-path in the output JSON, e.g. "name.first" or "tags[0]" */
   target: string;
   /** JSONPath into the (per-item) backend response, e.g. "$.firstName" */
   source: string;
   default?: unknown;
-  transform?: FieldTransform;
+  transform?: OutputTransform;
 }
 
-export interface OutputConfig {
-  /**
-   * Optional JSONPath selecting an array of items in the backend response.
-   * When set, the endpoint returns a JSON array and each `fields[].source`
-   * is evaluated relative to each item. When omitted, the endpoint returns
-   * a single JSON object and sources are evaluated against the whole
-   * response.
-   */
-  root?: string;
+/** A nested collection inside the output: `root` is a JSONPath selecting an
+ * array of items, evaluated relative to the same (per-item) context this
+ * field itself is being read from. At the top level that context is
+ * always the full, unscoped raw backend response -- there is no separate
+ * top-level root to pre-scope it, so a top-level array field's `root` is
+ * relative to the real response, and a nested array field's `root` is
+ * relative to its own parent item, one level deeper each time. Each
+ * selected item is mapped through this field's own `fields`, which may
+ * themselves contain more OutputArrayFieldDef entries to any depth --
+ * this is what lets one endpoint's output hold more than one array, and
+ * arrays nested inside arrays (e.g. customers[].orders[]), which a single
+ * flat `fields` list on its own can't express. See mapper.ts's mapItem(),
+ * which recurses into these the same way it maps a value field. */
+export interface OutputArrayFieldDef {
+  kind: "array";
+  target: string;
+  root: string;
   fields: OutputFieldDef[];
+}
+
+export type OutputFieldDef = OutputValueFieldDef | OutputArrayFieldDef;
+
+export interface OutputConfig {
+  fields: OutputFieldDef[];
+  /** Optional named custom function run once on the ENTIRE mapped output
+   * (the whole object, or the whole array when `root` is set -- see
+   * mapper.ts's mapResponse()), after every field has already been
+   * extracted/transformed. This is the hook for adding/removing top-level
+   * fields or walking/rewriting an array that a single field-level
+   * `transform` function can't do, since a field-level function only ever
+   * sees and returns one field's own value. See FunctionTransformRef's doc
+   * comment above -- the referenced function is the same kind of function
+   * either way, just called with the whole mapped result instead of one
+   * field's value. */
+  postProcess?: { name: string };
 }
 
 export interface EndpointConfig {

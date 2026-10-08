@@ -6,6 +6,8 @@ import { endpointConfigSchema, type EndpointConfigParsed } from "../config/schem
 import { loadEndpointConfigs } from "../config/loader";
 import { ValidationError } from "./errors";
 import { computeEndpointFile } from "./endpointFileLayout";
+import { missingFunctionNames } from "../transform/functionRefs";
+import type { FunctionRegistry } from "../transform/functionRegistry";
 
 interface Entry {
   config: EndpointConfigParsed;
@@ -28,7 +30,13 @@ export interface EndpointMatch {
 export class EndpointRegistry {
   private byId = new Map<string, Entry>();
 
-  constructor(private endpointsDir: string) {}
+  /** Optional -- when omitted, a config referencing a custom transform
+   * function always fails validation (missingFunctionNames() treats "no
+   * registry" the same as "name not found"), since there's nothing to
+   * resolve it against. Every real server boot (dev, QA, Production)
+   * always provides one; it's only omitted by older tests that predate
+   * this feature and never reference a function by name anyway. */
+  constructor(private endpointsDir: string, private functionRegistry?: FunctionRegistry) {}
 
   /** The directory this registry is currently reading from/writing to. */
   getDir(): string {
@@ -56,6 +64,20 @@ export class EndpointRegistry {
     for (const { config, file } of entries) {
       if (next.has(config.id)) {
         allErrors.push({ file, error: `Duplicate endpoint id "${config.id}"` });
+        continue;
+      }
+      // A config's `transform`/`postProcess` can reference a custom
+      // function by name (see src/types/config.ts) -- validated here, the
+      // same place/moment a duplicate id is caught, so one endpoint
+      // referencing an unknown function is a load error for that one
+      // file (logged, skipped) rather than a silent no-op or a crash the
+      // first time a real request hits it. See functionRefs.ts.
+      const missing = missingFunctionNames(config.output, this.functionRegistry);
+      if (missing.length > 0) {
+        allErrors.push({
+          file,
+          error: `References unknown transform function(s): ${missing.join(", ")}`,
+        });
         continue;
       }
       next.set(config.id, { config, file, matcher: match(config.path) });
@@ -88,6 +110,11 @@ export class EndpointRegistry {
    */
   upsert(input: unknown, opts: { excludeId?: string } = {}): { config: EndpointConfigParsed; file: string } {
     const config = endpointConfigSchema.parse(input);
+
+    const missing = missingFunctionNames(config.output, this.functionRegistry);
+    if (missing.length > 0) {
+      throw new ValidationError(`References unknown transform function(s): ${missing.join(", ")}`);
+    }
 
     for (const [id, entry] of this.byId) {
       if (id === opts.excludeId) continue;

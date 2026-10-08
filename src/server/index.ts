@@ -3,6 +3,7 @@ import path from "node:path";
 import { EndpointRegistry } from "./endpointRegistry";
 import { GatewaysRegistry } from "./gatewaysRegistry";
 import { AuthProvidersRegistry } from "./authProvidersRegistry";
+import { FunctionRegistry } from "../transform/functionRegistry";
 import { closeAllSqlConnections } from "../connectors";
 import { createApp } from "./app";
 import { logger } from "./logger";
@@ -38,6 +39,7 @@ function resolveStartupPaths(): {
   endpointsDir: string;
   gatewaysFile: string;
   authProvidersFile: string;
+  transformsDir: string;
   configDir?: string;
 } {
   const persisted = loadWorkspaceSettings(SETTINGS_FILE);
@@ -53,14 +55,27 @@ function resolveStartupPaths(): {
     endpointsDir: path.resolve(process.cwd(), process.env.ENDPOINTS_DIR ?? "config/endpoints"),
     gatewaysFile: path.resolve(process.cwd(), process.env.GATEWAYS_FILE ?? "config/gateways.yaml"),
     authProvidersFile: path.resolve(process.cwd(), process.env.AUTH_PROVIDERS_FILE ?? "config/authProviders.yaml"),
+    transformsDir: path.resolve(process.cwd(), process.env.TRANSFORMS_DIR ?? "config/transforms"),
   };
 }
 
 function main() {
-  const { endpointsDir, gatewaysFile, authProvidersFile, configDir } = resolveStartupPaths();
+  const { endpointsDir, gatewaysFile, authProvidersFile, transformsDir, configDir } = resolveStartupPaths();
   const workspace: { configDir?: string } = { configDir };
 
-  const endpointRegistry = new EndpointRegistry(endpointsDir);
+  // Loaded before the endpoint registry so a config's `transform`/
+  // `postProcess` function-name references can be validated against it
+  // (see endpointRegistry.ts). Unlike QA/Production, the Developer Console
+  // also calls functionRegistry.reloadOne() later, after saving an edited
+  // function (see consoleApi.ts) -- this initial load is just the normal
+  // "read what's on disk at boot" step every other registry does too.
+  const functionRegistry = new FunctionRegistry(transformsDir);
+  const { errors: functionErrors } = functionRegistry.loadFromDisk();
+  for (const e of functionErrors) {
+    logger.error(`Failed to load transform function ${e.file}: ${e.error}`);
+  }
+
+  const endpointRegistry = new EndpointRegistry(endpointsDir, functionRegistry);
   const gatewaysRegistry = new GatewaysRegistry(gatewaysFile);
   const authProvidersRegistry = new AuthProvidersRegistry(authProvidersFile);
 
@@ -76,6 +91,7 @@ function main() {
     endpointRegistry,
     gatewaysRegistry,
     authProvidersRegistry,
+    functionRegistry,
     logger,
     consoleUiDir: CONSOLE_UI_DIR,
     workspace,

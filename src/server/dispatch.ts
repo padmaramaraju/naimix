@@ -6,6 +6,7 @@ import { AuthError, BackendError } from "./errors";
 import type { AuthService } from "../auth/authService";
 import type { EndpointRegistry } from "./endpointRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
+import type { FunctionRegistry } from "../transform/functionRegistry";
 import type { Logger } from "./logger";
 
 function bearerToken(req: Request): string | undefined {
@@ -25,6 +26,7 @@ function bearerToken(req: Request): string | undefined {
 export function createDynamicDispatcher(
   endpointRegistry: EndpointRegistry,
   gatewaysRegistry: GatewaysRegistry,
+  functionRegistry: FunctionRegistry,
   authService: AuthService,
   logger: Logger
 ) {
@@ -71,7 +73,7 @@ export function createDynamicDispatcher(
         rawBody: req.body,
       });
 
-      const output = mapResponse(backendResult, endpoint.output);
+      const output = mapResponse(backendResult, endpoint.output, { functions: functionRegistry, params });
       res.json(output);
     } catch (err) {
       next(wrapError(err));

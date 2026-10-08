@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
 import { EndpointRegistry } from "../src/server/endpointRegistry";
+import { FunctionRegistry } from "../src/transform/functionRegistry";
 import { GatewaysRegistry } from "../src/server/gatewaysRegistry";
 import { AuthProvidersRegistry } from "../src/server/authProvidersRegistry";
 import { createDataPlaneApp } from "../src/server/dataPlaneApp";
@@ -34,12 +35,13 @@ let app: Express;
 beforeAll(() => {
   // Every one of these tolerates a missing file/directory, loading as
   // empty -- see workspaceSettings.ts's resolveConfigDir() doc comment.
-  const endpointRegistry = new EndpointRegistry(path.join(TMP_DIR, "endpoints"));
+  const functionRegistry = new FunctionRegistry(path.join(TMP_DIR, "transforms"));
+  const endpointRegistry = new EndpointRegistry(path.join(TMP_DIR, "endpoints"), functionRegistry);
   const gatewaysRegistry = new GatewaysRegistry(path.join(TMP_DIR, "gateways.yaml"));
   const authProvidersRegistry = new AuthProvidersRegistry(path.join(TMP_DIR, "authProviders.yaml"));
   endpointRegistry.reloadFromDisk();
 
-  app = createDataPlaneApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger });
+  app = createDataPlaneApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, functionRegistry, logger });
 });
 
 afterAll(() => {

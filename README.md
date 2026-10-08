@@ -175,12 +175,27 @@ output:
 
 ### Single object vs. array responses
 
-- Omit `output.root` to return a single JSON object: each `source` is a
-  JSONPath evaluated against the whole backend response (use `$[0].field`
-  if the backend itself returns a top-level array, as SQL connectors do).
-- Set `output.root` to a JSONPath selecting an array (e.g. `$.items[*]` or
-  `$[*]`) to return a JSON array: each matched item is mapped independently
-  using the same `fields`.
+Every endpoint's output is one JSON object, built from `output.fields` evaluated
+against the whole, unscoped backend response (use `$[0].field` if the backend
+itself returns a top-level array, as SQL connectors do). There's no separate
+top-level "root" to pre-scope that -- a field that needs to be a JSON array
+is an `OutputArrayFieldDef` (`kind: array`) like any other field, just named
+like one:
+
+```yaml
+output:
+  fields:
+    - kind: array
+      target: items          # response becomes { "items": [...] }
+      root: $.items[*]       # JSONPath selecting an array, relative to the
+                              # real backend response
+      fields:
+        - target: id
+          source: $.id
+```
+
+A nested array field's own `root` works exactly the same way, just relative
+to its own parent item one level deeper, to any depth.
 
 ### Backend types
 
@@ -212,8 +227,8 @@ The parsed object mirrors the XML tag nesting, rooted at the outermost tag --
 `<customer><id>2</id></customer>` becomes `{ customer: { id: "2" } }`, so a
 `source` for it starts `$.customer...`. Attributes get an `@_` prefix (e.g.
 `$.customer['@_id']`), and repeated sibling tags (e.g. multiple `<item>`s
-under `<items>`) become a JS array automatically -- map those with
-`output.root` exactly like a JSON or SQL collection (see
+under `<items>`) become a JS array automatically -- map those with a
+top-level `OutputArrayFieldDef` exactly like a JSON or SQL collection (see
 `config/endpoints/xml-customers-list.yaml`). One caveat: `fast-xml-parser` only
 produces an array when a tag repeats 2+ times in a given response, so if your
 real backend can return exactly one item for a collection endpoint, make sure

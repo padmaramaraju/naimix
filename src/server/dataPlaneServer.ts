@@ -3,6 +3,7 @@ import path from "node:path";
 import { EndpointRegistry } from "./endpointRegistry";
 import { GatewaysRegistry } from "./gatewaysRegistry";
 import { AuthProvidersRegistry } from "./authProvidersRegistry";
+import { FunctionRegistry } from "../transform/functionRegistry";
 import { closeAllSqlConnections } from "../connectors";
 import { createDataPlaneApp } from "./dataPlaneApp";
 import { logger } from "./logger";
@@ -45,7 +46,13 @@ export type DataPlaneEnvironment = "qa" | "prod";
 
 const PORT = Number(process.env.PORT ?? 4000);
 
-function resolveStartupPaths(): { endpointsDir: string; gatewaysFile: string; authProvidersFile: string; configDir?: string } {
+function resolveStartupPaths(): {
+  endpointsDir: string;
+  gatewaysFile: string;
+  authProvidersFile: string;
+  transformsDir: string;
+  configDir?: string;
+} {
   if (process.env.CONFIG_DIR) {
     const configDir = path.resolve(process.cwd(), process.env.CONFIG_DIR);
     return { ...resolveConfigDir(configDir), configDir };
@@ -54,14 +61,26 @@ function resolveStartupPaths(): { endpointsDir: string; gatewaysFile: string; au
     endpointsDir: path.resolve(process.cwd(), process.env.ENDPOINTS_DIR ?? "config/endpoints"),
     gatewaysFile: path.resolve(process.cwd(), process.env.GATEWAYS_FILE ?? "config/gateways.yaml"),
     authProvidersFile: path.resolve(process.cwd(), process.env.AUTH_PROVIDERS_FILE ?? "config/authProviders.yaml"),
+    transformsDir: path.resolve(process.cwd(), process.env.TRANSFORMS_DIR ?? "config/transforms"),
   };
 }
 
 export function startDataPlaneServer(environment: DataPlaneEnvironment): void {
   const label = environment === "prod" ? "Production" : "QA";
-  const { endpointsDir, gatewaysFile, authProvidersFile, configDir } = resolveStartupPaths();
+  const { endpointsDir, gatewaysFile, authProvidersFile, transformsDir, configDir } = resolveStartupPaths();
 
-  const endpointRegistry = new EndpointRegistry(endpointsDir);
+  // Loaded BEFORE the endpoint registry, and only ever loaded once here --
+  // see FunctionRegistry's own doc comment for why QA/Production never
+  // call reloadOne()/remove() at all. A config referencing a custom
+  // transform function needs this registry already populated to validate
+  // against (see endpointRegistry.ts's reloadFromDisk()).
+  const functionRegistry = new FunctionRegistry(transformsDir);
+  const { errors: functionErrors } = functionRegistry.loadFromDisk();
+  for (const e of functionErrors) {
+    logger.error(`Failed to load transform function ${e.file}: ${e.error}`);
+  }
+
+  const endpointRegistry = new EndpointRegistry(endpointsDir, functionRegistry);
   const gatewaysRegistry = new GatewaysRegistry(gatewaysFile);
   const authProvidersRegistry = new AuthProvidersRegistry(authProvidersFile);
 
@@ -73,7 +92,7 @@ export function startDataPlaneServer(environment: DataPlaneEnvironment): void {
     logger.warn("No valid endpoint configs were loaded. The server will start with no endpoints.");
   }
 
-  const app = createDataPlaneApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger });
+  const app = createDataPlaneApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, functionRegistry, logger });
 
   const server = app.listen(PORT, () => {
     logger.info(`Naimix (${label} data-plane) listening on http://localhost:${PORT}`);

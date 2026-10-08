@@ -226,8 +226,8 @@ thin wrapper, and is worth a second look if a future goal is trimming dependenci
 separate native SQL driver packages), actively maintained, and fast enough that XML parsing has never
 shown up as a bottleneck anywhere in this project. Its behavior of turning repeated sibling tags into a
 JS array automatically (documented in `TECHNICAL.md`'s XML connector section, along with the
-single-item-vs-array caveat that behavior implies) is exactly the shape the output mapper's
-`output.root` JSONPath selection is built to consume.
+single-item-vs-array caveat that behavior implies) is exactly the shape a top-level `OutputArrayFieldDef`'s
+JSONPath `root` selection is built to consume.
 
 `xml2js` is the older, more traditional choice and still very widely used, but is meaningfully slower
 and has a more callback-oriented (though promise-wrapped) API than `fast-xml-parser`'s direct
@@ -277,7 +277,7 @@ editing capability wouldn't have been used anyway.
 function.
 
 The entire output-mapping engine (`transform/mapper.ts`) is built on JSONPath expressions for both
-`output.root` (selecting a collection) and each field's `source` — this is genuinely the right tool for
+an array field's `root` (selecting a collection) and each field's `source` — this is genuinely the right tool for
 that job, since JSONPath's `$.a.b[*].c`-style syntax is exactly what an endpoint author needs to describe
 "pull this value out of an arbitrarily-shaped backend response," and it's a syntax most developers
 integrating with REST/XML APIs already have some familiarity with. `jsonpath-plus` specifically (over

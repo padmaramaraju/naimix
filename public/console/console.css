@@ -331,6 +331,20 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
 .repeatable-row .checkbox-field { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 6px; padding-top: 18px; }
 .repeatable-row .remove-btn { flex: 0 0 auto; margin-top: 18px; }
 
+/* Custom-function picker (Transform select's "Custom function..." option,
+   and the Output tab's standalone Post-process section) -- see
+   buildFunctionPicker() in console.js. */
+.function-picker { flex: 1 0 100%; margin-top: 4px; }
+.function-picker-row { display: flex; gap: 8px; align-items: center; }
+.function-picker-row select { flex: 1; min-width: 0; }
+.function-editor-panel {
+  margin-top: 8px; padding: 10px; border: 1px solid var(--border); border-radius: 6px;
+  background: var(--surface); display: flex; flex-direction: column; gap: 8px;
+}
+.function-editor-panel label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.function-editor-panel textarea { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+.function-editor-actions { display: flex; gap: 8px; }
+
 /* Show/hide toggle anchored to the right edge of its own field, inside
    the input's visual bounds -- the common password-reveal placement,
    instead of a separate control living beside the field. */
@@ -435,3 +449,48 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
   .test-results { grid-template-columns: 1fr; }
   .drawer-panel { width: 100vw; }
 }
+
+/* ---------------------------------------------------------------------
+ * Output-mapping JSON-path picker (Test tab sample tree).
+ * See console.js's "Test tab sample-response picker" section.
+ * ------------------------------------------------------------------- */
+.json-tree {
+  background: var(--code-bg); border: 1px solid var(--border); border-radius: 6px;
+  padding: 6px 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px;
+  max-height: 320px; overflow: auto;
+}
+.json-tree-matchnote { margin: 0 0 6px; font-size: 11px; }
+.json-tree-node { margin-left: 14px; }
+.json-tree-node > summary { cursor: pointer; list-style: none; }
+.json-tree-node > summary::-webkit-details-marker { display: none; }
+.json-tree-node > summary::before { content: "▸"; display: inline-block; width: 12px; color: var(--muted); }
+.json-tree-node[open] > summary::before { content: "▾"; }
+.json-tree-children { margin-left: 2px; }
+.json-tree-row {
+  display: flex; align-items: center; gap: 6px; padding: 2px 4px; border-radius: 4px;
+}
+.json-tree-row:hover { background: var(--surface-raised); }
+.json-tree-row:hover .json-tree-add-btn { visibility: visible; }
+.json-tree-key { color: var(--muted); }
+.json-tree-value { color: var(--text); word-break: break-word; }
+.json-tree-summary { color: var(--muted); font-style: italic; }
+.json-tree-add-btn {
+  visibility: hidden; margin-left: auto; flex: 0 0 auto;
+  width: 18px; height: 18px; line-height: 16px; padding: 0; text-align: center;
+  border: 1px solid var(--border-strong); border-radius: 4px; background: var(--surface);
+  color: var(--primary); cursor: pointer; font-size: 13px;
+}
+.json-tree-add-btn:hover { background: var(--primary-tint); }
+
+.raw-text-details { margin-top: 8px; }
+.raw-text-details > summary { cursor: pointer; font-size: 12px; color: var(--muted); }
+.raw-text-details .code-block { margin-top: 6px; }
+
+.array-field-row { flex-direction: column; align-items: stretch; }
+.array-field-header { display: flex; gap: 8px; align-items: flex-end; flex-wrap: wrap; }
+.array-field-header > label { flex: 1; min-width: 160px; }
+.array-field-header-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.nested-fields-list {
+  margin: 8px 0 8px 18px; padding-left: 10px; border-left: 2px solid var(--border);
+}
+.array-field-footer { display: flex; gap: 8px; margin-left: 18px; }

@@ -158,7 +158,8 @@ function customerToXml(c: (typeof customers)[number]): string {
 
 // A collection response: repeated <customer> siblings under one <customers>
 // wrapper -- fast-xml-parser turns repeated sibling tags into an array, which
-// is exactly what output.root is for (see config/endpoints/xml-customers-list.yaml).
+// is exactly what a top-level array output.field's `root` is for (see
+// config/endpoints/xml-customers-list.yaml).
 function customersToXml(list: typeof customers): string {
   const items = list
     .map(

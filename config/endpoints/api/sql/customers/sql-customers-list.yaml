@@ -8,11 +8,14 @@ backend:
   gateway: demoDb
   query: SELECT id, first_name, last_name, status FROM customers ORDER BY id
 output:
-  root: $[*]
   fields:
-    - target: id
-      source: $.id
-    - target: name
-      source: $.first_name
-    - target: status
-      source: $.status
+    - kind: array
+      target: customers
+      root: $[*]
+      fields:
+        - target: id
+          source: $.id
+        - target: name
+          source: $.first_name
+        - target: status
+          source: $.status

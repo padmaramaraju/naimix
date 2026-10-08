@@ -1,0 +1,166 @@
+/* ------------------------------------------------------------------
+ * Theme tokens, deliberately duplicated from public/console/console.css
+ * rather than linked to it: the Ops Console must work standalone in
+ * QA/Production, where /console is never mounted at all (see
+ * coreApp.ts/dataPlaneApp.ts) -- a relative stylesheet reference across
+ * directories would 404 there even though the files happen to exist on
+ * disk. Keep these two token blocks in sync by hand if the palette
+ * changes; see console.css's own copy for the canonical values.
+ * ------------------------------------------------------------------ */
+:root {
+  --bg: #f6f7f9;
+  --surface: #ffffff;
+  --border: #dfe3e9;
+  --border-strong: #c7cdd6;
+  --text: #1a1d23;
+  --muted: #6b7280;
+  --primary: #2f5fdb;
+  --primary-hover: #2549ab;
+  --primary-tint: #eaf0ff;
+  --danger: #c8342c;
+  --danger-bg: #fdeceb;
+  --code-bg: #f0f2f6;
+  --shadow: 0 8px 24px rgba(20, 24, 32, 0.10);
+  --radius: 10px;
+  --radius-sm: 7px;
+  --btn-secondary-bg: #e3e7ee;
+  --btn-secondary-border: #b7bfcc;
+  --btn-secondary-hover-bg: #d5dae2;
+  --btn-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161a;
+    --surface: #1c1f26;
+    --border: #2c313b;
+    --border-strong: #3a404d;
+    --text: #e7e9ee;
+    --muted: #9aa1ac;
+    --primary: #729bff;
+    --primary-hover: #8fb0ff;
+    --primary-tint: #202a42;
+    --danger: #ff6b64;
+    --danger-bg: #3a2020;
+    --code-bg: #12141a;
+    --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+    --btn-secondary-bg: #323844;
+    --btn-secondary-border: #4d5566;
+    --btn-secondary-hover-bg: #3e4552;
+    --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --bg: #14161a;
+  --surface: #1c1f26;
+  --border: #2c313b;
+  --border-strong: #3a404d;
+  --text: #e7e9ee;
+  --muted: #9aa1ac;
+  --primary: #729bff;
+  --primary-hover: #8fb0ff;
+  --primary-tint: #202a42;
+  --danger: #ff6b64;
+  --danger-bg: #3a2020;
+  --code-bg: #12141a;
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  --btn-secondary-bg: #323844;
+  --btn-secondary-border: #4d5566;
+  --btn-secondary-hover-bg: #3e4552;
+  --btn-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  color-scheme: dark;
+}
+
+[hidden] { display: none !important; }
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+}
+h1, h2 { margin: 0 0 8px; font-weight: 600; }
+.muted { color: var(--muted); }
+code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.9em; }
+.error-text { color: var(--danger); font-size: 13px; margin: 0; }
+
+/* Login -- structurally identical to the Developer Console's own */
+.login-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; }
+.login-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 32px; width: 320px; display: flex; flex-direction: column; gap: 12px;
+  box-shadow: var(--shadow);
+}
+.login-card input { padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); }
+
+/* App shell */
+.app { min-height: 100vh; display: flex; flex-direction: column; }
+.topbar {
+  display: flex; align-items: center; gap: 16px; padding: 12px 20px; flex: 0 0 auto;
+  background: var(--surface); border-bottom: 1px solid var(--border);
+}
+.brand { font-weight: 600; flex: 1; }
+.topbar-actions { display: flex; align-items: center; gap: 10px; }
+.instance-id { font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+
+.content { flex: 1 1 auto; padding: 24px; display: flex; flex-direction: column; gap: 24px; max-width: 980px; width: 100%; margin: 0 auto; }
+.panel { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+.panel-header { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.panel-header h2 { font-size: 16px; }
+.panel-subhead { font-size: 12px; }
+.panel-header-actions { display: flex; align-items: center; gap: 8px; }
+
+/* System panel: a responsive grid of small stat tiles */
+.stat-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 12px; }
+.stat-tile { background: var(--code-bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 12px 14px; }
+.stat-tile-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin-bottom: 4px; }
+.stat-tile-value { font-size: 20px; font-weight: 600; }
+.stat-tile-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* Env panel */
+.env-filter { padding: 6px 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; width: 220px; }
+.env-note { margin: -6px 0 12px; font-size: 12px; }
+.env-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.env-table th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); padding: 6px 8px; border-bottom: 1px solid var(--border); }
+.env-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.env-table td:first-child { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; white-space: nowrap; }
+.env-table td:last-child { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; }
+.env-table tr:last-child td { border-bottom: none; }
+
+/* Buttons -- same shapes as the Developer Console's own */
+button { font-family: inherit; cursor: pointer; }
+.btn-primary, .btn-secondary {
+  padding: 8px 14px; border-radius: var(--radius-sm); border: 1px solid transparent; font-size: 13px; font-weight: 600;
+  box-shadow: var(--btn-shadow);
+  transition: background-color 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.btn-primary { background: var(--primary); color: white; }
+.btn-primary:hover { background: var(--primary-hover); }
+.btn-secondary { background: var(--btn-secondary-bg); border-color: var(--btn-secondary-border); color: var(--text); }
+.btn-secondary:hover { background: var(--btn-secondary-hover-bg); }
+.btn-sm { padding: 4px 10px; font-size: 12px; }
+button:disabled { opacity: 0.5; cursor: not-allowed; box-shadow: none; }
+
+.icon-btn-lg {
+  position: relative; width: 44px; height: 32px; border-radius: 999px;
+  border: 1px solid var(--border-strong); background: var(--code-bg);
+  display: flex; align-items: center; justify-content: center; padding: 0;
+  flex-shrink: 0;
+}
+.icon-btn-lg:hover { border-color: var(--primary); }
+.icon-btn-lg .theme-icon { font-size: 15px; line-height: 1; transition: opacity 0.15s ease, transform 0.15s ease; }
+.icon-btn-lg .theme-icon-moon { position: absolute; opacity: 0; transform: scale(0.6); }
+#theme-toggle-btn[data-effective="dark"] .theme-icon-sun { opacity: 0; transform: scale(0.6); }
+#theme-toggle-btn[data-effective="dark"] .theme-icon-moon { position: static; opacity: 1; transform: scale(1); }
+
+.toast {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: var(--text); color: var(--bg); padding: 10px 18px; border-radius: 6px; font-size: 13px; z-index: 100;
+  box-shadow: var(--shadow);
+}
+.toast.toast-error { background: var(--danger); color: white; }

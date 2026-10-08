@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Naimix — Ops</title>
+<link rel="stylesheet" href="ops.css" />
+</head>
+<body>
+  <div id="login-screen" class="login-screen">
+    <form id="login-form" class="login-card">
+      <h1>Naimix</h1>
+      <p class="muted">Enter the ops token to view this instance's system stats and environment.</p>
+      <input id="login-token" type="password" placeholder="Ops token" autocomplete="off" required />
+      <button type="submit" class="btn-primary">Sign in</button>
+      <p id="login-error" class="error-text" hidden></p>
+    </form>
+  </div>
+
+  <div id="app" class="app" hidden>
+    <header class="topbar">
+      <div class="brand">Naimix <span class="muted">/ ops</span></div>
+      <div class="topbar-actions">
+        <span id="instance-id" class="muted instance-id"></span>
+        <button id="theme-toggle-btn" class="icon-btn-lg" type="button" title="Toggle color theme" aria-label="Toggle color theme">
+          <span class="theme-icon theme-icon-sun" aria-hidden="true">☀️</span>
+          <span class="theme-icon theme-icon-moon" aria-hidden="true">🌙</span>
+        </button>
+        <button id="logout-btn" class="btn-secondary">Sign out</button>
+      </div>
+    </header>
+
+    <div class="content">
+      <section class="panel">
+        <div class="panel-header">
+          <h2>System</h2>
+          <span class="muted panel-subhead">Refreshes automatically every 5s</span>
+        </div>
+        <div id="system-stats" class="stat-grid"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Environment variables</h2>
+          <div class="panel-header-actions">
+            <input id="env-filter" type="text" placeholder="Filter by name…" class="env-filter" />
+            <button id="env-refresh-btn" class="btn-secondary btn-sm" type="button">Refresh</button>
+          </div>
+        </div>
+        <p class="muted env-note">View-only. Values that look like secrets are masked -- see OPS_CONSOLE_DESIGN_NOTES.md.</p>
+        <table class="env-table">
+          <thead><tr><th>Name</th><th>Value</th></tr></thead>
+          <tbody id="env-rows"></tbody>
+        </table>
+        <p id="env-empty" class="muted" hidden>No environment variables matched.</p>
+      </section>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="ops.js"></script>
+</body>
+</html>

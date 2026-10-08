@@ -166,12 +166,15 @@
               <div class="tab-panel-toolbar">
                 <h4 class="tab-panel-toolbar-title">Output fields</h4>
                 <button type="button" class="btn-secondary btn-sm" id="add-output-btn">+ Add field</button>
+                <button type="button" class="btn-secondary btn-sm" id="add-output-array-btn">+ Add array</button>
               </div>
-              <label class="block">
-                <span class="field-title">Collection root <button type="button" class="info-icon" data-info-key="outputRoot" aria-label="What is this?">i</button> <span class="muted">(optional JSONPath — leave blank for a single-object response)</span></span>
-                <input name="outputRoot" placeholder="$.items[*]" />
-              </label>
               <div id="output-fields-list" class="repeatable-list"></div>
+
+              <div class="tab-panel-toolbar output-postprocess-toolbar">
+                <h4 class="tab-panel-toolbar-title">Post-process function <button type="button" class="info-icon" data-info-key="outputPostProcess" aria-label="What is this?">i</button></h4>
+              </div>
+              <p class="muted">Optional -- runs once on the ENTIRE mapped output above (add/remove fields, walk and rewrite an array), after every field above has already been extracted.</p>
+              <div id="output-postprocess-container"></div>
             </div>
 
             <div class="editor-tab-panel" data-tab-panel="test" hidden>
@@ -199,7 +202,12 @@
               <div class="test-results">
                 <div>
                   <h4>Raw backend response</h4>
-                  <pre id="test-raw-output" class="code-block">—</pre>
+                  <p id="json-tree-hint" class="muted">Fetch a sample response to enable picking fields below.</p>
+                  <div id="test-raw-tree" class="json-tree"></div>
+                  <details class="raw-text-details">
+                    <summary>View raw JSON text</summary>
+                    <pre id="test-raw-output" class="code-block">—</pre>
+                  </details>
                 </div>
                 <div>
                   <h4>Mapped output</h4>

@@ -9,18 +9,36 @@ const THEME_KEY = "naimix-console-theme";
 
 let TOKEN = null;
 let META = { methods: [], backendTypes: [], transforms: [], sqlClients: [], paramLocations: [], paramTypes: [], devMode: false };
-let ENDPOINTS = [];
+let INTEGRATIONS = [];
+let APPS = [];
 let GATEWAYS = {};
 let AUTH_PROVIDERS = {};
 let SESSIONS = [];
-let ACTIVE_DETAIL = null; // null | "endpoint" | "gateway" | "authProvider" | "session" -- which panel is showing on the right
-let EDITING_ENDPOINT_ID = null; // null = creating a new endpoint
+let ACTIVE_DETAIL = null; // null | "integration" | "app" | "gateway" | "authProvider" | "session" -- which panel is showing on the right
+let EDITING_INTEGRATION_ID = null; // null = creating a new integration
+let EDITING_APP_ID = null; // null = creating a new app
 let EDITING_GATEWAY_NAME = null; // null = creating a new gateway
 let EDITING_AUTH_PROVIDER_NAME = null; // null = creating a new auth provider
 let SELECTED_SESSION_ID = null;
 let LAST_RAW_SAMPLE;
 let HAS_RAW_SAMPLE = false;
 let CURRENT_SETTINGS = { configDir: null };
+// The App currently open in the detail panel's own full routes array, kept
+// in memory so saving just id/name edits (via #app-form) can resend the
+// whole App -- see appRegistry.upsert()'s "whole file" persistence model --
+// without the detail panel needing to re-render the Routes table from a
+// fresh fetch on every keystroke.
+let CURRENT_APP_ROUTES = [];
+// Which App + (if any) existing route the route-editor drawer is currently
+// working on -- null routeId means "adding a new route to this app".
+let ROUTE_EDITOR_STATE = { appId: null, routeId: null, integrationId: null };
+// Drives the breadcrumb and which sidebar nav row shows active -- see
+// renderBreadcrumb()/renderSharedNav()/renderAppsNav(). `type` is
+// null | "shared" | "app" | "session"; `key` is the shared category
+// ("authProviders"|"gateways"|"integrations") or App id; `item` (shared
+// only) is the individual item's id when its own editor is open on top
+// of that category's catalog table, or null when just the table shows.
+let CURRENT_VIEW = { type: null, key: null, item: null };
 
 /* ---------------------------------------------------------------------
  * Theme (light / dark). Defaults to the OS preference until the user
@@ -182,45 +200,52 @@ function looseParse(str) {
  * next outside click, Escape, tab switch, or panel change.
  * ------------------------------------------------------------------- */
 const FIELD_INFO = {
-  endpointId: "A unique identifier for this endpoint (letters, digits, _ and - only). Used in the config filename and log messages -- renaming it is safe, the app moves the file for you.",
-  endpointMethod: "The HTTP method this middleware listens for on Path -- GET, POST, PUT, PATCH, or DELETE.",
-  endpointPathAuto: "When on, Path is computed automatically as /<gateway-or-backend-type>/<endpoint id> and kept in sync as you type. Turn it off to type a fully custom path by hand.",
-  endpointPath: "The URL callers hit on THIS middleware -- not the backend's URL. Must start with / and can include path params, e.g. /:id.",
-  endpointExtraPath: "Appended after the auto-generated base path. This is also where you add path params, e.g. /:id.",
-  endpointDescription: "An optional human-readable note shown in the endpoint list -- purely for your own reference, it has no effect on requests.",
+  sharedCollection: "Centrally-maintained Auth providers, Gateways, and Integrations -- every App's Routes point into these by name, so one change here (a backend URL, a secret, an output mapping) is visible to every App that uses it. See WORKSPACE_APPS_DESIGN_NOTES.md.",
+  integrationsSection: "An Integration is the backend-calling/output-mapping half of what used to be one flat Endpoint -- it has no method/path of its own. A Route (inside an App, below) points at one of these by name to expose it at a real URL.",
+  appsSection: "A team-owned flat list of Routes. Each Route is a pure method+path pointer at one Integration in the Shared Collection above. An App gets exposed on a real server only once deployment.yaml's `mounts` list names it (with a basePath) -- that file is hand-edited, not managed from here.",
+  integrationId: "A unique identifier for this integration (letters, digits, _ and - only). Used in the config filename and log messages, and as what a Route's `integration` field names -- renaming it is safe, the app moves the file for you and you just repoint any Route that used the old name.",
+  integrationDescription: "An optional human-readable note shown in the integrations list -- purely for your own reference, it has no effect on requests.",
+  appId: "A unique identifier for this App (letters, digits, _ and - only). Used in the config filename and as what deployment.yaml's `mounts` list names to mount it.",
+  appName: "A display name for this App, shown in the console UI -- independent of its Id, so renaming it doesn't affect deployment.yaml's `mounts` list or any file path.",
+  appRoutes: "This App's own public surface -- each Route is a method + path a caller can hit, pointing at one Integration in the Shared Collection by name. Two Routes in the SAME App can never collide on method + path (checked on save); the same Integration can be pointed at by Routes in different Apps, or more than once in the same App under different paths.",
+  routeId: "A unique identifier for this Route within its App (letters, digits, _ and - only) -- independent of its method/path, so editing the path in place doesn't need a new id.",
+  routeMethod: "The HTTP method this Route listens for on Path.",
+  routePath: "The URL path callers hit, relative to this App's basePath (set in deployment.yaml's `mounts` list, hand-edited, not here) -- not the backend's URL. Must start with / and can include path params, e.g. /:id.",
+  routeDescription: "An optional human-readable note shown in the routes list -- purely for your own reference, it has no effect on requests.",
+  routeTryIt: "Calls this Route's Integration for real (through its backend, mapped through its output) using the sample values below -- the same test a saved Integration's own Test tab runs, reached here by name instead.",
   backendGateway: "Which named gateway (from the Gateways list) supplies the base URL, WSDL, or DB connection for this call. Leave as (none) to call an absolute URL directly.",
   backendType: "Which kind of backend this is -- json, xml, soap, or sql. Set automatically from the selected Gateway's kind, since the two can never disagree; only editable when no gateway is selected.",
-  backendUrl: "The backend URL to call, relative to the gateway's Base URL (or absolute if there's no gateway). Supports {param} placeholders filled in from this endpoint's input parameters.",
-  backendMethod: "The HTTP method used to call the backend -- independent of this endpoint's own Method on the Basic tab.",
+  backendUrl: "The backend URL to call, relative to the gateway's Base URL (or absolute if there's no gateway). Supports {param} placeholders filled in from this integration's input parameters.",
+  backendMethod: "The HTTP method used to call the backend.",
   backendHeaders: "Extra HTTP headers sent with the backend request, layered on top of the gateway's own headers. Values support {param} placeholders.",
   backendQuery: "Query-string parameters appended to the backend request URL. Values support {param} placeholders.",
   backendBody: "The request body sent to the backend. For a JSON backend this is parsed as JSON; for XML it's sent through as a literal string template.",
   soapWsdl: "Overrides the WSDL URL for this one operation. Leave blank to use the gateway's own WSDL.",
   soapEndpoint: "Overrides the actual SOAP endpoint the operation is called against. Leave blank to use the WSDL URL with its query string stripped.",
   soapOperation: "The name of the SOAP operation to call, exactly as declared in the WSDL.",
-  soapArgs: "Arguments passed to the SOAP operation, by name. Values support {param} placeholders from this endpoint's input parameters.",
-  sqlQuery: "A parameterized SQL query using named :param bindings (e.g. :id) that map to this endpoint's input parameters.",
+  soapArgs: "Arguments passed to the SOAP operation, by name. Values support {param} placeholders from this integration's input parameters.",
+  sqlQuery: "A parameterized SQL query using named :param bindings (e.g. :id) that map to this integration's input parameters.",
   paramName: "The parameter's name -- this becomes the {name} placeholder you can use in the backend config on the previous tab.",
   paramIn: "Where the caller supplies this value: a URL path segment, a query-string parameter, an HTTP header, the JSON request body, or (env) this server's own environment variable.",
   paramEnvVar: "The environment variable name to read from. Defaults to the parameter's own name if left blank.",
   paramType: "The value is coerced to this type (string, number, or boolean) before it's used.",
-  paramRequired: "If on, a request missing this parameter is rejected with a 400 error before the backend is ever called.",
+  paramRequired: "If on, a call missing this parameter is rejected with a 400 error before the backend is ever called.",
   paramDefault: "The value used when the caller doesn't supply one and it isn't required.",
-  outputTarget: "The field name in this endpoint's JSON response -- can be nested, e.g. name.first.",
+  outputTarget: "The field name in this integration's JSON response -- can be nested, e.g. name.first.",
   outputSource: "A JSONPath into the backend's raw response, e.g. $.firstName.",
   outputTransform: "An optional conversion applied to the extracted value before it's placed in the response.",
   outputDefault: "The value used when Source doesn't match anything in the backend's response.",
   outputArrayRoot: "A JSONPath selecting a collection, evaluated relative to this field's own parent item -- the real backend response itself at the top level, or one level deeper for a nested array inside another array. Each match is mapped through this array's own nested fields below, e.g. $.orders[*].",
   outputPostProcess: "An optional named custom function run once on the entire mapped output above (not just one field) -- use it to add or remove top-level fields, or to walk and rewrite an array, after every field above has already been extracted. The same functions available here can also be picked as a single field's Transform.",
-  gatewayName: "A unique identifier for this gateway (letters, digits, _ and - only). Endpoints reference it by this exact name in their Gateway field.",
+  gatewayName: "A unique identifier for this gateway (letters, digits, _ and - only). Integrations reference it by this exact name in their Gateway field.",
   gatewayKind: "The type of backend this gateway connects to -- json, xml, soap, or sql. Determines which fields below apply and which connector handles requests through it.",
-  gatewayBaseUrl: "The base URL every endpoint using this gateway calls relative to, e.g. https://api.example.com.",
+  gatewayBaseUrl: "The base URL every integration using this gateway calls relative to, e.g. https://api.example.com.",
   gatewayWsdl: "The WSDL URL describing this SOAP service's available operations.",
   gatewayClient: "Which database driver (knex client) to use -- must match the actual database you're connecting to.",
   gatewayConnection: "The database driver's own connection fields (e.g. host, port, user, password, database, or filename for SQLite) -- passed straight through to the driver.",
   gatewayUseNullAsDefault: "Required by SQLite (better-sqlite3/sqlite3) -- tells the query builder to use NULL for columns you didn't specify, instead of erroring.",
-  gatewayCommonParams: "Default parameter values shared by every endpoint that uses this gateway, available as {name}. An endpoint's own input parameter of the same name takes precedence.",
-  gatewayRequiresAuth: "Names an entry in the Auth providers list. When set, every endpoint that calls through this gateway requires a caller session obtained by logging in against that provider (POST /auth/login/<name>) -- the real backend token it holds is available to this gateway's config as {__authToken}.",
+  gatewayCommonParams: "Default parameter values shared by every integration that uses this gateway, available as {name}. An integration's own input parameter of the same name takes precedence.",
+  gatewayRequiresAuth: "Names an entry in the Auth providers list. When set, every route whose Integration calls through this gateway requires a caller session obtained by logging in against that provider (POST /auth/login/<name>) -- the real backend token it holds is available to this gateway's config as {__authToken}.",
   authProviderName: "A unique identifier for this auth provider (letters, digits, _ and - only). A gateway references it by this exact name in its Requires auth field, and callers log in against it at POST /auth/login/<name>.",
   authProviderKind: "basicLogin authenticates against a bespoke backend login API (POST credentials, extract a token from the JSON response with JSONPath). oauth2 authenticates against a standard RFC 6749 token endpoint (password or client_credentials grant), and additionally supports automatic refresh. ldap authenticates against an LDAP/AD directory with a plain simple bind.",
   authProviderLoginUrl: "The backend's login endpoint -- this provider POSTs the caller's credentials here.",
@@ -232,9 +257,9 @@ const FIELD_INFO = {
   authProviderRefreshTokenPath: "An optional JSONPath into the login response for a refresh token. basicLogin doesn't refresh in this phase (an expired session just requires logging in again), so this is currently only stored for future use.",
   authProviderExpiresInPath: "An optional JSONPath into the login response for how many seconds until the token expires, e.g. $.expiresIn. Used to know when a session needs attention.",
   authProviderSubjectPath: "An optional JSONPath into the login response identifying the logged-in subject/user (e.g. $.sub or $.userId) -- stored on the session for reference.",
-  authProviderClaims: "Optional extra fields pulled out of the login response using the same JSONPath mapping as an endpoint's Output fields, e.g. exposing a display name or role from the login response.",
+  authProviderClaims: "Optional extra fields pulled out of the login response using the same JSONPath mapping as an Integration's Output fields, e.g. exposing a display name or role from the login response.",
   activeSessions: "Every caller session currently held in memory across all auth providers. This is a live view of the session store, showing enough to identify a session (provider, subject, claims, timestamps) and revoke it if needed. Outside production (NODE_ENV != \"production\"), opening a session also shows its real session/backend/refresh tokens for local debugging; a real deployment run with NODE_ENV=production always withholds them.",
-  exportSection: "Download a standard OpenAPI (Swagger) description of this workspace's endpoints and auth routes, or a ready-to-run MCP server that talks to this same live instance -- both always reflect the current config, so re-download after making changes rather than reusing an older copy.",
+  exportSection: "Download a standard OpenAPI (Swagger) description of every route currently MOUNTED on this server (every App named in deployment.yaml's `mounts`, basePath-prefixed) plus this workspace's auth routes, or a ready-to-run MCP server that talks to this same live instance -- both always reflect the current config, so re-download after making changes rather than reusing an older copy.",
   authProviderTokenUrl: "The OAuth2 token endpoint this provider requests tokens from, per RFC 6749, e.g. https://api.example.com/oauth/token.",
   authProviderGrantType: "password sends the caller's own username/password (a person logging in). client_credentials authenticates this middleware itself with no end-user credentials at all -- use it when callers shouldn't need individual backend accounts.",
   authProviderClientId: "This middleware's own OAuth2 client identifier, issued by the backend's authorization server.",
@@ -256,8 +281,8 @@ const FIELD_INFO = {
   authProviderLdapTokenSecret: "LDAP/AD has no native token to relay to a backend, so this provider mints its own signed JWT as a stand-in \"backend token\" using this secret. Any backend that separately trusts this middleware (holds this same secret) can verify it. Leave blank when editing an existing provider to keep the currently stored value unchanged.",
   authProviderLdapTokenTtlSeconds: "How many seconds until the minted backend token (and the session) expires. Defaults to 3600 (1 hour).",
   authProviderTestLogin: "Sends the username/password below through provider.login() using the settings currently in this form -- including edits you haven't saved yet -- and reports whether it succeeds, without creating a session or exposing the resulting backend token.",
-  testRawQuery: "For an auto-generated \"list\" endpoint: the query-string filters/sort/paging a real caller would send, as a JSON object, e.g. {\"status\": \"active\", \"limit\": \"20\"}. Ignored for the other table operations.",
-  testRawBody: "For an auto-generated bulk-create/bulk-update/bulk-delete endpoint: the exact JSON body a real caller would send. Ignored for \"list\", which reads Query params instead.",
+  testRawQuery: "For an auto-generated \"list\" integration: the query-string filters/sort/paging a real caller would send, as a JSON object, e.g. {\"status\": \"active\", \"limit\": \"20\"}. Ignored for the other table operations.",
+  testRawBody: "For an auto-generated bulk-create/bulk-update/bulk-delete integration: the exact JSON body a real caller would send. Ignored for \"list\", which reads Query params instead.",
 };
 
 let INFO_POPUP_EL = null;
@@ -324,7 +349,7 @@ function fieldTitle(...parts) {
  * Gateway quick-view -- the "View gateway" button next to the Backend
  * tab's Gateway select (see openGatewayPreview()) shows the currently
  * selected gateway's real definition (kind, connection details, common
- * params) without leaving the endpoint editor to go look it up.
+ * params) without leaving the integration editor to go look it up.
  * ------------------------------------------------------------------- */
 function kvList(obj) {
   const entries = Object.entries(obj || {});
@@ -369,14 +394,14 @@ function buildGatewayPreview(name) {
 }
 
 function openGatewayPreview(btn) {
-  const form = document.getElementById("endpoint-form");
+  const form = document.getElementById("integration-form");
   const name = form.backendGateway.value;
   if (!name) return;
   showPopup(btn, buildGatewayPreview(name), "gateway-preview");
 }
 
 function refreshViewGatewayBtn() {
-  const form = document.getElementById("endpoint-form");
+  const form = document.getElementById("integration-form");
   const btn = document.getElementById("view-gateway-btn");
   btn.disabled = !form.backendGateway.value;
   if (!form.backendGateway.value && INFO_POPUP_FOR === btn) closeInfoPopup();
@@ -410,7 +435,7 @@ async function login(token) {
   const prevToken = TOKEN;
   TOKEN = token;
   try {
-    await api("GET", "/console/api/endpoints");
+    await api("GET", "/console/api/integrations");
   } catch (err) {
     TOKEN = prevToken;
     throw err;
@@ -432,24 +457,29 @@ function logout() {
  * Load + render
  * ------------------------------------------------------------------- */
 async function loadAll() {
-  const [meta, endpoints, gateways, authProviders, sessions, settings] = await Promise.all([
+  const [meta, integrations, apps, gateways, authProviders, sessions, settings] = await Promise.all([
     api("GET", "/console/api/meta"),
-    api("GET", "/console/api/endpoints"),
+    api("GET", "/console/api/integrations"),
+    api("GET", "/console/api/apps"),
     api("GET", "/console/api/gateways"),
     api("GET", "/console/api/auth-providers"),
     api("GET", "/console/api/sessions"),
     api("GET", "/console/api/settings"),
   ]);
   META = meta;
-  ENDPOINTS = endpoints;
+  INTEGRATIONS = integrations;
+  APPS = apps;
   GATEWAYS = gateways;
   AUTH_PROVIDERS = authProviders;
   SESSIONS = sessions;
-  renderEndpointsTree();
-  renderGatewaysList();
-  renderAuthProvidersList();
+  renderSharedNav();
+  renderAppsNav();
   renderSessionsList();
   renderWorkspaceBar(settings);
+  // If a Shared Collection catalog table is currently showing, refresh its
+  // rows too -- loadAll() runs after every save/delete/reload, and the
+  // catalog table has its own copy of the list baked into its DOM.
+  if (CURRENT_VIEW.type === "shared" && !CURRENT_VIEW.item) renderSharedCatalogTable(CURRENT_VIEW.key);
 }
 
 /** Re-fetches just the session list -- used by the sidebar's "Refresh"
@@ -460,18 +490,28 @@ async function refreshSessions() {
 }
 
 /* ---------------------------------------------------------------------
- * Workspace -- the folder (endpoints/ + gateways.yaml) this instance is
- * currently pointed at. Still persisted/transmitted under the field name
- * `configDir` (see workspaceSettings.ts / the /console/api/settings API) --
- * that's a stable data contract, not the user-facing name.
+ * Workspace -- the folder (integrations/ + apps/ + gateways.yaml) this
+ * instance is currently pointed at. Still persisted/transmitted under the
+ * field name `configDir` (see deploymentConfig.ts / the
+ * /console/api/settings API) -- that's a stable data contract, not the
+ * user-facing name. `mountErrors` (an unknown app in deployment.yaml's
+ * `mounts`, or a route referencing an unknown integration) is surfaced as
+ * a small warning button rather than silently ignored.
  * ------------------------------------------------------------------- */
 function renderWorkspaceBar(settings) {
   CURRENT_SETTINGS = settings;
-  const pathEl = document.getElementById("workspace-path");
-  pathEl.textContent = settings.configDir || `${settings.endpointsDir}  +  ${settings.gatewaysFile}`;
-  pathEl.title = pathEl.textContent;
-  document.getElementById("workspace-counts").textContent =
-    `${settings.endpointCount} endpoint(s), ${settings.gatewayCount} gateway(s)`;
+  const chipEl = document.getElementById("workspace-chip");
+  const name = settings.configDir || `${settings.integrationsDir} + ${settings.appsDir}`;
+  chipEl.textContent = `Workspace: ${name}`;
+  chipEl.title =
+    `${name}\n${settings.integrationCount} integration(s), ${settings.appCount} app(s), ` +
+    `${settings.routeCount} route(s) mounted, ${settings.gatewayCount} gateway(s)`;
+
+  const mountErrors = settings.mountErrors || [];
+  const warnBtn = document.getElementById("workspace-mount-warning");
+  warnBtn.hidden = mountErrors.length === 0;
+  warnBtn.textContent = `⚠ ${mountErrors.length} mount issue(s)`;
+  warnBtn.onclick = () => alert(mountErrors.join("\n"));
 }
 
 function openWorkspaceEditor(currentConfigDir) {
@@ -510,9 +550,12 @@ async function saveWorkspace(ev) {
   try {
     const result = await api("PUT", "/console/api/settings", { configDir });
     closeDrawer("workspace-editor");
+    const errorCount = (result.integrationErrors?.length || 0) + (result.appErrors?.length || 0);
     toast(
-      `Switched to ${configDir} — ${result.endpointCount} endpoint(s)${result.endpointErrors.length ? `, ${result.endpointErrors.length} error(s)` : ""}, ${result.gatewayCount} gateway(s)`,
-      result.endpointErrors.length > 0
+      `Switched to ${configDir} — ${result.integrationCount} integration(s), ${result.appCount} app(s)` +
+        `${errorCount ? `, ${errorCount} error(s)` : ""}, ${result.gatewayCount} gateway(s)` +
+        `${result.mountErrors?.length ? ` — ${result.mountErrors.length} mount issue(s)` : ""}`,
+      errorCount > 0 || Boolean(result.mountErrors?.length)
     );
     closeDetail();
     await loadAll();
@@ -522,170 +565,299 @@ async function saveWorkspace(ev) {
 }
 
 /* ---------------------------------------------------------------------
- * Detail panel (right side) -- shows a placeholder until an endpoint,
- * gateway, auth provider, or session is selected from the sidebar, then
- * that item's inline view (edit/test/save for the first three; read-only
- * for a session). Only one of the four ever shows at a time.
+ * Detail panel (right side) -- shows a placeholder until an item is
+ * selected from the sidebar, then its inline view (edit/test/save for
+ * integration/app/gateway/authProvider; read-only for a session). Only
+ * one of the five ever shows at a time.
  * ------------------------------------------------------------------- */
 function showDetailView(kind) {
   ACTIVE_DETAIL = kind;
   document.getElementById("detail-empty").hidden = kind !== null;
-  document.getElementById("endpoint-detail").hidden = kind !== "endpoint";
+  document.getElementById("shared-catalog-view").hidden = kind !== "sharedCatalog";
+  document.getElementById("integration-detail").hidden = kind !== "integration";
+  document.getElementById("app-detail").hidden = kind !== "app";
   document.getElementById("gateway-detail").hidden = kind !== "gateway";
   document.getElementById("auth-provider-detail").hidden = kind !== "authProvider";
   document.getElementById("session-detail").hidden = kind !== "session";
-  renderEndpointsTree();
-  renderGatewaysList();
-  renderAuthProvidersList();
+  renderSharedNav();
+  renderAppsNav();
   renderSessionsList();
 }
 
+/** Closes whatever's open and returns to the blank "nothing selected"
+ * state -- used for the two kinds with no catalog/list to fall back to
+ * (App, Session). An Integration/Gateway/Auth provider editor's own Close
+ * button goes back to its Shared Collection catalog table instead (see
+ * backToSharedCatalog()), not here. */
 function closeDetail() {
-  EDITING_ENDPOINT_ID = null;
+  EDITING_INTEGRATION_ID = null;
+  EDITING_APP_ID = null;
   EDITING_GATEWAY_NAME = null;
   EDITING_AUTH_PROVIDER_NAME = null;
   SELECTED_SESSION_ID = null;
+  CURRENT_VIEW = { type: null, key: null, item: null };
   showDetailView(null);
+  renderBreadcrumb();
   closeInfoPopup();
 }
 
-/* ---------------------------------------------------------------------
- * Endpoints tree (sidebar) -- grouped into folders mirroring each
- * endpoint's path, matching how config/endpoints/ is organized on disk
- * (see src/server/endpointFileLayout.ts). Multiple endpoints sharing the
- * same path (e.g. a generated table's GET/POST/PATCH/DELETE) land in the
- * same folder, one row each. Clicking a row opens it in the detail panel.
- * ------------------------------------------------------------------- */
-let COLLAPSED_ENDPOINT_FOLDERS = new Set();
+/** Returns to the Shared Collection catalog table for `kind` -- what an
+ * Integration/Gateway/Auth provider editor's Close button does, and what
+ * a save/delete from inside one of those editors falls back to, now that
+ * each of the three is reached by drilling into a table rather than
+ * picked directly off the sidebar. */
+function backToSharedCatalog(kind) {
+  EDITING_INTEGRATION_ID = null;
+  EDITING_GATEWAY_NAME = null;
+  EDITING_AUTH_PROVIDER_NAME = null;
+  showSharedCatalog(kind);
+}
 
-function buildEndpointTree(endpoints) {
-  const root = { path: "", children: new Map(), endpoints: [] };
-  for (const r of endpoints) {
-    let node = root;
-    let acc = "";
-    for (const segment of r.path.split("/").filter(Boolean)) {
-      acc += "/" + segment;
-      if (!node.children.has(segment)) {
-        node.children.set(segment, { name: segment, path: acc, children: new Map(), endpoints: [] });
-      }
-      node = node.children.get(segment);
+/* ---------------------------------------------------------------------
+ * Breadcrumb (top bar) -- reflects CURRENT_VIEW: "Shared Collection ›
+ * Gateways" (catalog table) or "... › Gateways › my-gateway" (its editor
+ * open on top of that), "Apps › My App", or "Active sessions".
+ * ------------------------------------------------------------------- */
+const SHARED_CATEGORY_LABELS = { authProviders: "Auth Providers", gateways: "Gateways", integrations: "Integrations" };
+
+function renderBreadcrumb() {
+  const container = document.getElementById("breadcrumb");
+  container.innerHTML = "";
+  const sep = () => el("span", { class: "breadcrumb-sep" }, ["›"]);
+  if (CURRENT_VIEW.type === "shared") {
+    container.append(el("span", {}, ["Shared Collection"]), sep(), el("b", {}, [SHARED_CATEGORY_LABELS[CURRENT_VIEW.key]]));
+    if (CURRENT_VIEW.item) container.append(sep(), el("b", {}, [CURRENT_VIEW.item]));
+  } else if (CURRENT_VIEW.type === "app") {
+    container.append(el("span", {}, ["Apps"]), sep(), el("b", {}, [CURRENT_VIEW.key]));
+  } else if (CURRENT_VIEW.type === "session") {
+    container.append(el("span", {}, ["Active sessions"]));
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Shared Collection sidebar nav -- just 3 category links now (Auth
+ * Providers / Gateways / Integrations), each with a count, instead of a
+ * full row per individual item. Clicking one opens a read-only catalog
+ * table of every item of that kind (see showSharedCatalog() below); the
+ * individual item's own full editor is reached by clicking a row in that
+ * table, or its "+ Add" button for a new one.
+ * ------------------------------------------------------------------- */
+function renderSharedNav() {
+  const listEl = document.getElementById("shared-nav-list");
+  listEl.innerHTML = "";
+  const counts = {
+    authProviders: Object.keys(AUTH_PROVIDERS).length,
+    gateways: Object.keys(GATEWAYS).length,
+    integrations: INTEGRATIONS.length,
+  };
+  for (const key of ["authProviders", "gateways", "integrations"]) {
+    const active = CURRENT_VIEW.type === "shared" && CURRENT_VIEW.key === key;
+    listEl.appendChild(
+      el("li", { class: "nav-item" + (active ? " shared-active" : ""), onclick: () => showSharedCatalog(key) }, [
+        el("span", {}, [SHARED_CATEGORY_LABELS[key]]),
+        el("span", { class: "nav-item-count" }, [String(counts[key])]),
+      ])
+    );
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Apps sidebar nav -- flat list of Apps, each showing its route count.
+ * Clicking one opens that App's own editor (Settings/Routes/Export tabs).
+ * ------------------------------------------------------------------- */
+function renderAppsNav() {
+  const listEl = document.getElementById("apps-nav-list");
+  const emptyEl = document.getElementById("apps-empty");
+  listEl.innerHTML = "";
+  emptyEl.hidden = APPS.length > 0;
+  for (const app of [...APPS].sort((a, b) => a.name.localeCompare(b.name))) {
+    const active = CURRENT_VIEW.type === "app" && CURRENT_VIEW.key === app.id;
+    listEl.appendChild(
+      el("li", { class: "nav-item" + (active ? " apps-active" : ""), onclick: () => openAppEditor(app.id) }, [
+        el("span", {}, [app.name]),
+        el("span", { class: "nav-item-count" }, [String((app.routes || []).length)]),
+      ])
+    );
+  }
+}
+
+/** Turns a typed App name into a safe candidate id (lowercase,
+ * non-alphanumerics collapsed to "-"), for the inline "+ New App" quick
+ * create below -- a real App needs an id matching appConfigSchema's
+ * `[A-Za-z0-9_-]+`, but the mockup's inline flow only ever asked for a
+ * display name, so this bridges the two without a second field. */
+function slugifyAppId(name) {
+  const slug = String(name ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return slug || "app";
+}
+function uniqueAppId(base) {
+  const existing = new Set(APPS.map((a) => a.id));
+  if (!existing.has(base)) return base;
+  let n = 2;
+  while (existing.has(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
+/** "+ New App" -- a quick inline create right in the sidebar (type a
+ * name, Enter to create), matching the mockup, rather than opening the
+ * full App editor just to fill in two fields. The id is slugified from
+ * the typed name and uniquified against existing Apps; Escape cancels. */
+function wireNewAppInline() {
+  const btn = document.getElementById("new-app-btn");
+  const wrap = document.getElementById("new-app-input-wrap");
+  const input = document.getElementById("new-app-input");
+
+  function open() {
+    wrap.hidden = false;
+    btn.hidden = true;
+    input.value = "";
+    input.focus();
+  }
+  function cancel() {
+    wrap.hidden = true;
+    btn.hidden = false;
+  }
+
+  btn.addEventListener("click", open);
+  input.addEventListener("keydown", async (ev) => {
+    if (ev.key === "Escape") {
+      cancel();
+      return;
     }
-    node.endpoints.push(r);
-  }
-  return root;
+    if (ev.key !== "Enter") return;
+    const name = input.value.trim();
+    if (!name) return;
+    const id = uniqueAppId(slugifyAppId(name));
+    try {
+      await api("POST", "/console/api/apps", { id, name, routes: [] });
+      cancel();
+      await loadAll();
+      toast(`Created "${name}". Add its first route below.`);
+      openAppEditor(id);
+      switchAppTab("routes");
+    } catch (err) {
+      toast(err.message, true);
+    }
+  });
 }
 
-function countEndpointsInNode(node) {
-  let count = node.endpoints.length;
-  for (const child of node.children.values()) count += countEndpointsInNode(child);
-  return count;
+/** A gateway/auth-provider has no `description` field of its own (unlike
+ * an Integration) -- this is the same one-line "what does this actually
+ * point at" summary the old sidebar rows used to show, now shown in the
+ * catalog table's Description column instead. */
+function gatewaySummary(gw) {
+  if (gw.kind === "sql") return `${gw.client} · ${Object.keys(gw.connection || {}).join(", ")}`;
+  return gw.baseUrl || gw.wsdl || "";
+}
+function authProviderSummary(provider) {
+  return provider.kind === "oauth2" ? provider.tokenUrl || "" : provider.loginUrl || "";
 }
 
-function renderEndpointsTree() {
-  const container = document.getElementById("endpoints-tree");
+const SHARED_CATALOG_META = {
+  authProviders: { title: "Auth Providers", addLabel: "Auth Provider", open: (id) => openAuthProviderEditor(id) },
+  gateways: { title: "Gateways", addLabel: "Gateway", open: (id) => openGatewayEditor(id) },
+  integrations: { title: "Integrations", addLabel: "Integration", open: (id) => openIntegrationEditor(id) },
+};
+
+/** Opens the read-only catalog table for one Shared Collection category.
+ * `highlightId`, when given, briefly pulses that one row -- used by
+ * cross-navigation from an Integration pill/card elsewhere in the app. */
+function showSharedCatalog(kind, highlightId) {
+  closeInfoPopup();
+  CURRENT_VIEW = { type: "shared", key: kind, item: null };
+  const meta = SHARED_CATALOG_META[kind];
+  document.getElementById("shared-catalog-title").textContent = meta.title;
+  const addBtn = document.getElementById("shared-catalog-add-btn");
+  addBtn.textContent = `+ Add ${meta.addLabel}`;
+  addBtn.onclick = () => meta.open(null);
+  renderSharedCatalogTable(kind, highlightId);
+  showDetailView("sharedCatalog");
+  renderBreadcrumb();
+  document.getElementById("detail-panel").scrollTop = 0;
+}
+
+/** Builds the actual table for `showSharedCatalog()` -- also called by
+ * loadAll()/saves to refresh an already-open catalog table in place. */
+function renderSharedCatalogTable(kind, highlightId) {
+  const container = document.getElementById("shared-catalog-table");
+  const emptyEl = document.getElementById("shared-catalog-empty");
   container.innerHTML = "";
-  document.getElementById("endpoints-empty").hidden = ENDPOINTS.length > 0;
-  container.appendChild(renderEndpointTreeNode(buildEndpointTree(ENDPOINTS)));
-}
+  const meta = SHARED_CATALOG_META[kind];
 
-function renderEndpointTreeNode(node) {
-  const frag = document.createDocumentFragment();
-
-  for (const r of node.endpoints.slice().sort((a, b) => a.method.localeCompare(b.method))) {
-    frag.appendChild(renderEndpointRow(r));
+  let rows; // [{ id, kindChip, authChip, desc }]
+  let header;
+  if (kind === "authProviders") {
+    header = ["Name", "Type", "Description"];
+    rows = Object.keys(AUTH_PROVIDERS)
+      .sort()
+      .map((name) => ({ id: name, kindChip: AUTH_PROVIDERS[name].kind, desc: authProviderSummary(AUTH_PROVIDERS[name]) }));
+  } else if (kind === "gateways") {
+    header = ["Name", "Type", "Requires Auth", "Description"];
+    rows = Object.keys(GATEWAYS)
+      .sort()
+      .map((name) => ({
+        id: name,
+        kindChip: GATEWAYS[name].kind,
+        authChip: GATEWAYS[name].requiresAuth || null,
+        desc: gatewaySummary(GATEWAYS[name]),
+      }));
+  } else {
+    header = ["Name", "Gateway", "Description"];
+    rows = [...INTEGRATIONS]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((integration) => ({
+        id: integration.id,
+        kindChip: integration.backend?.gateway || null,
+        desc: integration.description || "",
+      }));
   }
 
-  for (const name of [...node.children.keys()].sort()) {
-    const child = node.children.get(name);
-    const isCollapsed = COLLAPSED_ENDPOINT_FOLDERS.has(child.path);
-    const header = el(
-      "div",
-      {
-        class: "endpoint-folder-header" + (isCollapsed ? " is-collapsed" : ""),
-        onclick: () => {
-          if (isCollapsed) COLLAPSED_ENDPOINT_FOLDERS.delete(child.path);
-          else COLLAPSED_ENDPOINT_FOLDERS.add(child.path);
-          renderEndpointsTree();
-        },
-      },
-      [
-        el("button", { type: "button", class: "chevron-btn", tabindex: "-1", "aria-hidden": "true" }, [
-          el("span", { class: "chevron" }, [isCollapsed ? "▸" : "▾"]),
-        ]),
-        el("span", { class: "endpoint-folder-name" }, [name]),
-        el("span", { class: "endpoint-folder-count muted" }, [`(${countEndpointsInNode(child)})`]),
-      ]
-    );
-    const body = el("div", { class: "endpoint-folder-body" + (isCollapsed ? " collapsed" : "") }, [
-      renderEndpointTreeNode(child),
-    ]);
-    frag.appendChild(el("div", { class: "endpoint-folder" }, [header, body]));
-  }
+  emptyEl.hidden = rows.length > 0;
+  emptyEl.textContent = `No ${meta.title.toLowerCase()} yet. Click "+ Add ${meta.addLabel}" to create one.`;
 
-  return frag;
-}
-
-function renderEndpointRow(r) {
-  const isSelected = ACTIVE_DETAIL === "endpoint" && EDITING_ENDPOINT_ID === r.id;
-  return el(
-    "div",
-    { class: "endpoint-row" + (isSelected ? " selected" : ""), title: r.description || r.id, onclick: () => openEndpointEditor(r.id) },
-    [
-      el("span", { class: "method-badge" }, [r.method]),
-      el("code", { class: "endpoint-row-path" }, [r.path]),
-      el("span", { class: "muted endpoint-row-id" }, [r.id]),
-    ]
+  const headCells = header.map((h, i) =>
+    el("span", { class: i === 0 ? "catalog-cell-name" : i === header.length - 1 ? "catalog-cell-desc" : kind === "gateways" && i === 2 ? "catalog-cell-auth" : "catalog-cell-kind" }, [h])
   );
-}
+  container.appendChild(el("div", { class: "catalog-head" }, headCells));
 
-/* ---------------------------------------------------------------------
- * Gateways list (sidebar) -- same row language as the endpoints tree.
- * Clicking a row opens it in the detail panel.
- * ------------------------------------------------------------------- */
-function renderGatewaysList() {
-  const container = document.getElementById("gateways-list");
-  container.innerHTML = "";
-  const names = Object.keys(GATEWAYS);
-  document.getElementById("gateways-empty").hidden = names.length > 0;
-  for (const name of names) {
-    const gw = GATEWAYS[name];
-    const summary =
-      gw.kind === "sql"
-        ? `${gw.client} · ${Object.keys(gw.connection || {}).join(", ")}`
-        : gw.baseUrl || gw.wsdl || "";
-    const isSelected = ACTIVE_DETAIL === "gateway" && EDITING_GATEWAY_NAME === name;
+  for (const row of rows) {
+    const cells = [el("span", { class: "catalog-cell-name" }, [row.id])];
+    cells.push(el("span", { class: "catalog-cell-kind" }, [row.kindChip ? el("span", { class: "chip" }, [row.kindChip]) : el("span", { class: "chip none" }, ["none"])]));
+    if (kind === "gateways") {
+      cells.push(
+        el("span", { class: "catalog-cell-auth" }, [
+          row.authChip ? el("span", { class: "chip auth" }, [row.authChip]) : el("span", { class: "chip none" }, ["none"]),
+        ])
+      );
+    }
+    cells.push(el("span", { class: "catalog-cell-desc" }, [row.desc || ""]));
     container.appendChild(
-      el("div", { class: "gateway-row" + (isSelected ? " selected" : ""), onclick: () => openGatewayEditor(name) }, [
-        el("span", { class: "gateway-row-kind" }, [gw.kind || "json"]),
-        el("span", { class: "gateway-row-name" }, [name]),
-        el("span", { class: "gateway-row-summary" }, [summary]),
-      ])
+      el("div", { id: `catalog-row-${kind}-${row.id}`, class: "catalog-row", onclick: () => meta.open(row.id) }, cells)
     );
+  }
+
+  if (highlightId) {
+    const target = document.getElementById(`catalog-row-${kind}-${highlightId}`);
+    if (target) {
+      target.classList.remove("highlight");
+      void target.offsetWidth; // re-trigger the animation even if it just ran
+      target.classList.add("highlight");
+      target.scrollIntoView({ block: "center" });
+    }
   }
 }
 
-/* ---------------------------------------------------------------------
- * Auth providers list (sidebar) -- same row language as gateways (reuses
- * the .gateway-list/.gateway-row styles, since the shape is identical:
- * kind badge, name, one-line summary).
- * ------------------------------------------------------------------- */
-function renderAuthProvidersList() {
-  const container = document.getElementById("auth-providers-list");
-  container.innerHTML = "";
-  const names = Object.keys(AUTH_PROVIDERS);
-  document.getElementById("auth-providers-empty").hidden = names.length > 0;
-  for (const name of names) {
-    const provider = AUTH_PROVIDERS[name];
-    const summary = provider.kind === "oauth2" ? provider.tokenUrl || "" : provider.loginUrl || "";
-    const isSelected = ACTIVE_DETAIL === "authProvider" && EDITING_AUTH_PROVIDER_NAME === name;
-    container.appendChild(
-      el("div", { class: "gateway-row" + (isSelected ? " selected" : ""), onclick: () => openAuthProviderEditor(name) }, [
-        el("span", { class: "gateway-row-kind" }, [provider.kind || "basicLogin"]),
-        el("span", { class: "gateway-row-name" }, [name]),
-        el("span", { class: "gateway-row-summary" }, [summary]),
-      ])
-    );
-  }
+/** Opens an Integration from anywhere else in the app (a Route's
+ * Integration pill, or the "View in Shared Collection" link on a route
+ * picker card) by landing on the Integrations catalog table with that
+ * row pulsing -- not by opening its editor directly, since the catalog
+ * table is now the Shared Collection's own home view. */
+function openIntegrationFromPill(integrationId) {
+  showSharedCatalog("integrations", integrationId);
 }
 
 /* ---------------------------------------------------------------------
@@ -727,6 +899,7 @@ function openSessionDetail(id) {
   const session = SESSIONS.find((s) => s.id === id);
   if (!session) return; // e.g. it expired and was swept between render and click
   SELECTED_SESSION_ID = id;
+  CURRENT_VIEW = { type: "session", key: id };
 
   document.getElementById("session-detail-title").textContent = `Session — ${session.providerName}`;
   document.getElementById("session-detail-provider").textContent = session.providerName;
@@ -755,6 +928,7 @@ function openSessionDetail(id) {
   }
 
   showDetailView("session");
+  renderBreadcrumb();
   document.getElementById("detail-panel").scrollTop = 0;
 }
 
@@ -772,11 +946,23 @@ async function revokeSession(id) {
   }
 }
 
-async function deleteEndpoint(id) {
-  if (!confirm(`Delete endpoint "${id}"? This removes its config file too.`)) return;
+async function deleteIntegration(id) {
+  if (!confirm(`Delete integration "${id}"? This removes its config file too.`)) return;
   try {
-    await api("DELETE", `/console/api/endpoints/${encodeURIComponent(id)}`);
-    toast(`Deleted endpoint "${id}"`);
+    await api("DELETE", `/console/api/integrations/${encodeURIComponent(id)}`);
+    toast(`Deleted integration "${id}"`);
+    await loadAll();
+    backToSharedCatalog("integrations");
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function deleteApp(id) {
+  if (!confirm(`Delete app "${id}"? This removes its config file (and every Route in it) too. If deployment.yaml's \`mounts\` still names it, that's left for you to fix by hand.`)) return;
+  try {
+    await api("DELETE", `/console/api/apps/${encodeURIComponent(id)}`);
+    toast(`Deleted app "${id}"`);
     closeDetail();
     await loadAll();
   } catch (err) {
@@ -789,8 +975,8 @@ async function deleteGateway(name) {
   try {
     await api("DELETE", `/console/api/gateways/${encodeURIComponent(name)}`);
     toast(`Deleted gateway "${name}"`);
-    closeDetail();
     await loadAll();
+    backToSharedCatalog("gateways");
   } catch (err) {
     toast(err.message, true);
   }
@@ -801,8 +987,8 @@ async function deleteAuthProvider(name) {
   try {
     await api("DELETE", `/console/api/auth-providers/${encodeURIComponent(name)}`);
     toast(`Deleted auth provider "${name}"`);
-    closeDetail();
     await loadAll();
+    backToSharedCatalog("authProviders");
   } catch (err) {
     toast(err.message, true);
   }
@@ -913,7 +1099,7 @@ function readKeyValueEditorParsed(container) {
 }
 
 /* ---------------------------------------------------------------------
- * Endpoint editor
+ * Integration editor
  * ------------------------------------------------------------------- */
 function populateSelect(select, values, { includeBlank, blankLabel } = {}) {
   select.innerHTML = "";
@@ -921,10 +1107,6 @@ function populateSelect(select, values, { includeBlank, blankLabel } = {}) {
   for (const v of values) select.appendChild(el("option", { value: v }, [v]));
 }
 
-/* ---------------------------------------------------------------------
- * Endpoint path auto-generation (gateway + endpoint id, plus a free-form
- * "extra path" suffix the user can use for path params like /:id).
- * ------------------------------------------------------------------- */
 /* ---------------------------------------------------------------------
  * Backend type is redundant once a gateway is picked -- a gateway's own
  * `kind` (json/xml/soap/sql) is exactly what determines which connector
@@ -938,7 +1120,7 @@ function populateSelect(select, values, { includeBlank, blankLabel } = {}) {
  * own inline wsdl), where there's nothing to infer it from.
  * ------------------------------------------------------------------- */
 function applyGatewayInferredType() {
-  const form = document.getElementById("endpoint-form");
+  const form = document.getElementById("integration-form");
   const hint = document.getElementById("backend-type-hint");
   const gwName = form.backendGateway.value;
   const gw = gwName ? GATEWAYS[gwName] : null;
@@ -954,31 +1136,6 @@ function applyGatewayInferredType() {
     hint.hidden = true;
   }
   refreshViewGatewayBtn();
-}
-
-function computeAutoBasePath(gatewayName, backendType, endpointId) {
-  const seg1 = (gatewayName || backendType || "").trim();
-  const seg2 = (endpointId || "").trim();
-  if (!seg1 || !seg2) return null;
-  return `/${seg1}/${seg2}`;
-}
-
-function recomputeAutoPath() {
-  const form = document.getElementById("endpoint-form");
-  if (!form.pathAuto.checked) return;
-  const base = computeAutoBasePath(form.backendGateway.value, form.backendType.value, form.id.value);
-  if (!base) return; // not enough info yet (no id / no gateway or type) -- leave path as-is
-  const extra = form.extraPath.value.trim();
-  const extraNorm = extra ? (extra.startsWith("/") ? extra : "/" + extra) : "";
-  form.path.value = base + extraNorm;
-}
-
-function setPathAutoMode(auto) {
-  const form = document.getElementById("endpoint-form");
-  form.pathAuto.checked = auto;
-  form.path.readOnly = auto;
-  document.getElementById("extra-path-row").hidden = !auto;
-  if (auto) recomputeAutoPath();
 }
 
 function inputParamRow(param) {
@@ -1030,8 +1187,8 @@ const NEW_FUNCTION_OPTION = "__new__";
 /**
  * Shared "custom function" sub-editor, used both by a value field's
  * Transform select (when set to "Custom function...") and by the
- * endpoint-level Post-process section below -- both store/read the exact
- * same { kind: "function", name } shape (see FunctionTransformRef/
+ * integration-level Post-process section below -- both store/read the
+ * exact same { kind: "function", name } shape (see FunctionTransformRef/
  * OutputConfig.postProcess in src/types/config.ts), so one control
  * suffices for both. Renders a <select> of every function already saved
  * on this server (re-fetched fresh each time one of these is built, so a
@@ -1322,19 +1479,6 @@ function isValidOutputFieldRead(f) {
   return f.kind === "array" ? !!f.root : !!f.source;
 }
 
-/* ---------------------------------------------------------------------
- * Test tab sample-response picker -- lets someone building output.fields
- * right-click (or tap the "+" that appears on hover) a value or array in
- * the real, already-fetched sample response instead of hand-typing
- * JSONPath expressions. Always adds into the top-level output.fields --
- * a nested array field's own fields are filled in by hand (its "+ Add
- * field"/"+ Add array" buttons), using the picker's tree purely to find
- * the right JSONPath to type.
- * ------------------------------------------------------------------- */
-
-/** Turns an object/array key into the exact next JSONPath segment
- * jsonpath-plus expects -- `.key` for a plain identifier, `['key']` for
- * anything else (spaces, hyphens, etc.), `[n]` for an array index. */
 function jsonPathSegmentFor(key, isArrayIndex) {
   if (isArrayIndex) return `[${key}]`;
   return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(String(key)) ? `.${key}` : `['${String(key).replace(/'/g, "\\'")}']`;
@@ -1553,39 +1697,39 @@ function syncTestParams() {
 }
 
 /* ---------------------------------------------------------------------
- * Endpoint editor tabs (Basic / Backend / Parameters / Output / Test).
+ * Integration editor tabs (Basic / Backend / Parameters / Output / Test).
  * Only one tab's panel is shown at a time -- switching just toggles
  * [hidden] and the active tab button's styling, no re-rendering.
  * ------------------------------------------------------------------- */
-function switchEndpointTab(tab) {
-  for (const btn of document.querySelectorAll("#endpoint-form .editor-tab-btn")) {
+function switchIntegrationTab(tab) {
+  for (const btn of document.querySelectorAll("#integration-form .editor-tab-btn")) {
     btn.classList.toggle("active", btn.dataset.tab === tab);
   }
-  for (const panel of document.querySelectorAll("#endpoint-form .editor-tab-panel")) {
+  for (const panel of document.querySelectorAll("#integration-form .editor-tab-panel")) {
     panel.hidden = panel.dataset.tabPanel !== tab;
   }
   closeInfoPopup();
 }
 
-function initEndpointTabs() {
-  for (const btn of document.querySelectorAll("#endpoint-form .editor-tab-btn")) {
-    btn.addEventListener("click", () => switchEndpointTab(btn.dataset.tab));
+function initIntegrationTabs() {
+  for (const btn of document.querySelectorAll("#integration-form .editor-tab-btn")) {
+    btn.addEventListener("click", () => switchIntegrationTab(btn.dataset.tab));
   }
   // A required field can be on a tab that isn't showing when Save is
   // clicked -- the browser's own validation only "sees" visible fields, so
   // jump to whichever tab holds the first invalid one before it reports it.
-  document.getElementById("endpoint-form").addEventListener(
+  document.getElementById("integration-form").addEventListener(
     "invalid",
     (ev) => {
       const panel = ev.target.closest(".editor-tab-panel");
-      if (panel) switchEndpointTab(panel.dataset.tabPanel);
+      if (panel) switchIntegrationTab(panel.dataset.tabPanel);
     },
     true
   );
 }
 
 function refreshSectionCounts() {
-  const form = document.getElementById("endpoint-form");
+  const form = document.getElementById("integration-form");
   if (!form) return;
 
   const inputCount = document.getElementById("input-params-list").children.length;
@@ -1681,21 +1825,22 @@ function renderBackendFields(type, backend) {
       return base;
     };
   } else if (type === "sql" && (backend.table || backend.procedure)) {
-    // An endpoint created by "Generate CRUD endpoints" (gateway editor) --
-    // its backend is table/operation/procedure fields, not a raw query, and
-    // isn't meant to be hand-edited here. Show a read-only summary and
-    // preserve the backend exactly as-is on save, rather than falling
-    // through to the raw-query editor below and silently discarding it.
+    // An integration created by "Generate CRUD + procedure endpoints"
+    // (gateway editor) -- its backend is table/operation/procedure fields,
+    // not a raw query, and isn't meant to be hand-edited here. Show a
+    // read-only summary and preserve the backend exactly as-is on save,
+    // rather than falling through to the raw-query editor below and
+    // silently discarding it.
     const summary = backend.table
-      ? `Auto-generated table endpoint — table "${backend.table}", operation "${backend.operation}"` +
+      ? `Auto-generated table integration — table "${backend.table}", operation "${backend.operation}"` +
         (backend.primaryKey?.length ? `, primary key [${backend.primaryKey.join(", ")}]` : ", no primary key")
-      : `Auto-generated stored-procedure endpoint — calls "${backend.procedure}"` +
+      : `Auto-generated stored-procedure integration — calls "${backend.procedure}"` +
         (backend.procedureParams?.length ? ` with params: ${backend.procedureParams.join(", ")}` : " (no params)");
     container.appendChild(
       el("p", { class: "muted" }, [
         summary +
-          ". Created by \"Generate CRUD endpoints\" on the gateway — not editable as raw SQL here. " +
-          "Delete this endpoint and generate again if the table/procedure shape changed.",
+          ". Created by \"Generate CRUD + procedure endpoints\" on the gateway — not editable as raw SQL here. " +
+          "Delete this integration and generate again if the table/procedure shape changed.",
       ])
     );
     container._read = () => backend;
@@ -1706,16 +1851,17 @@ function renderBackendFields(type, backend) {
   }
 }
 
-function openEndpointEditor(endpointId) {
+function openIntegrationEditor(integrationId) {
   closeInfoPopup();
-  EDITING_ENDPOINT_ID = endpointId || null;
-  const endpoint = endpointId ? ENDPOINTS.find((r) => r.id === endpointId) : null;
+  EDITING_INTEGRATION_ID = integrationId || null;
+  CURRENT_VIEW = { type: "shared", key: "integrations", item: integrationId || null };
+  const integration = integrationId ? INTEGRATIONS.find((r) => r.id === integrationId) : null;
 
-  document.getElementById("endpoint-editor-title").textContent = endpoint ? `Edit endpoint: ${endpoint.id}` : "New endpoint";
-  const deleteBtn = document.getElementById("endpoint-delete-btn");
-  deleteBtn.hidden = !endpoint;
-  deleteBtn.onclick = () => deleteEndpoint(EDITING_ENDPOINT_ID);
-  showError("endpoint-form-error", "");
+  document.getElementById("integration-editor-title").textContent = integration ? `Edit integration: ${integration.id}` : "New integration";
+  const deleteBtn = document.getElementById("integration-delete-btn");
+  deleteBtn.hidden = !integration;
+  deleteBtn.onclick = () => deleteIntegration(EDITING_INTEGRATION_ID);
+  showError("integration-form-error", "");
   document.getElementById("test-raw-output").textContent = "—";
   document.getElementById("test-mapped-output").textContent = "—";
   document.getElementById("test-raw-query").value = "";
@@ -1724,69 +1870,69 @@ function openEndpointEditor(endpointId) {
   HAS_RAW_SAMPLE = false;
   refreshJsonTree();
 
-  const form = document.getElementById("endpoint-form");
-  form.id.value = endpoint?.id || "";
+  const form = document.getElementById("integration-form");
+  form.id.value = integration?.id || "";
   form.id.disabled = false; // renaming is allowed; the registry moves the file
-  populateSelect(form.method, META.methods);
-  form.method.value = endpoint?.method || "GET";
-  form.description.value = endpoint?.description || "";
+  form.description.value = integration?.description || "";
 
   populateSelect(form.backendGateway, Object.keys(GATEWAYS), { includeBlank: true, blankLabel: "(none) -- call a URL directly" });
-  form.backendGateway.value = endpoint?.backend?.gateway || "";
+  form.backendGateway.value = integration?.backend?.gateway || "";
 
   populateSelect(form.backendType, META.backendTypes);
-  form.backendType.value = endpoint?.backend?.type || "json";
-  renderBackendFields(form.backendType.value, endpoint?.backend);
-  form.backendType.onchange = () => { renderBackendFields(form.backendType.value, {}); recomputeAutoPath(); refreshSectionCounts(); };
+  form.backendType.value = integration?.backend?.type || "json";
+  renderBackendFields(form.backendType.value, integration?.backend);
+  form.backendType.onchange = () => {
+    renderBackendFields(form.backendType.value, {});
+    refreshSectionCounts();
+  };
   applyGatewayInferredType(); // locks Type to the gateway's kind when one's already selected, above
-
-  // Path: a brand-new endpoint defaults to auto-generating from gateway +
-  // endpoint id. An existing endpoint stays in auto mode (with its extra
-  // suffix split back out) only if its saved path actually matches that
-  // pattern -- otherwise it was written by hand (or predates this feature)
-  // and we leave it alone rather than silently rewriting it.
-  const base = endpoint ? computeAutoBasePath(form.backendGateway.value, form.backendType.value, endpoint.id) : null;
-  if (endpoint && base && endpoint.path.startsWith(base)) {
-    form.extraPath.value = endpoint.path.slice(base.length);
-    setPathAutoMode(true);
-  } else {
-    form.path.value = endpoint?.path || "";
-    form.extraPath.value = "";
-    setPathAutoMode(!endpoint);
-  }
 
   const inputList = document.getElementById("input-params-list");
   inputList.innerHTML = "";
-  for (const p of endpoint?.input || []) inputList.appendChild(inputParamRow(p));
+  for (const p of integration?.input || []) inputList.appendChild(inputParamRow(p));
 
   const outputList = document.getElementById("output-fields-list");
   outputList.innerHTML = "";
-  for (const f of endpoint?.output?.fields || []) outputList.appendChild(outputFieldRow(f));
+  for (const f of integration?.output?.fields || []) outputList.appendChild(outputFieldRow(f));
 
   const postProcessContainer = document.getElementById("output-postprocess-container");
   postProcessContainer.innerHTML = "";
-  const postProcessPicker = buildFunctionPicker(endpoint?.output?.postProcess?.name || "");
+  const postProcessPicker = buildFunctionPicker(integration?.output?.postProcess?.name || "");
   postProcessContainer._picker = postProcessPicker;
   postProcessContainer.appendChild(postProcessPicker.wrapper);
 
-  switchEndpointTab("basic"); // always open on the same tab, regardless of what was showing last time
+  // Which Routes (across every App) point at this Integration -- surfaced
+  // read-only here since deleting or renaming it affects every one of them.
+  const usedByEl = document.getElementById("integration-used-by");
+  if (integration) {
+    const usages = APPS.flatMap((a) =>
+      (a.routes || []).filter((r) => r.integration === integration.id).map((r) => `${a.id}: ${r.method} ${r.path}`)
+    );
+    usedByEl.textContent = usages.length
+      ? `Used by ${usages.length} route${usages.length === 1 ? "" : "s"}: ${usages.join(", ")}`
+      : "Not used by any route yet.";
+  } else {
+    usedByEl.textContent = "";
+  }
+
+  switchIntegrationTab("basic"); // always open on the same tab, regardless of what was showing last time
 
   syncTestParams(); // also calls refreshSectionCounts()
 
-  // Generated table-CRUD endpoints (list/bulkCreate/bulkUpdate/bulkDelete)
+  // Generated table-CRUD integrations (list/bulkCreate/bulkUpdate/bulkDelete)
   // read straight from the raw query string / JSON body rather than
   // declared `input` params -- the Try it panel has no fields for the
   // latter by default, so swap in a raw query-params or request-body
   // textarea (whichever this operation actually reads) instead of leaving
-  // it looking broken. A generated stored-procedure endpoint isn't
+  // it looking broken. A generated stored-procedure integration isn't
   // affected: its params ARE declared `input` (in: "body"), so it works
   // fine with the normal per-parameter fields above.
-  const isBulkTableEndpoint = Boolean(endpoint?.backend?.type === "sql" && endpoint?.backend?.table);
+  const isBulkTableEndpoint = Boolean(integration?.backend?.type === "sql" && integration?.backend?.table);
   document.getElementById("tryit-bulk-note").hidden = !isBulkTableEndpoint;
   const rawQueryRow = document.getElementById("test-raw-query-row");
   const rawBodyRow = document.getElementById("test-raw-body-row");
   if (isBulkTableEndpoint) {
-    const op = endpoint.backend.operation;
+    const op = integration.backend.operation;
     rawQueryRow.hidden = op !== "list";
     rawBodyRow.hidden = op === "list";
     document.getElementById("test-raw-body").placeholder =
@@ -1800,12 +1946,13 @@ function openEndpointEditor(endpointId) {
     rawBodyRow.hidden = true;
   }
 
-  showDetailView("endpoint");
+  showDetailView("integration");
+  renderBreadcrumb();
   document.getElementById("detail-panel").scrollTop = 0;
 }
 
-function readEndpointForm() {
-  const form = document.getElementById("endpoint-form");
+function readIntegrationForm() {
+  const form = document.getElementById("integration-form");
   const input = [...document.getElementById("input-params-list").children].map((r) => r._read()).filter((p) => p.name);
   const fields = [...document.getElementById("output-fields-list").children].map((r) => r._read()).filter(isValidOutputFieldRead);
 
@@ -1820,43 +1967,41 @@ function readEndpointForm() {
   return {
     id: form.id.value.trim(),
     description: form.description.value.trim() || undefined,
-    method: form.method.value,
-    path: form.path.value.trim(),
     input,
     backend,
     output,
   };
 }
 
-async function saveEndpoint(ev) {
+async function saveIntegration(ev) {
   ev.preventDefault();
-  showError("endpoint-form-error", "");
-  let endpoint;
+  showError("integration-form-error", "");
+  let integration;
   try {
-    endpoint = readEndpointForm();
+    integration = readIntegrationForm();
   } catch (err) {
-    showError("endpoint-form-error", "Couldn't read the form: " + err.message);
+    showError("integration-form-error", "Couldn't read the form: " + err.message);
     return;
   }
   try {
-    if (EDITING_ENDPOINT_ID) {
-      await api("PUT", `/console/api/endpoints/${encodeURIComponent(EDITING_ENDPOINT_ID)}`, endpoint);
+    if (EDITING_INTEGRATION_ID) {
+      await api("PUT", `/console/api/integrations/${encodeURIComponent(EDITING_INTEGRATION_ID)}`, integration);
     } else {
-      await api("POST", "/console/api/endpoints", endpoint);
+      await api("POST", "/console/api/integrations", integration);
     }
-    toast(`Saved endpoint "${endpoint.id}" — it's live now.`);
+    toast(`Saved integration "${integration.id}" — it's live now.`);
     await loadAll();
-    openEndpointEditor(endpoint.id); // stay in the panel, now showing it as a saved endpoint
+    openIntegrationEditor(integration.id); // stay in the panel, now showing it as a saved integration
   } catch (err) {
-    showError("endpoint-form-error", err.message);
+    showError("integration-form-error", err.message);
   }
 }
 
 async function fetchSample() {
-  showError("endpoint-form-error", "");
+  showError("integration-form-error", "");
   try {
     const backend = document.getElementById("backend-fields")._read();
-    const form = document.getElementById("endpoint-form");
+    const form = document.getElementById("integration-form");
     if (form.backendGateway.value) backend.gateway = form.backendGateway.value;
     const input = [...document.getElementById("input-params-list").children].map((r) => r._read()).filter((p) => p.name);
     const params = {};
@@ -1891,7 +2036,7 @@ async function fetchSample() {
     await applyMappingToSample();
   } catch (err) {
     document.getElementById("test-raw-output").textContent = "Error: " + err.message;
-    showError("endpoint-form-error", err.message);
+    showError("integration-form-error", err.message);
   }
 }
 
@@ -1966,6 +2111,9 @@ function renderGatewayKindFields(kind, gw) {
     // introspects the version on disk, so a brand-new draft has nothing to
     // introspect yet (save first, then reopen to generate).
     if (EDITING_GATEWAY_NAME) {
+      const appSelect = el("select", { id: "gateway-crud-app-select" }, []);
+      populateSelect(appSelect, APPS.map((a) => a.id));
+      if (APPS.length > 0) appSelect.value = APPS[0].id;
       const generateResult = el("p", { id: "gateway-generate-result", class: "test-result" }, []);
       generateResult.hidden = true;
       const generateBtn = el(
@@ -1977,13 +2125,16 @@ function renderGatewayKindFields(kind, gw) {
         el("div", { class: "editor-section" }, [
           el("div", { class: "section-header" }, [el("h4", {}, ["Auto-generate endpoints for this gateway"])]),
           el("p", { class: "muted" }, [
-            "Creates list / bulk-create / bulk-update / bulk-delete endpoints for every table " +
-              "(a table with no primary key only gets list/create), plus one endpoint per stored " +
-              "procedure where this database supports them. Never overwrites an existing endpoint -- " +
-              "a conflicting id or path is skipped and reported, so this is safe to run again later " +
+            "Creates one Integration + Route (list / bulk-create / bulk-update / bulk-delete) for every table " +
+              "(a table with no primary key only gets list/create), plus one Integration + Route per stored " +
+              "procedure where this database supports them. Never overwrites an existing Integration or Route -- " +
+              "a conflicting id is skipped and reported, so this is safe to run again later " +
               "(e.g. after adding a table). Uses the currently SAVED version of this gateway, so " +
               "save any pending edits above first.",
           ]),
+          APPS.length > 0
+            ? el("label", { class: "block" }, [fieldTitle("Add routes to App "), appSelect])
+            : el("p", { class: "error-text" }, ["Create an App first — the generated routes need somewhere to live."]),
           el("div", { class: "test-actions" }, [generateBtn]),
           generateResult,
         ])
@@ -2001,6 +2152,14 @@ function renderGatewayKindFields(kind, gw) {
 
 async function generateCrudEndpoints() {
   const resultEl = document.getElementById("gateway-generate-result");
+  const appSelect = document.getElementById("gateway-crud-app-select");
+  const appId = appSelect ? appSelect.value : "";
+  if (!appId) {
+    resultEl.hidden = false;
+    resultEl.className = "test-result test-result-error";
+    resultEl.textContent = "✕ Create an App first — the generated routes need somewhere to live.";
+    return;
+  }
   resultEl.hidden = false;
   resultEl.className = "test-result";
   resultEl.textContent = "Introspecting and generating…";
@@ -2008,16 +2167,16 @@ async function generateCrudEndpoints() {
     const summary = await api(
       "POST",
       `/console/api/gateways/${encodeURIComponent(EDITING_GATEWAY_NAME)}/generate-crud`,
-      {}
+      { appId }
     );
     const lines = [
-      `${summary.tablesFound} table(s) found -- ${summary.created.length} endpoint(s) created, ${summary.skipped.length} skipped.`,
+      `${summary.tablesFound} table(s) found -- ${summary.created.length} integration(s)+route(s) created in app "${summary.app}", ${summary.skipped.length} skipped.`,
       summary.proceduresSupported
         ? `${summary.proceduresFound} stored procedure(s) found.`
         : "This database client doesn't support stored procedures.",
     ];
     if (summary.created.length > 0) {
-      lines.push("Created: " + summary.created.map((r) => `${r.method} ${r.path}`).join(", "));
+      lines.push("Created: " + summary.created.map((r) => `${r.method} ${r.path} (${r.id})`).join(", "));
     }
     if (summary.skipped.length > 0) {
       lines.push("Skipped: " + summary.skipped.map((s) => `${s.name} (${s.reason})`).join("; "));
@@ -2031,7 +2190,7 @@ async function generateCrudEndpoints() {
 
     if (summary.created.length > 0) {
       await loadAll();
-      toast(`Generated ${summary.created.length} endpoint(s) for "${EDITING_GATEWAY_NAME}" — see the Endpoints list.`);
+      toast(`Generated ${summary.created.length} integration(s)+route(s) for "${EDITING_GATEWAY_NAME}" in app "${summary.app}".`);
     }
   } catch (err) {
     resultEl.classList.add("test-result-error");
@@ -2095,6 +2254,7 @@ async function testAuthProviderLogin() {
 function openGatewayEditor(name) {
   closeInfoPopup();
   EDITING_GATEWAY_NAME = name || null;
+  CURRENT_VIEW = { type: "shared", key: "gateways", item: name || null };
   const gw = name ? GATEWAYS[name] : null;
   document.getElementById("gateway-editor-title").textContent = gw ? `Edit gateway: ${name}` : "New gateway";
   const deleteBtn = document.getElementById("gateway-delete-btn");
@@ -2118,6 +2278,7 @@ function openGatewayEditor(name) {
   renderKeyValueEditor(commonParamsList, gw?.commonParams, { maskable: true, maskedKeys: gw?.commonParamsMasked || [] });
 
   showDetailView("gateway");
+  renderBreadcrumb();
   document.getElementById("detail-panel").scrollTop = 0;
 }
 
@@ -2427,6 +2588,7 @@ function resetAuthProviderTestPanel() {
 function openAuthProviderEditor(name) {
   closeInfoPopup();
   EDITING_AUTH_PROVIDER_NAME = name || null;
+  CURRENT_VIEW = { type: "shared", key: "authProviders", item: name || null };
   const provider = name ? AUTH_PROVIDERS[name] : null;
   document.getElementById("auth-provider-editor-title").textContent = provider ? `Edit auth provider: ${name}` : "New auth provider";
   const deleteBtn = document.getElementById("auth-provider-delete-btn");
@@ -2448,6 +2610,7 @@ function openAuthProviderEditor(name) {
   resetAuthProviderTestPanel();
 
   showDetailView("authProvider");
+  renderBreadcrumb();
   document.getElementById("detail-panel").scrollTop = 0;
 }
 
@@ -2478,6 +2641,372 @@ function closeDrawer(id) {
   document.getElementById(id).hidden = true;
 }
 
+/* ---------------------------------------------------------------------
+ * App editor + its embedded Routes table
+ * ------------------------------------------------------------------- */
+function renderAppRoutesTable(routes) {
+  const listEl = document.getElementById("app-routes-list");
+  const emptyEl = document.getElementById("app-routes-empty");
+  listEl.innerHTML = "";
+  emptyEl.hidden = routes.length > 0;
+  for (const route of routes) {
+    const integration = INTEGRATIONS.find((i) => i.id === route.integration);
+    const pill = el(
+      "button",
+      {
+        type: "button",
+        class: "integration-pill" + (integration ? "" : " broken"),
+        title: integration ? `Open "${route.integration}" in Shared Collection` : `Integration "${route.integration}" not found`,
+        onclick: () => openIntegrationFromPill(route.integration),
+      },
+      [route.integration + (integration ? "" : " ⚠")]
+    );
+    const editBtn = el(
+      "button",
+      { type: "button", class: "icon-btn", title: "Edit route", "aria-label": "Edit route", onclick: () => openRouteEditor(EDITING_APP_ID, route) },
+      ["✎"]
+    );
+    const deleteBtn = el(
+      "button",
+      { type: "button", class: "icon-btn", title: "Delete route", "aria-label": "Delete route", onclick: () => deleteRoute(EDITING_APP_ID, route.id) },
+      ["✕"]
+    );
+    // Column order matches the validated mockup: Method, Path, Description,
+    // Integration pill last -- then this app's own Edit/Delete actions,
+    // which the mockup (a read-only demo) never needed to show.
+    const row = el("div", { class: "route-row" }, [
+      el("span", { class: "route-row-method " + route.method }, [route.method]),
+      el("span", { class: "route-row-path" }, [route.path]),
+      el("span", { class: "route-row-desc" }, [route.description || ""]),
+      pill,
+      el("div", { class: "route-row-actions" }, [editBtn, deleteBtn]),
+    ]);
+    listEl.appendChild(row);
+  }
+}
+
+/** Switches the App editor's Settings/Routes/Export tabs -- same
+ * show/hide-only mechanics as switchIntegrationTab(), just without the
+ * "jump to the tab with the first invalid field" wiring (the only
+ * required fields live on Settings, which is always reachable). */
+function switchAppTab(tab) {
+  for (const btn of document.querySelectorAll("#app-tabs .editor-tab-btn")) {
+    btn.classList.toggle("active", btn.dataset.appTab === tab);
+  }
+  for (const panel of document.querySelectorAll(".app-tab-panel")) {
+    panel.hidden = panel.dataset.appTabPanel !== tab;
+  }
+}
+
+function initAppTabs() {
+  for (const btn of document.querySelectorAll("#app-tabs .editor-tab-btn")) {
+    btn.addEventListener("click", () => {
+      if (!btn.disabled) switchAppTab(btn.dataset.appTab);
+    });
+  }
+}
+
+function openAppEditor(id) {
+  closeInfoPopup();
+  EDITING_APP_ID = id || null;
+  CURRENT_VIEW = { type: "app", key: id || null };
+  const app = id ? APPS.find((a) => a.id === id) : null;
+  CURRENT_APP_ROUTES = app ? [...(app.routes || [])] : [];
+
+  document.getElementById("app-editor-title").textContent = app ? `Edit app: ${app.id}` : "New app";
+  const deleteBtn = document.getElementById("app-delete-btn");
+  deleteBtn.hidden = !app;
+  deleteBtn.onclick = () => deleteApp(EDITING_APP_ID);
+  showError("app-form-error", "");
+
+  const form = document.getElementById("app-form");
+  form.id.value = app?.id || "";
+  form.id.disabled = Boolean(app); // renaming would orphan this app's file AND any deployment.yaml mount referencing its old id -- delete+recreate instead
+  form.name.value = app?.name || "";
+
+  // Routes/Export only make sense once the App exists (Routes needs an
+  // appId to POST into; Export needs real routes to describe) -- a
+  // brand-new, unsaved App only ever shows Settings.
+  const routesTabBtn = document.getElementById("app-tab-routes-btn");
+  const exportTabBtn = document.getElementById("app-tab-export-btn");
+  routesTabBtn.disabled = !app;
+  exportTabBtn.disabled = !app;
+  document.getElementById("count-app-routes").textContent = app ? `(${CURRENT_APP_ROUTES.length})` : "";
+  if (app) {
+    renderAppRoutesTable(CURRENT_APP_ROUTES);
+    document.getElementById("app-mount-note").textContent =
+      "To expose these routes, make sure this App's id appears under `mounts` in deployment.yaml (hand-edited on this machine, not shown here).";
+    document.getElementById("app-export-openapi-desc").textContent =
+      `Covers only this app's own ${CURRENT_APP_ROUTES.length} route${CURRENT_APP_ROUTES.length === 1 ? "" : "s"} (whether or not it's currently mounted).`;
+    document.getElementById("download-openapi-btn").onclick = async () => {
+      try {
+        await downloadFile(`/console/api/apps/${encodeURIComponent(app.id)}/export/openapi.json`, `naimix-${app.id}-openapi.json`);
+        toast(`OpenAPI spec for "${app.id}" downloaded`);
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+    document.getElementById("download-mcp-server-btn").onclick = async () => {
+      try {
+        await downloadFile("/console/api/export/mcp-server", "naimix-mcp-server.js");
+        toast("MCP server downloaded");
+      } catch (err) {
+        toast(err.message, true);
+      }
+    };
+  }
+  switchAppTab("settings"); // always open on Settings, regardless of what was showing last time
+
+  showDetailView("app");
+  renderBreadcrumb();
+  document.getElementById("detail-panel").scrollTop = 0;
+}
+
+function readAppForm() {
+  const form = document.getElementById("app-form");
+  return {
+    id: form.id.value.trim(),
+    name: form.name.value.trim(),
+    // PUT /apps/:id replaces the whole App, so its routes have to be
+    // resent along with id/name even though this form has no field for
+    // them directly -- CURRENT_APP_ROUTES is kept in sync by
+    // openRouteEditor/saveRoute/deleteRoute as the source of truth while
+    // this editor is open.
+    routes: CURRENT_APP_ROUTES,
+  };
+}
+
+async function saveApp(ev) {
+  ev.preventDefault();
+  showError("app-form-error", "");
+  let app;
+  try {
+    app = readAppForm();
+  } catch (err) {
+    showError("app-form-error", "Couldn't read the form: " + err.message);
+    return;
+  }
+  const wasNew = !EDITING_APP_ID;
+  try {
+    if (EDITING_APP_ID) {
+      await api("PUT", `/console/api/apps/${encodeURIComponent(EDITING_APP_ID)}`, app);
+    } else {
+      await api("POST", "/console/api/apps", app);
+    }
+    toast(`Saved app "${app.id}"`);
+    await loadAll();
+    openAppEditor(app.id); // stay in the panel, now showing it as a saved app (and its Routes/Export tabs, now enabled)
+    // A brand-new App has nothing to configure on Settings beyond what was
+    // just entered -- land straight on Routes so adding the first one is
+    // the obvious next step, matching the mockup's "Created X. Add its
+    // first route below." flow.
+    if (wasNew) switchAppTab("routes");
+  } catch (err) {
+    showError("app-form-error", err.message);
+  }
+}
+
+/* ---------------------------------------------------------------------
+ * Route editor drawer -- the 2-step add/edit flow: pick an Integration
+ * (step 1), then fill in method/path/description (step 2), plus a
+ * Route-level "Try it" tester once the route is actually saved (it needs
+ * a real appId+routeId to call POST /apps/:appId/routes/:routeId/test).
+ * ------------------------------------------------------------------- */
+function renderChosenIntegrationCard(integrationId) {
+  const card = document.getElementById("route-chosen-integration-card");
+  const integration = INTEGRATIONS.find((i) => i.id === integrationId);
+  card.innerHTML = "";
+  card.appendChild(el("div", { class: "integration-card-id" }, [integration ? integrationId : `${integrationId} ⚠ (not found)`]));
+  if (integration?.description) card.appendChild(el("div", { class: "integration-card-desc" }, [integration.description]));
+}
+
+function showRouteStepDetails(integrationId) {
+  ROUTE_EDITOR_STATE.integrationId = integrationId;
+  renderChosenIntegrationCard(integrationId);
+  document.getElementById("route-step-pick-integration").hidden = true;
+  document.getElementById("route-step-details").hidden = false;
+}
+
+function renderIntegrationCards(searchTerm) {
+  const container = document.getElementById("route-integration-cards");
+  const emptyEl = document.getElementById("route-integration-cards-empty");
+  const term = (searchTerm || "").trim().toLowerCase();
+  const matches = INTEGRATIONS.filter(
+    (i) => !term || i.id.toLowerCase().includes(term) || (i.description || "").toLowerCase().includes(term)
+  ).sort((a, b) => a.id.localeCompare(b.id));
+  container.innerHTML = "";
+  emptyEl.hidden = matches.length > 0;
+  emptyEl.textContent = term
+    ? `No integrations match "${searchTerm}".`
+    : "No integrations yet -- create one in the Shared Collection first.";
+  for (const integration of matches) {
+    // "View in Shared Collection" jumps there (closing this modal) without
+    // picking the integration -- matches the mockup's picker cards, which
+    // let you double-check an Integration's definition before committing
+    // to it for this Route. stopPropagation keeps that click from also
+    // firing the card's own onclick (choose this integration).
+    const viewLink = el(
+      "a",
+      {
+        href: "javascript:void(0)",
+        class: "viewlink",
+        onclick: (ev) => {
+          ev.stopPropagation();
+          closeDrawer("route-editor");
+          showSharedCatalog("integrations", integration.id);
+        },
+      },
+      ["View in Shared Collection ↗"]
+    );
+    const card = el(
+      "div",
+      { class: "integration-card", onclick: () => chooseIntegrationForRoute(integration.id) },
+      [
+        el("div", { class: "integration-card-row1" }, [el("span", { class: "integration-card-id" }, [integration.id]), viewLink]),
+        integration.description ? el("div", { class: "integration-card-desc" }, [integration.description]) : null,
+      ]
+    );
+    container.appendChild(card);
+  }
+}
+
+function chooseIntegrationForRoute(integrationId) {
+  showRouteStepDetails(integrationId);
+  const form = document.getElementById("route-form");
+  // Only pre-fill id/method/path when adding a brand-new route (no routeId
+  // yet) -- swapping the Integration on an already-saved route leaves its
+  // own id/method/path exactly as they were.
+  if (!ROUTE_EDITOR_STATE.routeId) {
+    form.id.value = integrationId;
+    form.path.value = "";
+    form.description.value = "";
+  }
+  document.getElementById("route-tryit-section").hidden = true;
+}
+
+/** Only meaningful for an already-saved route (needs a real appId+routeId
+ * to call the test endpoint) -- builds one plain value input per the
+ * chosen Integration's declared input parameters. */
+function setupRouteTryIt(route) {
+  const section = document.getElementById("route-tryit-section");
+  const integration = INTEGRATIONS.find((i) => i.id === route.integration);
+  const paramsList = document.getElementById("route-test-params-list");
+  paramsList.innerHTML = "";
+  for (const p of integration?.input || []) {
+    const valueInput = el("input", { placeholder: `value for ${p.name}` });
+    const row = el("div", { class: "repeatable-row" }, [el("label", {}, [p.name, valueInput])]);
+    row._paramName = p.name;
+    row._valueInput = valueInput;
+    paramsList.appendChild(row);
+  }
+  document.getElementById("route-test-raw-output").textContent = "—";
+  document.getElementById("route-test-mapped-output").textContent = "—";
+  section.hidden = false;
+}
+
+function openRouteEditor(appId, route) {
+  closeInfoPopup();
+  ROUTE_EDITOR_STATE = { appId, routeId: route?.id || null, integrationId: route?.integration || null };
+  document.getElementById("route-editor-title").textContent = route ? `Edit route: ${route.id}` : "Add route";
+  showError("route-form-error", "");
+
+  const form = document.getElementById("route-form");
+  populateSelect(form.method, META.methods);
+
+  if (route) {
+    showRouteStepDetails(route.integration);
+    form.id.value = route.id;
+    form.id.disabled = false; // renaming is allowed; the registry just rewrites the App's own file
+    form.method.value = route.method;
+    form.path.value = route.path;
+    form.description.value = route.description || "";
+    setupRouteTryIt(route);
+  } else {
+    document.getElementById("route-step-pick-integration").hidden = false;
+    document.getElementById("route-step-details").hidden = true;
+    document.getElementById("route-tryit-section").hidden = true;
+    form.id.value = "";
+    form.id.disabled = false;
+    form.method.value = "GET";
+    form.path.value = "";
+    form.description.value = "";
+  }
+  document.getElementById("route-integration-search").value = "";
+  renderIntegrationCards("");
+
+  document.getElementById("route-editor").hidden = false;
+}
+
+async function saveRoute(ev) {
+  ev.preventDefault();
+  showError("route-form-error", "");
+  const { appId, routeId, integrationId } = ROUTE_EDITOR_STATE;
+  if (!integrationId) {
+    showError("route-form-error", "Pick an Integration first.");
+    return;
+  }
+  const form = document.getElementById("route-form");
+  const route = {
+    id: form.id.value.trim(),
+    method: form.method.value,
+    path: form.path.value.trim(),
+    description: form.description.value.trim() || undefined,
+    integration: integrationId,
+  };
+  try {
+    if (routeId) {
+      await api("PUT", `/console/api/apps/${encodeURIComponent(appId)}/routes/${encodeURIComponent(routeId)}`, route);
+    } else {
+      await api("POST", `/console/api/apps/${encodeURIComponent(appId)}/routes`, route);
+    }
+    toast(`Saved route "${route.id}"`);
+    closeDrawer("route-editor");
+    await loadAll();
+    openAppEditor(appId); // stay on the app, now showing the saved route in its table
+    switchAppTab("routes");
+  } catch (err) {
+    showError("route-form-error", err.message);
+  }
+}
+
+async function deleteRoute(appId, routeId) {
+  if (!confirm(`Delete route "${routeId}" from app "${appId}"? This does not delete its Integration.`)) return;
+  try {
+    await api("DELETE", `/console/api/apps/${encodeURIComponent(appId)}/routes/${encodeURIComponent(routeId)}`);
+    toast(`Deleted route "${routeId}"`);
+    await loadAll();
+    openAppEditor(appId); // stay on the app, refreshed
+    switchAppTab("routes");
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function fetchRouteSample() {
+  const { appId, routeId } = ROUTE_EDITOR_STATE;
+  showError("route-form-error", "");
+  if (!appId || !routeId) {
+    showError("route-form-error", "Save this route first — Try it needs a saved route to call.");
+    return;
+  }
+  try {
+    const params = {};
+    for (const row of document.getElementById("route-test-params-list").children) {
+      if (row._valueInput.value !== "") params[row._paramName] = row._valueInput.value;
+    }
+    const { raw, mapped } = await api(
+      "POST",
+      `/console/api/apps/${encodeURIComponent(appId)}/routes/${encodeURIComponent(routeId)}/test`,
+      { params }
+    );
+    document.getElementById("route-test-raw-output").textContent = JSON.stringify(raw, null, 2);
+    document.getElementById("route-test-mapped-output").textContent = JSON.stringify(mapped, null, 2);
+  } catch (err) {
+    document.getElementById("route-test-raw-output").textContent = "Error: " + err.message;
+    showError("route-form-error", err.message);
+  }
+}
+
 document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("login-form").addEventListener("submit", async (ev) => {
     ev.preventDefault();
@@ -2496,14 +3025,20 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("reload-btn").addEventListener("click", async () => {
     try {
       const result = await api("POST", "/console/api/reload");
+      const integrationErrors = result.integrationErrors || [];
+      const appErrors = result.appErrors || [];
       const functionErrors = result.functionErrors || [];
-      const parts = [`${result.endpointCount} endpoint(s)`];
-      if (result.errors.length) parts.push(`${result.errors.length} endpoint error(s)`);
+      const mountErrors = result.mountErrors || [];
+      const parts = [`${result.integrationCount} integration(s)`, `${result.appCount} app(s)`, `${result.routeCount} route(s)`];
+      if (integrationErrors.length) parts.push(`${integrationErrors.length} integration error(s)`);
+      if (appErrors.length) parts.push(`${appErrors.length} app error(s)`);
       if (functionErrors.length) parts.push(`${functionErrors.length} function error(s)`);
-      toast(`Reloaded — ${parts.join(", ")}`, result.errors.length > 0 || functionErrors.length > 0);
+      if (mountErrors.length) parts.push(`${mountErrors.length} mount error(s)`);
+      const hasError = integrationErrors.length > 0 || appErrors.length > 0 || functionErrors.length > 0 || mountErrors.length > 0;
+      toast(`Reloaded — ${parts.join(", ")}`, hasError);
       await loadAll();
       // loadAll() only re-renders the sidebar lists -- an already-open
-      // endpoint editor's function picker(s) fetched their dropdown
+      // integration editor's function picker(s) fetched their dropdown
       // options once, when that editor/row was mounted, and won't see
       // what Reload just (re)loaded on their own.
       document.querySelectorAll(".function-picker").forEach((w) => {
@@ -2514,12 +3049,16 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   });
 
-  document.getElementById("new-endpoint-btn").addEventListener("click", () => openEndpointEditor(null));
-  document.getElementById("new-gateway-btn").addEventListener("click", () => openGatewayEditor(null));
-  document.getElementById("new-auth-provider-btn").addEventListener("click", () => openAuthProviderEditor(null));
-  document.getElementById("endpoint-close-btn").addEventListener("click", closeDetail);
-  document.getElementById("gateway-close-btn").addEventListener("click", closeDetail);
-  document.getElementById("auth-provider-close-btn").addEventListener("click", closeDetail);
+  // "+ New" for an individual Auth Provider/Gateway/Integration is now
+  // the catalog table's own "+ Add" button (wired per-category inside
+  // showSharedCatalog()), not a static sidebar listener -- there's no
+  // single #new-integration-btn/#new-gateway-btn/#new-auth-provider-btn
+  // anymore. Apps keep a quick inline create right in the sidebar instead.
+  wireNewAppInline();
+  document.getElementById("integration-close-btn").addEventListener("click", () => backToSharedCatalog("integrations"));
+  document.getElementById("gateway-close-btn").addEventListener("click", () => backToSharedCatalog("gateways"));
+  document.getElementById("auth-provider-close-btn").addEventListener("click", () => backToSharedCatalog("authProviders"));
+  document.getElementById("app-close-btn").addEventListener("click", closeDetail);
   document.getElementById("session-close-btn").addEventListener("click", closeDetail);
   document.getElementById("refresh-sessions-btn").addEventListener("click", async () => {
     await refreshSessions();
@@ -2528,37 +3067,25 @@ document.addEventListener("DOMContentLoaded", () => {
   document.getElementById("change-workspace-btn").addEventListener("click", () => openWorkspaceEditor(CURRENT_SETTINGS.configDir));
   document.getElementById("workspace-form").addEventListener("submit", saveWorkspace);
   document.getElementById("browse-workspace-btn").addEventListener("click", browseWorkspace);
-  document.getElementById("download-openapi-btn").addEventListener("click", async () => {
-    try {
-      await downloadFile("/console/api/export/openapi.json", "naimix-openapi.json");
-      toast("OpenAPI spec downloaded");
-    } catch (err) {
-      toast(err.message, true);
-    }
-  });
-  document.getElementById("download-mcp-server-btn").addEventListener("click", async () => {
-    try {
-      await downloadFile("/console/api/export/mcp-server", "naimix-mcp-server.js");
-      toast("MCP server downloaded");
-    } catch (err) {
-      toast(err.message, true);
-    }
-  });
+  // download-openapi-btn/download-mcp-server-btn now live inside each
+  // App's own Export tab -- openAppEditor() assigns their .onclick fresh
+  // every time it opens (scoped to that app's id), so there's no global
+  // listener for them here anymore.
 
   for (const closer of document.querySelectorAll("[data-close]")) {
     closer.addEventListener("click", () => closeDrawer(closer.dataset.close));
   }
 
-  const endpointForm = document.getElementById("endpoint-form");
-  endpointForm.pathAuto.addEventListener("change", (ev) => setPathAutoMode(ev.target.checked));
-  endpointForm.id.addEventListener("input", recomputeAutoPath);
-  endpointForm.extraPath.addEventListener("input", recomputeAutoPath);
-  endpointForm.backendGateway.addEventListener("change", () => {
+  // Integrations no longer have a method/path of their own (that's a
+  // Route's job now -- see the Apps section), so there's no more
+  // auto-path wiring here: just Gateway -> inferred backend Type.
+  const integrationForm = document.getElementById("integration-form");
+  integrationForm.backendGateway.addEventListener("change", () => {
     applyGatewayInferredType();
-    recomputeAutoPath();
     refreshSectionCounts();
   });
-  initEndpointTabs();
+  initIntegrationTabs();
+  initAppTabs();
   initInfoIcons();
   document.getElementById("view-gateway-btn").addEventListener("click", (ev) => openGatewayPreview(ev.currentTarget));
 
@@ -2578,12 +3105,25 @@ document.addEventListener("DOMContentLoaded", () => {
     document.getElementById("gateway-common-params-list")._addRow("", "");
   });
 
-  document.getElementById("endpoint-form").addEventListener("submit", saveEndpoint);
+  document.getElementById("integration-form").addEventListener("submit", saveIntegration);
+  document.getElementById("app-form").addEventListener("submit", saveApp);
   document.getElementById("gateway-form").addEventListener("submit", saveGateway);
   document.getElementById("auth-provider-form").addEventListener("submit", saveAuthProvider);
   document.getElementById("auth-provider-test-btn").addEventListener("click", testAuthProviderLogin);
   document.getElementById("fetch-sample-btn").addEventListener("click", fetchSample);
   document.getElementById("apply-mapping-btn").addEventListener("click", applyMappingToSample);
+
+  // App's embedded Routes table + the Route editor drawer.
+  document.getElementById("add-route-btn").addEventListener("click", () => openRouteEditor(EDITING_APP_ID, null));
+  document.getElementById("route-form").addEventListener("submit", saveRoute);
+  document.getElementById("route-fetch-sample-btn").addEventListener("click", fetchRouteSample);
+  document.getElementById("route-integration-search").addEventListener("input", (ev) => renderIntegrationCards(ev.target.value));
+  document.getElementById("route-change-integration-btn").addEventListener("click", () => {
+    document.getElementById("route-step-pick-integration").hidden = false;
+    document.getElementById("route-step-details").hidden = true;
+    document.getElementById("route-integration-search").value = "";
+    renderIntegrationCards("");
+  });
 
   const savedToken = localStorage.getItem("naimix-console-token");
   if (savedToken) {

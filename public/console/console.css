@@ -133,15 +133,18 @@ code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-si
 .brand { font-weight: 600; flex: 1; }
 .topbar-actions { display: flex; align-items: center; gap: 8px; }
 
-.workspace-bar {
-  display: flex; align-items: center; gap: 10px; padding: 8px 20px; flex: 0 0 auto;
-  background: var(--code-bg); border-bottom: 1px solid var(--border); font-size: 12px;
+.breadcrumb-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 20px; flex: 0 0 auto;
+  background: var(--surface); border-bottom: 1px solid var(--border); font-size: 13px;
 }
-.workspace-label { color: var(--muted); font-weight: 600; text-transform: uppercase; font-size: 11px; letter-spacing: 0.03em; }
-.workspace-path {
-  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+.breadcrumb { display: flex; align-items: center; gap: 7px; color: var(--muted); min-width: 0; flex-wrap: wrap; }
+.breadcrumb b { color: var(--text); font-weight: 600; }
+.breadcrumb-sep { color: var(--border-strong); }
+.breadcrumb-bar-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.workspace-chip {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; color: var(--muted);
+  background: var(--code-bg); border: 1px solid var(--border); padding: 4px 10px; border-radius: 999px; white-space: nowrap;
 }
-.workspace-bar .btn-sm { flex-shrink: 0; }
 
 .main-layout { flex: 1 1 auto; display: flex; min-height: 0; }
 
@@ -494,3 +497,216 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
   margin: 8px 0 8px 18px; padding-left: 10px; border-left: 2px solid var(--border);
 }
 .array-field-footer { display: flex; gap: 8px; margin-left: 18px; }
+
+/* ------------------------------------------------------------------
+ * Workspace/Apps redesign -- see WORKSPACE_APPS_DESIGN_NOTES.md.
+ * Shared Collection (Auth providers/Gateways/Integrations) gets an
+ * indigo accent, Apps gets a teal accent -- validated in the mockup
+ * before this was built for real, so the colors stay consistent with
+ * that artifact rather than introduced fresh here.
+ * ------------------------------------------------------------------ */
+:root {
+  --shared-accent: #4338ca;
+  --shared-accent-tint: #eceeff;
+  --apps-accent: #0d9488;
+  --apps-accent-tint: #e3f6f3;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --shared-accent: #9b93f5;
+    --shared-accent-tint: #26264a;
+    --apps-accent: #2dd4bf;
+    --apps-accent-tint: #103530;
+  }
+}
+:root[data-theme="dark"] {
+  --shared-accent: #9b93f5;
+  --shared-accent-tint: #26264a;
+  --apps-accent: #2dd4bf;
+  --apps-accent-tint: #103530;
+}
+
+.shared-collection-group {
+  border-left: 3px solid var(--shared-accent); padding-left: 10px;
+  display: flex; flex-direction: column; margin-bottom: 18px;
+}
+.apps-group {
+  border-left: 3px solid var(--apps-accent); padding-left: 10px;
+}
+.sidebar-group-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--shared-accent); display: flex; align-items: center; gap: 4px; margin-bottom: 2px;
+}
+.apps-group .sidebar-group-label { color: var(--apps-accent); }
+.nav-caption { margin: 4px 0 10px; font-size: 11.5px; color: var(--muted); line-height: 1.4; }
+
+/* Shared collection category links (Auth Providers / Gateways /
+ * Integrations) and the flat Apps list -- same row language, just two
+ * different accent colors depending on which group's <ul> they're in.
+ * Replaces what used to be one sidebar row per individual item (every
+ * Auth Provider/Gateway/Integration had its own row); now there are
+ * only ever 3 rows here, each opening a catalog table of every item of
+ * that kind in the main panel -- see renderSharedCatalogTable() in
+ * console.js and the mockup this was validated against. */
+.nav-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.nav-item {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 9px;
+  border-radius: 7px; cursor: pointer; font-size: 13.5px; border: 1px solid transparent; background: transparent;
+}
+.nav-item:hover { background: var(--surface); }
+.nav-item.shared-active { background: var(--shared-accent-tint); color: var(--shared-accent); font-weight: 600; border-color: var(--shared-accent); }
+.nav-item.apps-active { background: var(--apps-accent-tint); color: var(--apps-accent); font-weight: 600; border-color: var(--apps-accent); }
+.nav-item-count { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; color: var(--muted); flex: 0 0 auto; }
+.nav-item.shared-active .nav-item-count, .nav-item.apps-active .nav-item-count { color: inherit; opacity: 0.75; }
+
+/* "+ New App" -- an inline quick-create right in the sidebar (type a
+ * name, Enter to create) instead of opening the full App editor just to
+ * fill in two fields. The id is slugified from the typed name -- see
+ * slugifyAppId()/saveNewAppInline() in console.js. */
+.new-app-row { margin-top: 8px; }
+.new-app-btn {
+  width: 100%; text-align: left; padding: 8px 9px; border-radius: 7px; border: 1px dashed var(--apps-accent);
+  background: transparent; color: var(--apps-accent); font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.new-app-btn:hover { background: var(--apps-accent-tint); }
+.new-app-input-wrap { display: flex; gap: 6px; margin-top: 6px; }
+.new-app-input-wrap input { flex: 1; min-width: 0; }
+
+/* Cross-navigation highlight -- clicking an Integration pill inside an
+   App's Routes table opens that Integration in the Shared Collection
+   sidebar AND briefly pulses its row there, so it's obvious the two
+   panels are connected rather than two unrelated lists. */
+@keyframes sidebar-pulse {
+  0% { box-shadow: 0 0 0 0 var(--shared-accent); }
+  70% { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.pulse { animation: sidebar-pulse 0.9s ease-out 2; }
+
+/* Routes table -- inside an App's detail view. Each row: method badge,
+   path, a clickable Integration pill (cross-navigates to the Shared
+   Collection), description, and row actions. */
+.routes-table { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; }
+.route-row {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--border); background: var(--surface);
+}
+.route-row-path { flex: 0 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.route-row-desc { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); }
+.route-row-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.integration-pill {
+  flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600;
+  padding: 3px 8px; border-radius: 999px; background: var(--shared-accent-tint); color: var(--shared-accent);
+  border: 1px solid var(--shared-accent); cursor: pointer; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+.integration-pill:hover { filter: brightness(0.95); }
+.integration-pill.broken { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
+
+/* Add/edit Route drawer -- integration-picker cards (step 1) and the
+   fixed chosen-integration card shown above method/path (step 2). */
+.integration-card-list { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; max-height: 360px; overflow-y: auto; }
+.integration-card {
+  border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; cursor: pointer; background: var(--surface);
+}
+.integration-card:hover { border-color: var(--shared-accent); background: var(--shared-accent-tint); }
+.integration-card-id { font-weight: 700; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.integration-card-desc { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.integration-card-chosen { cursor: default; border-color: var(--shared-accent); background: var(--shared-accent-tint); margin-bottom: 10px; }
+#route-integration-search { width: 100%; margin-top: 10px; box-sizing: border-box; }
+
+/* Workspace bar mount-error warning -- shown only when
+   mountErrors.length > 0 (deployment.yaml mounts referencing an unknown
+   app, or a route referencing an unknown integration). */
+.mount-warning-btn {
+  flex-shrink: 0; background: var(--danger-bg); color: var(--danger); border: 1px solid var(--danger);
+  border-radius: 6px; padding: 3px 8px; font-size: 11px; font-weight: 700;
+}
+
+/* ---------------------------------------------------------------------
+ * Shared Collection catalog table (one generic page for Auth Providers /
+ * Gateways / Integrations), the per-App Export tab's cards, and the Add
+ * Route modal -- all introduced to match the validated mockup's layout.
+ * ------------------------------------------------------------------- */
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.page-head h2 { margin: 0 0 4px; font-size: 18px; }
+.page-head .muted { margin: 0; font-size: 12.5px; }
+.shared-sub { color: var(--shared-accent) !important; }
+
+.catalog-table { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--surface); }
+.catalog-head, .catalog-row {
+  display: flex; align-items: center; gap: 14px; padding: 10px 14px; font-size: 13.5px;
+}
+.catalog-head { background: var(--code-bg); border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); font-weight: 600; }
+.catalog-row { border-bottom: 1px solid var(--border); cursor: pointer; }
+.catalog-row:last-child { border-bottom: none; }
+.catalog-row:hover { background: var(--code-bg); }
+.catalog-row.highlight { animation: catalog-row-pulse 1.6s ease; }
+@keyframes catalog-row-pulse { 0% { background: var(--shared-accent-tint); } 100% { background: transparent; } }
+.catalog-cell-name { flex: 0 0 180px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-cell-kind { flex: 0 0 110px; }
+.catalog-cell-auth { flex: 0 0 160px; }
+.catalog-cell-desc { flex: 1; min-width: 0; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalog-head .catalog-cell-name, .catalog-head .catalog-cell-kind, .catalog-head .catalog-cell-auth, .catalog-head .catalog-cell-desc { font: inherit; color: inherit; }
+
+/* Centered modal (Add/Edit Route) -- distinct from the right-side
+ * .drawer used for "Change workspace": same .drawer-header/-body/-footer
+ * inner classes, just a different, centered outer panel. */
+.modal-overlay { position: fixed; inset: 0; z-index: 50; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.modal-overlay-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.45); }
+.modal-overlay-panel {
+  position: relative; background: var(--surface); border-radius: 14px; box-shadow: var(--shadow);
+  width: 100%; max-width: 560px; max-height: 85vh; overflow-y: auto; border: 1px solid var(--border);
+  display: flex; flex-direction: column;
+}
+
+/* Per-App Export tab cards. */
+.export-card {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 12px;
+}
+.export-card-title { font-weight: 600; font-size: 13.5px; margin-bottom: 3px; }
+.export-card-desc { font-size: 12.5px; color: var(--muted); }
+
+@media (max-width: 700px) {
+  .modal-overlay-panel { max-width: 100%; }
+  .catalog-cell-auth, .catalog-cell-kind { display: none; }
+}
+
+/* Route-picker integration cards -- the "View in Shared Collection" link
+ * added per card so you can double-check a definition before picking it. */
+.integration-card-row1 { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.viewlink { font-size: 11px; color: var(--shared-accent); text-decoration: none; white-space: nowrap; }
+.viewlink:hover { text-decoration: underline; }
+
+/* Catalog table chips (Type / Requires Auth columns). */
+.chip {
+  display: inline-flex; align-items: center; gap: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--code-bg); border: 1px solid var(--border);
+  color: var(--muted);
+}
+.chip.auth { color: var(--shared-accent); border-color: var(--shared-accent); }
+.chip.none { color: var(--muted); font-style: italic; font-family: inherit; opacity: 0.7; }
+
+/* Route row method badge -- color-coded per HTTP method, matching the
+ * mockup (GET green, POST amber, PUT purple, DELETE red, PATCH blue). */
+:root {
+  --method-get: #16a34a; --method-post: #d97706; --method-put: #7c3aed; --method-delete: #dc2626; --method-patch: #2563eb;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --method-get: #4ade80; --method-post: #fbbf24; --method-put: #a78bfa; --method-delete: #f87171; --method-patch: #60a5fa;
+  }
+}
+:root[data-theme="dark"] {
+  --method-get: #4ade80; --method-post: #fbbf24; --method-put: #a78bfa; --method-delete: #f87171; --method-patch: #60a5fa;
+}
+.route-row-method {
+  flex: 0 0 56px; text-align: center; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px; font-weight: 700; padding: 3px 0; border-radius: 5px; letter-spacing: 0.02em;
+  background: var(--code-bg); color: var(--muted);
+}
+.route-row-method.GET { background: color-mix(in srgb, var(--method-get) 16%, transparent); color: var(--method-get); }
+.route-row-method.POST { background: color-mix(in srgb, var(--method-post) 16%, transparent); color: var(--method-post); }
+.route-row-method.PUT { background: color-mix(in srgb, var(--method-put) 16%, transparent); color: var(--method-put); }
+.route-row-method.DELETE { background: color-mix(in srgb, var(--method-delete) 16%, transparent); color: var(--method-delete); }
+.route-row-method.PATCH { background: color-mix(in srgb, var(--method-patch) 16%, transparent); color: var(--method-patch); }

@@ -1,0 +1,57 @@
+id: default
+name: Default App
+routes:
+  - id: json-authed-echo
+    method: GET
+    path: /api/authed/echo
+    description: >-
+      Demo endpoint requiring authentication. Calls through crmJsonAuthed (requiresAuth: demoLogin)
+      -- log in first via POST /auth/login/demoLogin and send the token back as "Authorization:
+      Bearer <token>". Echoes the backend token the middleware injected on your behalf, so you can
+      see the whole flow work end-to-end without a real backend to point at.
+    integration: json-authed-echo
+  - id: ldap-authed-echo
+    method: GET
+    path: /api/authed/ldap-echo
+    description: >-
+      Demo endpoint requiring authentication via the LDAP/AD provider. Calls through
+      crmJsonAuthedLdap (requiresAuth: demoLdap) -- log in first via POST /auth/login/demoLdap
+      (jdoe/asmith/bwayne, password "password123") and send the token back as "Authorization: Bearer
+      <token>". Echoes the signed stand-in backend token the middleware minted and injected on your
+      behalf, so you can see the whole flow work end-to-end.
+    integration: ldap-authed-echo
+  - id: json-customer-by-id
+    method: GET
+    path: /api/json/customers/:id
+    description: Fetch a single customer from the demo JSON REST backend.
+    integration: json-customer-by-id
+  - id: json-customers-list
+    method: GET
+    path: /api/json/customers
+    description: List all customers from the demo JSON REST backend.
+    integration: json-customers-list
+  - id: soap-customer-by-id
+    method: GET
+    path: /api/soap/customers/:id
+    description: Fetch a single customer from the demo SOAP backend.
+    integration: soap-customer-by-id
+  - id: sql-customer-by-id
+    method: GET
+    path: /api/sql/customers/:id
+    description: Fetch a single customer from the demo SQLite database.
+    integration: sql-customer-by-id
+  - id: sql-customers-list
+    method: GET
+    path: /api/sql/customers
+    description: List all customers from the demo SQLite database.
+    integration: sql-customers-list
+  - id: xml-customer-by-id
+    method: GET
+    path: /api/xml/customers/:id
+    description: Fetch a single customer from the demo XML backend.
+    integration: xml-customer-by-id
+  - id: xml-customers-list
+    method: GET
+    path: /api/xml/customers
+    description: List all customers from the demo XML backend.
+    integration: xml-customers-list

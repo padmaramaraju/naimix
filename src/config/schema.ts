@@ -198,17 +198,18 @@ export const outputSchema = z
   // its author expects.
   .strict();
 
-export const endpointConfigSchema = z.object({
+// See WORKSPACE_APPS_DESIGN_NOTES.md: today's single Endpoint schema splits
+// into this (the Workspace-owned, backend-calling half, no method/path of
+// its own) and routeConfigSchema below (the App-owned, public-facing half).
+export const integrationConfigSchema = z.object({
   id: z.string().min(1),
   description: z.string().optional(),
-  method: httpMethodSchema,
-  path: z.string().min(1).startsWith("/"),
   input: z.array(inputParamSchema).optional().default([]),
   backend: backendSchema,
   output: outputSchema,
 });
 
-export type EndpointConfigParsed = z.infer<typeof endpointConfigSchema>;
+export type IntegrationConfigParsed = z.infer<typeof integrationConfigSchema>;
 
 // Shared by every gateway kind: name -> value pairs that become
 // available for {name} substitution in the backend config of every
@@ -372,3 +373,128 @@ export const authProvidersFileSchema = z.object({
 });
 
 export type AuthProvidersFileParsed = z.infer<typeof authProvidersFileSchema>;
+
+// ---- Apps & Routes ----
+// See WORKSPACE_APPS_DESIGN_NOTES.md and the matching types in
+// src/types/config.ts.
+
+export const routeConfigSchema = z.object({
+  id: z.string().min(1),
+  method: httpMethodSchema,
+  path: z.string().min(1).startsWith("/"),
+  description: z.string().optional(),
+  integration: z.string().min(1),
+});
+
+export type RouteConfigParsed = z.infer<typeof routeConfigSchema>;
+
+/**
+ * Normalizes an Express-style path by replacing every `:param` segment with
+ * a common placeholder, so two routes that would genuinely collide at
+ * request-matching time (e.g. "/customers/:id" and "/customers/:slug" --
+ * Express would route either to whichever was registered first) are caught
+ * even though their literal strings differ. Not hypothetical: today's real
+ * endpoint configs already use `:id`-style params (see
+ * config/endpoints/api/{json,xml,soap,sql}/customers/[id]/*.yaml) -- see
+ * WORKSPACE_APPS_DESIGN_NOTES.md.
+ */
+export function normalizeRoutePath(path: string): string {
+  return path
+    .split("/")
+    .map((segment) => (segment.startsWith(":") ? ":param" : segment))
+    .join("/");
+}
+
+// Catches two collisions within one App's routes, both "loud error, not
+// silent" per WORKSPACE_APPS_DESIGN_NOTES.md: a duplicate route `id`
+// (ambiguous for the Console to edit in place), and a duplicate
+// method+normalized-path (ambiguous for Express to route at request time).
+export const appConfigSchema = z
+  .object({
+    id: z.string().min(1),
+    name: z.string().min(1),
+    routes: z.array(routeConfigSchema).default([]),
+  })
+  .superRefine((app, ctx) => {
+    const seenIds = new Map<string, number>();
+    const seenMethodPath = new Map<string, number>();
+    app.routes.forEach((route, index) => {
+      const existingId = seenIds.get(route.id);
+      if (existingId !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["routes", index, "id"],
+          message: `Duplicate route id "${route.id}" (already used by routes[${existingId}])`,
+        });
+      } else {
+        seenIds.set(route.id, index);
+      }
+
+      const key = `${route.method} ${normalizeRoutePath(route.path)}`;
+      const existingMethodPath = seenMethodPath.get(key);
+      if (existingMethodPath !== undefined) {
+        const other = app.routes[existingMethodPath];
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["routes", index, "path"],
+          message:
+            `Route "${route.method} ${route.path}" collides with routes[${existingMethodPath}] ` +
+            `("${other.method} ${other.path}") -- any real request would be ambiguous between them`,
+        });
+      } else {
+        seenMethodPath.set(key, index);
+      }
+    });
+  });
+
+export type AppConfigParsed = z.infer<typeof appConfigSchema>;
+
+// ---- Deployment ----
+// See WORKSPACE_APPS_DESIGN_NOTES.md and deployment.yaml.example. Parses
+// deployment.yaml -- hand-edited per environment, like .env.
+
+export const deploymentMountSchema = z.object({
+  app: z.string().min(1),
+  basePath: z.string().min(1).startsWith("/"),
+});
+
+// Catches two collisions among the Apps mounted together on ONE server,
+// both scoped to this one deployment.yaml's own `mounts` list, never
+// globally across every App in the repo -- see WORKSPACE_APPS_DESIGN_NOTES.md.
+export const deploymentConfigSchema = z
+  .object({
+    configDir: z.string().min(1),
+    mounts: z.array(deploymentMountSchema).default([]),
+  })
+  .superRefine((deployment, ctx) => {
+    const seenApps = new Map<string, number>();
+    const seenBasePaths = new Map<string, number>();
+    deployment.mounts.forEach((mount, index) => {
+      const existingApp = seenApps.get(mount.app);
+      if (existingApp !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["mounts", index, "app"],
+          message: `App "${mount.app}" is mounted more than once (already at mounts[${existingApp}])`,
+        });
+      } else {
+        seenApps.set(mount.app, index);
+      }
+
+      const existingBasePath = seenBasePaths.get(mount.basePath);
+      if (existingBasePath !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["mounts", index, "basePath"],
+          message:
+            `basePath "${mount.basePath}" collides with mounts[${existingBasePath}]'s basePath -- ` +
+            `each App mounted on one server needs its own`,
+        });
+      } else {
+        seenBasePaths.set(mount.basePath, index);
+      }
+    });
+  });
+
+export type DeploymentConfigParsed = z.infer<typeof deploymentConfigSchema>;
+

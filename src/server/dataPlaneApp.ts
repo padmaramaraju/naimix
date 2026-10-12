@@ -1,6 +1,6 @@
 import type { Express } from "express";
 import { createBaseApp, mountDataPlaneRoutes, mountTerminalHandlers } from "./coreApp";
-import type { EndpointRegistry } from "./endpointRegistry";
+import type { MountedRouteRegistry } from "./mountedRouteRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 import type { FunctionRegistry } from "../transform/functionRegistry";
@@ -41,7 +41,7 @@ import type { Logger } from "./logger";
  * scripts/checkDataPlaneBundle.js.
  */
 export interface CreateDataPlaneAppOptions {
-  endpointRegistry: EndpointRegistry;
+  routeRegistry: MountedRouteRegistry;
   gatewaysRegistry: GatewaysRegistry;
   authProvidersRegistry: AuthProvidersRegistry;
   functionRegistry: FunctionRegistry;
@@ -49,14 +49,14 @@ export interface CreateDataPlaneAppOptions {
 }
 
 export function createDataPlaneApp({
-  endpointRegistry,
+  routeRegistry,
   gatewaysRegistry,
   authProvidersRegistry,
   functionRegistry,
   logger,
 }: CreateDataPlaneAppOptions): Express {
-  const { app, authService } = createBaseApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger });
-  mountDataPlaneRoutes(app, { endpointRegistry, gatewaysRegistry, functionRegistry, authService, logger });
+  const { app, authService } = createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, logger });
+  mountDataPlaneRoutes(app, { routeRegistry, gatewaysRegistry, functionRegistry, authService, logger });
   mountTerminalHandlers(app, logger);
   return app;
 }

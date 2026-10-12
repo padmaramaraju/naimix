@@ -4,7 +4,9 @@ import express from "express";
 import { createBaseApp, mountDataPlaneRoutes, mountTerminalHandlers } from "./coreApp";
 import { createConsoleApiRouter } from "./consoleApi";
 import { requireConsoleAuth } from "./consoleAuth";
-import type { EndpointRegistry } from "./endpointRegistry";
+import type { MountedRouteRegistry } from "./mountedRouteRegistry";
+import type { IntegrationRegistry } from "./integrationRegistry";
+import type { AppRegistry } from "./appRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 import type { FunctionRegistry } from "../transform/functionRegistry";
@@ -26,7 +28,16 @@ import type { Logger } from "./logger";
  */
 
 export interface CreateAppOptions {
-  endpointRegistry: EndpointRegistry;
+  /** What dispatch.ts actually matches requests against -- see
+   * mountedRouteRegistry.ts. Synthesized from deployment.yaml's `mounts`
+   * plus appRegistry/integrationRegistry below, not loaded on its own. */
+  routeRegistry: MountedRouteRegistry;
+  /** The Workspace's own Integrations and Apps -- what the console API's
+   * CRUD routes actually read/write. routeRegistry (above) is a VIEW over
+   * these two plus the deployment's mounts list, not a separate source of
+   * truth. */
+  integrationRegistry: IntegrationRegistry;
+  appRegistry: AppRegistry;
   gatewaysRegistry: GatewaysRegistry;
   authProvidersRegistry: AuthProvidersRegistry;
   functionRegistry: FunctionRegistry;
@@ -34,12 +45,15 @@ export interface CreateAppOptions {
   /** Directory containing the console UI's static files (index.html, etc). */
   consoleUiDir?: string;
   /** Mutable "current workspace" holder + where to persist a change to it
-   * -- see workspaceSettings.ts. Both optional: when omitted, the console
+   * -- see deploymentConfig.ts. Both optional: when omitted, the console
    * UI's "Change workspace" feature is unavailable (GET/PUT /settings
    * aren't mounted), which is fine for callers (e.g. some tests) that
    * don't need it -- everything else about the app works unchanged. */
   workspace?: { configDir?: string };
-  settingsFile?: string;
+  /** deployment.yaml's path -- see deploymentConfig.ts. Renamed from
+   * settingsFile/data-settings.json: this file now lives at the repo root
+   * next to .env, not under data/ (see WORKSPACE_APPS_DESIGN_NOTES.md). */
+  deploymentFile?: string;
   /** Overrides the real native folder-picker dialog behind POST
    * /settings/select-folder -- see consoleApi.ts's ConsoleApiDeps and
    * nativeFolderPicker.ts. Only ever set by tests, so they can exercise
@@ -48,17 +62,19 @@ export interface CreateAppOptions {
 }
 
 export function createApp({
-  endpointRegistry,
+  routeRegistry,
+  integrationRegistry,
+  appRegistry,
   gatewaysRegistry,
   authProvidersRegistry,
   functionRegistry,
   logger,
   consoleUiDir,
   workspace,
-  settingsFile,
+  deploymentFile,
   pickFolder,
 }: CreateAppOptions): Express {
-  const { app, authService } = createBaseApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger });
+  const { app, authService } = createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, logger });
 
   // Console UI: a static browser app (served publicly) talking to a
   // token-gated API. The UI itself has no secrets in it; every API call it
@@ -74,14 +90,16 @@ export function createApp({
     "/console/api",
     requireConsoleAuth,
     createConsoleApiRouter({
-      endpointRegistry,
+      integrationRegistry,
+      appRegistry,
+      routeRegistry,
       gatewaysRegistry,
       authProvidersRegistry,
       functionRegistry,
       authService,
       logger,
       workspace: workspace ?? {},
-      settingsFile: settingsFile ?? path.resolve(process.cwd(), "data/settings.json"),
+      deploymentFile: deploymentFile ?? path.resolve(process.cwd(), "deployment.yaml"),
       pickFolder,
     })
   );
@@ -92,7 +110,7 @@ export function createApp({
   // own comment on why the order among these particular routes doesn't
   // actually matter: dispatch.ts's middleware calls next() for anything it
   // doesn't recognize as a configured endpoint path).
-  mountDataPlaneRoutes(app, { endpointRegistry, gatewaysRegistry, functionRegistry, authService, logger });
+  mountDataPlaneRoutes(app, { routeRegistry, gatewaysRegistry, functionRegistry, authService, logger });
   mountTerminalHandlers(app, logger);
 
   return app;

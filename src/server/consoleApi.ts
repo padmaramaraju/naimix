@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { z } from "zod";
-import { endpointConfigSchema, backendSchema, outputSchema, inputParamSchema } from "../config/schema";
+import { backendSchema, outputSchema, inputParamSchema } from "../config/schema";
 import type { InputParamDef } from "../types/config";
+import type { IntegrationConfigParsed } from "../config/schema";
 import { callBackend, closeAllSqlConnections, getBackendGatewayName } from "../connectors";
 import { mapResponse } from "../transform/mapper";
 import { collectFunctionNames } from "../transform/functionRefs";
@@ -12,8 +13,11 @@ import { ValidationError } from "./errors";
 import { generateCrudEndpointsForGateway } from "./crudGenerator";
 import { generateOpenApiDocument } from "./openapiGenerator";
 import { pickFolderNative } from "./nativeFolderPicker";
-import { resolveConfigDir, saveWorkspaceSettings } from "./workspaceSettings";
-import type { EndpointRegistry } from "./endpointRegistry";
+import { resolveConfigDir, saveDeploymentConfigDir } from "./deploymentConfig";
+import type { IntegrationRegistry } from "./integrationRegistry";
+import type { AppRegistry } from "./appRegistry";
+import type { MountedRouteRegistry } from "./mountedRouteRegistry";
+import { resolveAppRoutes } from "./mountedRouteRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 import type { FunctionRegistry } from "../transform/functionRegistry";
@@ -22,20 +26,31 @@ import type { Logger } from "./logger";
 import type { ResolvedParams } from "../connectors/paramSubst";
 
 export interface ConsoleApiDeps {
-  endpointRegistry: EndpointRegistry;
+  /** The Workspace's own Integrations and Apps -- what the CRUD routes
+   * below actually read/write. See WORKSPACE_APPS_DESIGN_NOTES.md. */
+  integrationRegistry: IntegrationRegistry;
+  appRegistry: AppRegistry;
+  /** What dispatch.ts actually matches requests against -- a VIEW over
+   * integrationRegistry/appRegistry plus deployment.yaml's `mounts`, not a
+   * separate source of truth. Used here only for GET /export/openapi.json
+   * and surfacing mount/reference errors (e.g. in /reload and /settings),
+   * never written to directly. */
+  routeRegistry: MountedRouteRegistry;
   gatewaysRegistry: GatewaysRegistry;
   authProvidersRegistry: AuthProvidersRegistry;
   functionRegistry: FunctionRegistry;
   authService: AuthService;
   logger: Logger;
   /** Mutable holder for "which workspace is this instance currently
-   * pointed at" -- undefined when running in legacy mode (ENDPOINTS_DIR/
-   * GATEWAYS_FILE set independently, not as one shared folder). Updated
-   * in place by PUT /settings; see workspaceSettings.ts. */
+   * pointed at" -- undefined when running in legacy mode (INTEGRATIONS_DIR/
+   * APPS_DIR/GATEWAYS_FILE set independently, not as one shared folder).
+   * Updated in place by PUT /settings; see deploymentConfig.ts. */
   workspace: { configDir?: string };
-  /** Where to persist the chosen workspace so it survives a restart
-   * (see workspaceSettings.ts). Required for PUT /settings to work. */
-  settingsFile: string;
+  /** Where to persist the chosen workspace's configDir so it survives a
+   * restart (see deploymentConfig.ts's saveDeploymentConfigDir). Required
+   * for PUT /settings to work. Renamed from settingsFile/data-settings.json
+   * -- this file now lives at the repo root next to .env, not under data/. */
+  deploymentFile: string;
   /** Opens a native OS folder-picker dialog for POST /settings/select-folder,
    * resolving to the chosen path or null if cancelled. Defaults to the real
    * one (nativeFolderPicker.ts); overridable so tests can exercise the
@@ -91,14 +106,16 @@ function buildTestParams(input: InputParamDef[], supplied: Record<string, unknow
 }
 
 export function createConsoleApiRouter({
-  endpointRegistry,
+  integrationRegistry,
+  appRegistry,
+  routeRegistry,
   gatewaysRegistry,
   authProvidersRegistry,
   functionRegistry,
   authService,
   logger,
   workspace,
-  settingsFile,
+  deploymentFile,
   pickFolder = pickFolderNative,
 }: ConsoleApiDeps): Router {
   const router = Router();
@@ -124,77 +141,107 @@ export function createConsoleApiRouter({
     });
   });
 
-  // ---- Endpoints ----
+  // Runs a backend call + output mapping for one already-saved Integration,
+  // with caller-supplied test param values -- returns BOTH the raw backend
+  // response and the mapped output, so the output-mapping form can be tuned
+  // against real data. Shared by POST /integrations/:id/test and the
+  // Route-level tester (POST /apps/:appId/routes/:routeId/test), which just
+  // resolves its Route's `integration` name to one of these first.
+  async function runIntegrationTest(
+    integration: IntegrationConfigParsed,
+    req: Request
+  ): Promise<{ raw: unknown; mapped: unknown }> {
+    const supplied = (req.body?.params ?? {}) as Record<string, unknown>;
+    const params = buildTestParams(integration.input ?? [], supplied);
+    // A generated table-CRUD integration (list/bulkCreate/bulkUpdate/
+    // bulkDelete) reads straight from the raw query string / JSON body
+    // rather than the declared `input` params above -- an advanced caller
+    // can exercise one of those from this same test route by passing
+    // `rawQuery`/`rawBody` explicitly, since the "Try it" UI panel itself
+    // only has fields for scalar named params (see console.js for the
+    // corresponding UI note).
+    const raw = await callBackend(integration.backend, {
+      gateways: gatewaysRegistry.getResolved(),
+      params,
+      logger: consoleLogger,
+      rawQuery: (req.body?.rawQuery ?? undefined) as Record<string, unknown> | undefined,
+      rawBody: req.body?.rawBody,
+    });
+    const mapped = mapResponse(raw, integration.output, { functions: functionRegistry, params });
+    return { raw, mapped };
+  }
 
-  router.get("/endpoints", (_req, res) => {
-    res.json(endpointRegistry.list());
+  // ---- Integrations ----
+  // Renamed from Endpoints -- see WORKSPACE_APPS_DESIGN_NOTES.md. An
+  // Integration is the Workspace-owned backend-calling/output-mapping half
+  // of what used to be one flat Endpoint; it carries no method/path of its
+  // own (that's a Route's job -- see the Apps section below) and isn't
+  // called by a client directly, only through a Route that references it
+  // by name.
+
+  router.get("/integrations", (_req, res) => {
+    res.json(integrationRegistry.list());
   });
 
-  router.get("/endpoints/:id", (req, res) => {
-    const endpoint = endpointRegistry.get(req.params.id);
-    if (!endpoint) return res.status(404).json({ error: "NotFound", message: `No endpoint "${req.params.id}"` });
-    res.json(endpoint);
+  router.get("/integrations/:id", (req, res) => {
+    const integration = integrationRegistry.get(req.params.id);
+    if (!integration) return res.status(404).json({ error: "NotFound", message: `No integration "${req.params.id}"` });
+    res.json(integration);
   });
 
   router.post(
-    "/endpoints",
+    "/integrations",
     asyncHandler(async (req, res) => {
-      const { config, file } = endpointRegistry.upsert(req.body);
-      consoleLogger.info(`Created endpoint ${config.method} ${config.path} (${config.id}) -> ${file}`);
-      res.status(201).json({ endpoint: config, file });
+      const { config, file } = integrationRegistry.upsert(req.body);
+      consoleLogger.info(`Created integration "${config.id}" -> ${file}`);
+      res.status(201).json({ integration: config, file });
     })
   );
 
   router.put(
-    "/endpoints/:id",
+    "/integrations/:id",
     asyncHandler(async (req, res) => {
-      if (!endpointRegistry.get(req.params.id)) {
-        return res.status(404).json({ error: "NotFound", message: `No endpoint "${req.params.id}"` });
+      if (!integrationRegistry.get(req.params.id)) {
+        return res.status(404).json({ error: "NotFound", message: `No integration "${req.params.id}"` });
       }
-      const { config, file } = endpointRegistry.upsert(req.body, { excludeId: req.params.id });
-      consoleLogger.info(`Updated endpoint ${config.method} ${config.path} (${config.id}) -> ${file}`);
-      res.json({ endpoint: config, file });
+      const { config, file } = integrationRegistry.upsert(req.body, { excludeId: req.params.id });
+      consoleLogger.info(`Updated integration "${config.id}" -> ${file}`);
+      res.json({ integration: config, file });
     })
   );
 
-  router.delete("/endpoints/:id", (req, res) => {
-    const removed = endpointRegistry.remove(req.params.id);
-    if (!removed) return res.status(404).json({ error: "NotFound", message: `No endpoint "${req.params.id}"` });
-    consoleLogger.info(`Deleted endpoint ${req.params.id}`);
+  router.delete("/integrations/:id", (req, res) => {
+    const name = req.params.id;
+    // IntegrationRegistry.remove() deliberately doesn't check this itself
+    // (see its own doc comment) -- same "checked where it's used, not
+    // where it's defined" boundary as a gateway or transform function.
+    const dependents = appRegistry
+      .list()
+      .flatMap((app) => app.routes.filter((r) => r.integration === name).map((r) => `${app.id}:${r.id}`));
+    if (dependents.length > 0) {
+      return res.status(409).json({
+        error: "Conflict",
+        message: `Integration "${name}" is used by ${dependents.length} route(s)`,
+        routes: dependents,
+      });
+    }
+    const removed = integrationRegistry.remove(name);
+    if (!removed) return res.status(404).json({ error: "NotFound", message: `No integration "${name}"` });
+    consoleLogger.info(`Deleted integration "${name}"`);
     res.status(204).end();
   });
 
-  // Runs an already-saved endpoint live with caller-supplied test param values
-  // and returns BOTH the raw backend response and the mapped output, so the
-  // output-mapping form can be tuned against real data.
   router.post(
-    "/endpoints/:id/test",
+    "/integrations/:id/test",
     asyncHandler(async (req, res) => {
-      const endpoint = endpointRegistry.get(req.params.id);
-      if (!endpoint) return res.status(404).json({ error: "NotFound", message: `No endpoint "${req.params.id}"` });
-
-      const supplied = (req.body?.params ?? {}) as Record<string, unknown>;
-      const params = buildTestParams(endpoint.input, supplied);
-      // A generated table-CRUD endpoint (list/bulkCreate/bulkUpdate/bulkDelete)
-      // reads straight from the raw query string / JSON body rather than the
-      // declared `input` params above -- an advanced caller can exercise one
-      // of those from this same test endpoint by passing `rawQuery`/`rawBody`
-      // explicitly, since the "Try it" UI panel itself only has fields for
-      // scalar named params (see console.js for the corresponding UI note).
-      const raw = await callBackend(endpoint.backend, {
-        gateways: gatewaysRegistry.getResolved(),
-        params,
-        logger: consoleLogger,
-        rawQuery: (req.body?.rawQuery ?? undefined) as Record<string, unknown> | undefined,
-        rawBody: req.body?.rawBody,
-      });
-      const mapped = mapResponse(raw, endpoint.output, { functions: functionRegistry, params });
-      res.json({ raw, mapped });
+      const integration = integrationRegistry.get(req.params.id);
+      if (!integration) return res.status(404).json({ error: "NotFound", message: `No integration "${req.params.id}"` });
+      res.json(await runIntegrationTest(integration, req));
     })
   );
 
-  // Calls a backend that hasn't been saved as an endpoint yet -- lets the UI
-  // fetch a sample response WHILE building an endpoint, before Save.
+  // Calls a backend that hasn't been saved as an Integration yet -- lets the
+  // UI fetch a sample response WHILE building one, before Save.
   router.post(
     "/test-backend",
     asyncHandler(async (req, res) => {
@@ -230,17 +277,152 @@ export function createConsoleApiRouter({
   router.post(
     "/reload",
     asyncHandler(async (_req, res) => {
-      // Functions reload FIRST: endpointRegistry's own reload validates
+      // Functions reload FIRST: integrationRegistry's own reload validates
       // every transform/postProcess name reference against whatever the
-      // function registry currently has loaded (see endpointRegistry.ts),
+      // function registry currently has loaded (see integrationRegistry.ts),
       // so a transform function someone just hand-edited on disk (outside
       // the Console's own save flow -- e.g. a git pull) needs to be picked
-      // up before that check runs, not after.
+      // up before that check runs. Apps reload AFTER integrations, for the
+      // same reason: a route's `integration` reference needs the new
+      // integration set already loaded to validate against (see
+      // appRegistry.ts).
       const { errors: functionErrors } = functionRegistry.loadFromDisk();
-      const { errors } = endpointRegistry.reloadFromDisk();
+      const { errors: integrationErrors } = integrationRegistry.reloadFromDisk();
+      const { errors: appErrors } = appRegistry.reloadFromDisk();
       gatewaysRegistry.reloadFromDisk();
       authProvidersRegistry.reloadFromDisk();
-      res.json({ endpointCount: endpointRegistry.list().length, errors, functionErrors });
+      res.json({
+        integrationCount: integrationRegistry.list().length,
+        appCount: appRegistry.list().length,
+        routeCount: routeRegistry.list().length,
+        integrationErrors,
+        appErrors,
+        functionErrors,
+        // Any mount referencing an unknown app, or a route referencing an
+        // unknown integration -- see mountedRouteRegistry.ts.
+        mountErrors: routeRegistry.errors(),
+      });
+    })
+  );
+
+  // ---- Apps & Routes ----
+  // New -- see WORKSPACE_APPS_DESIGN_NOTES.md. An App is a team-owned flat
+  // list of Routes; each Route is a pure method+path pointer at one
+  // Integration (above) by name. Routes have no separate file of their own
+  // -- they're stored inline inside their App's one file -- so every Route
+  // mutation here reads the whole App, edits its `routes` array in memory,
+  // and calls appRegistry.upsert() with the whole updated App, the same way
+  // editing one field of a gateway means re-saving that gateway's whole
+  // entry. appConfigSchema's own superRefine (see schema.ts) already
+  // catches a duplicate route id or a colliding method+path WITHIN the App
+  // being saved -- a thrown ZodError from upsert() surfaces as a 400 the
+  // same way any other schema violation does.
+
+  router.get("/apps", (_req, res) => {
+    res.json(appRegistry.list());
+  });
+
+  router.get("/apps/:id", (req, res) => {
+    const app = appRegistry.get(req.params.id);
+    if (!app) return res.status(404).json({ error: "NotFound", message: `No app "${req.params.id}"` });
+    res.json(app);
+  });
+
+  router.post(
+    "/apps",
+    asyncHandler(async (req, res) => {
+      const { config, file } = appRegistry.upsert(req.body);
+      consoleLogger.info(`Created app "${config.id}" -> ${file}`);
+      res.status(201).json({ app: config, file });
+    })
+  );
+
+  router.put(
+    "/apps/:id",
+    asyncHandler(async (req, res) => {
+      if (!appRegistry.get(req.params.id)) {
+        return res.status(404).json({ error: "NotFound", message: `No app "${req.params.id}"` });
+      }
+      const { config, file } = appRegistry.upsert(req.body, { excludeId: req.params.id });
+      consoleLogger.info(`Updated app "${config.id}" -> ${file}`);
+      res.json({ app: config, file });
+    })
+  );
+
+  router.delete("/apps/:id", (req, res) => {
+    // AppRegistry.remove() deliberately doesn't check deployment.yaml
+    // `mounts` itself (see its own doc comment) -- that's a boot-time
+    // concern (mountedRouteRegistry.ts's errors()), not a save-time one;
+    // `mounts` is hand-edited, not something the console can clean up on
+    // an App's behalf.
+    const removed = appRegistry.remove(req.params.id);
+    if (!removed) return res.status(404).json({ error: "NotFound", message: `No app "${req.params.id}"` });
+    consoleLogger.info(`Deleted app "${req.params.id}"`);
+    res.status(204).end();
+  });
+
+  // Appends one Route to an App's routes list. Body is a single
+  // RouteConfig; the id/method+path collision checks against this App's
+  // existing routes happen inside appConfigSchema.parse() (via upsert()).
+  router.post(
+    "/apps/:appId/routes",
+    asyncHandler(async (req, res) => {
+      const app = appRegistry.get(req.params.appId);
+      if (!app) return res.status(404).json({ error: "NotFound", message: `No app "${req.params.appId}"` });
+      const { config } = appRegistry.upsert({ ...app, routes: [...app.routes, req.body] });
+      consoleLogger.info(`Added route "${req.body?.id}" to app "${app.id}"`);
+      res.status(201).json({ app: config });
+    })
+  );
+
+  router.put(
+    "/apps/:appId/routes/:routeId",
+    asyncHandler(async (req, res) => {
+      const app = appRegistry.get(req.params.appId);
+      if (!app) return res.status(404).json({ error: "NotFound", message: `No app "${req.params.appId}"` });
+      if (!app.routes.some((r) => r.id === req.params.routeId)) {
+        return res.status(404).json({ error: "NotFound", message: `No route "${req.params.routeId}" in app "${app.id}"` });
+      }
+      const routes = app.routes.map((r) => (r.id === req.params.routeId ? req.body : r));
+      const { config } = appRegistry.upsert({ ...app, routes }, { excludeId: app.id });
+      consoleLogger.info(`Updated route "${req.params.routeId}" in app "${app.id}"`);
+      res.json({ app: config });
+    })
+  );
+
+  router.delete("/apps/:appId/routes/:routeId", (req, res) => {
+    const app = appRegistry.get(req.params.appId);
+    if (!app) return res.status(404).json({ error: "NotFound", message: `No app "${req.params.appId}"` });
+    if (!app.routes.some((r) => r.id === req.params.routeId)) {
+      return res.status(404).json({ error: "NotFound", message: `No route "${req.params.routeId}" in app "${app.id}"` });
+    }
+    appRegistry.upsert(
+      { ...app, routes: app.routes.filter((r) => r.id !== req.params.routeId) },
+      { excludeId: app.id }
+    );
+    consoleLogger.info(`Removed route "${req.params.routeId}" from app "${app.id}"`);
+    res.status(204).end();
+  });
+
+  // Route-level "Try it" tester (added per the Workspace/Apps design
+  // decisions -- see WORKSPACE_APPS_DESIGN_NOTES.md). A Route carries no
+  // backend/output of its own, so this just resolves its `integration` and
+  // delegates to the exact same logic as POST /integrations/:id/test.
+  router.post(
+    "/apps/:appId/routes/:routeId/test",
+    asyncHandler(async (req, res) => {
+      const app = appRegistry.get(req.params.appId);
+      if (!app) return res.status(404).json({ error: "NotFound", message: `No app "${req.params.appId}"` });
+      const route = app.routes.find((r) => r.id === req.params.routeId);
+      if (!route) return res.status(404).json({ error: "NotFound", message: `No route "${req.params.routeId}" in app "${app.id}"` });
+      const integration = integrationRegistry.get(route.integration);
+      if (!integration) {
+        return res.status(409).json({
+          error: "Conflict",
+          message: `Route "${route.id}" references unknown integration "${route.integration}"`,
+        });
+      }
+      res.json(await runIntegrationTest(integration, req));
     })
   );
 
@@ -279,7 +461,7 @@ export function createConsoleApiRouter({
   // tab's fetched sample, or the currently-mapped output, for a
   // postProcess function under test) -- lets someone iterate on a
   // function's logic before it's ever written to disk or wired into a
-  // real endpoint.
+  // real integration.
   router.post(
     "/functions/test",
     asyncHandler(async (req, res) => {
@@ -301,7 +483,7 @@ export function createConsoleApiRouter({
   // written) and <name>.js (compiled via compileFunctionSource) to
   // <configDir>/transforms/, then immediately hot-reloads it into this
   // dev server's own live registry (FunctionRegistry.reloadOne) so an
-  // endpoint referencing it works on the very next request -- see
+  // integration referencing it works on the very next request -- see
   // FunctionRegistry's own doc comment for why this reload path only
   // ever runs here, never in QA/Production.
   router.put(
@@ -332,12 +514,12 @@ export function createConsoleApiRouter({
     if (!functionRegistry.has(name)) {
       return res.status(404).json({ error: "NotFound", message: `No function "${name}"` });
     }
-    const dependents = endpointRegistry.list().filter((e) => collectFunctionNames(e.output).includes(name));
+    const dependents = integrationRegistry.list().filter((i) => collectFunctionNames(i.output).includes(name));
     if (dependents.length > 0) {
       return res.status(409).json({
         error: "Conflict",
-        message: `Function "${name}" is used by ${dependents.length} endpoint(s)`,
-        endpoints: dependents.map((e) => e.id),
+        message: `Function "${name}" is used by ${dependents.length} integration(s)`,
+        integrations: dependents.map((i) => i.id),
       });
     }
     const dir = functionRegistry.getDir();
@@ -352,26 +534,34 @@ export function createConsoleApiRouter({
 
   // ---- Workspace ----
   // Each user runs their own instance of this app on their own machine (no
-  // login, no multi-tenant serving) and keeps endpoints+gateways in a local
-  // Git checkout of a shared team repo -- these two endpoints let the console
-  // UI point THIS instance at any such folder. Checking in/out of Git stays
-  // entirely outside the app; this only ever reads/writes plain files.
+  // login, no multi-tenant serving) and keeps integrations+apps+gateways in
+  // a local Git checkout of a shared team repo -- these two endpoints let
+  // the console UI point THIS instance at any such folder. Checking in/out
+  // of Git stays entirely outside the app; this only ever reads/writes
+  // plain files.
 
   router.get("/settings", (_req, res) => {
     res.json({
       configDir: workspace.configDir ?? null,
-      endpointsDir: endpointRegistry.getDir(),
+      integrationsDir: integrationRegistry.getDir(),
+      appsDir: appRegistry.getDir(),
       gatewaysFile: gatewaysRegistry.getFilePath(),
       authProvidersFile: authProvidersRegistry.getFilePath(),
-      endpointCount: endpointRegistry.list().length,
+      integrationCount: integrationRegistry.list().length,
+      appCount: appRegistry.list().length,
+      routeCount: routeRegistry.list().length,
       gatewayCount: Object.keys(gatewaysRegistry.listRaw()).length,
       authProviderCount: Object.keys(authProvidersRegistry.listRaw()).length,
+      // Any mount referencing an unknown app, or a route referencing an
+      // unknown integration -- surfaced here too so the Console UI can show
+      // it next to "which workspace am I pointed at" without a separate call.
+      mountErrors: routeRegistry.errors(),
     });
   });
 
   router.get("/settings/folders", asyncHandler(async (req, res) => {
     const { dir } = z.object({ dir: z.string().min(1).optional() }).parse(req.query);
-    const currentDir = path.resolve(dir ?? workspace.configDir ?? path.dirname(endpointRegistry.getDir()));
+    const currentDir = path.resolve(dir ?? workspace.configDir ?? path.dirname(integrationRegistry.getDir()));
     try {
       const entries = await fs.promises.readdir(currentDir, { withFileTypes: true });
       const folders = entries.filter(entry => entry.isDirectory())
@@ -401,7 +591,7 @@ export function createConsoleApiRouter({
     "/settings/select-folder",
     asyncHandler(async (req, res) => {
       const { startDir } = z.object({ startDir: z.string().optional() }).parse(req.body ?? {});
-      const from = path.resolve(startDir || workspace.configDir || path.dirname(endpointRegistry.getDir()));
+      const from = path.resolve(startDir || workspace.configDir || path.dirname(integrationRegistry.getDir()));
       try {
         const configDir = await pickFolder(from);
         res.json({ configDir });
@@ -427,7 +617,7 @@ export function createConsoleApiRouter({
         );
       }
 
-      const { endpointsDir, gatewaysFile, authProvidersFile, transformsDir } = resolveConfigDir(configDir);
+      const { integrationsDir, appsDir, gatewaysFile, authProvidersFile, transformsDir } = resolveConfigDir(configDir);
 
       // Any SQL gateway pools opened for the OLD folder's gateways (e.g. an
       // open sqlite file handle, or a live pg/mysql pool) are no longer
@@ -435,29 +625,43 @@ export function createConsoleApiRouter({
       // now rather than leaking them until process exit.
       await closeAllSqlConnections();
 
-      // Functions repoint+reload BEFORE endpoints: the new workspace's
-      // endpoints may reference function names that only exist in ITS
-      // transforms/ folder (not the old workspace's), and endpointRegistry
-      // validates those names against whatever functionRegistry currently
-      // holds (see endpointRegistry.ts) -- so the registry has to already
-      // be pointed at the new folder by the time endpoints reload.
+      // Functions repoint+reload BEFORE integrations, and integrations
+      // before apps: the new workspace's integrations may reference
+      // function names that only exist in ITS transforms/ folder (not the
+      // old workspace's) -- integrationRegistry validates those names
+      // against whatever functionRegistry currently holds (see
+      // integrationRegistry.ts) -- and the new workspace's apps may
+      // reference integration ids that only exist in ITS integrations/
+      // folder -- appRegistry validates those against whatever
+      // integrationRegistry currently holds (see appRegistry.ts). Both
+      // registries have to already be pointed at the new folder by the
+      // time the next one reloads.
       functionRegistry.setDir(transformsDir);
-      const { errors: endpointErrors } = endpointRegistry.setDir(endpointsDir);
+      const { errors: integrationErrors } = integrationRegistry.setDir(integrationsDir);
+      const { errors: appErrors } = appRegistry.setDir(appsDir);
       gatewaysRegistry.setFilePath(gatewaysFile);
       authProvidersRegistry.setFilePath(authProvidersFile);
       workspace.configDir = configDir;
-      saveWorkspaceSettings(settingsFile, { configDir });
+      saveDeploymentConfigDir(deploymentFile, configDir);
 
       consoleLogger.info(`Switched workspace to "${configDir}"`);
       res.json({
         configDir,
-        endpointsDir,
+        integrationsDir,
+        appsDir,
         gatewaysFile,
         authProvidersFile,
-        endpointCount: endpointRegistry.list().length,
-        endpointErrors,
+        integrationCount: integrationRegistry.list().length,
+        integrationErrors,
+        appCount: appRegistry.list().length,
+        appErrors,
         gatewayCount: Object.keys(gatewaysRegistry.listRaw()).length,
         authProviderCount: Object.keys(authProvidersRegistry.listRaw()).length,
+        // deployment.yaml's `mounts` list is untouched by this switch (see
+        // saveDeploymentConfigDir) -- it may now point at apps that don't
+        // exist in the new workspace, which is why this is worth surfacing
+        // right away rather than waiting for the next /reload or page load.
+        mountErrors: routeRegistry.errors(),
       });
     })
   );
@@ -517,19 +721,22 @@ export function createConsoleApiRouter({
   );
 
   // Introspects a SQL gateway and generates list/bulkCreate/bulkUpdate/
-  // bulkDelete endpoints for every table (plus one endpoint per stored
-  // procedure, where the dialect supports them). Never overwrites an
-  // existing endpoint -- any id/path conflict is skipped and reported, so
-  // this is safe to re-run.
+  // bulkDelete Integrations for every table (plus one Integration per
+  // stored procedure, where the dialect supports them), each paired with a
+  // Route added to the App named by `appId` in the request body -- see
+  // crudGenerator.ts. Never overwrites an existing integration/route --
+  // any id/path conflict is skipped and reported, so this is safe to
+  // re-run (e.g. after adding a table).
   router.post(
     "/gateways/:name/generate-crud",
     asyncHandler(async (req, res) => {
       if (!gatewaysRegistry.getRaw(req.params.name)) {
         return res.status(404).json({ error: "NotFound", message: `No gateway "${req.params.name}"` });
       }
-      const summary = await generateCrudEndpointsForGateway(gatewaysRegistry, endpointRegistry, req.params.name);
+      const { appId } = z.object({ appId: z.string().min(1) }).parse(req.body);
+      const summary = await generateCrudEndpointsForGateway(gatewaysRegistry, integrationRegistry, appRegistry, req.params.name, appId);
       consoleLogger.info(
-        `Generated CRUD endpoints for gateway "${req.params.name}": ${summary.created.length} created, ${summary.skipped.length} skipped`
+        `Generated CRUD endpoints for gateway "${req.params.name}" into app "${appId}": ${summary.created.length} created, ${summary.skipped.length} skipped`
       );
       res.json(summary);
     })
@@ -537,12 +744,12 @@ export function createConsoleApiRouter({
 
   router.delete("/gateways/:name", (req, res) => {
     const name = req.params.name;
-    const dependents = endpointRegistry.list().filter((r) => getBackendGatewayName(r.backend) === name);
+    const dependents = integrationRegistry.list().filter((i) => getBackendGatewayName(i.backend) === name);
     if (dependents.length > 0) {
       return res.status(409).json({
         error: "Conflict",
-        message: `Gateway "${name}" is used by ${dependents.length} endpoint(s)`,
-        endpoints: dependents.map((r) => r.id),
+        message: `Gateway "${name}" is used by ${dependents.length} integration(s)`,
+        integrations: dependents.map((i) => i.id),
       });
     }
     const removed = gatewaysRegistry.remove(name);
@@ -660,15 +867,42 @@ export function createConsoleApiRouter({
 
   // ---- Export ----
   // Lets whoever's configuring this workspace hand it to another tool: a
-  // standard OpenAPI document describing every caller-facing route, and a
+  // standard OpenAPI document describing every caller-facing route
+  // currently MOUNTED on this server (see mountedRouteRegistry.ts -- every
+  // App in deployment.yaml's `mounts`, basePath-prefixed), and a
   // ready-to-run MCP server that talks to this same live instance. Both
   // reflect the CURRENT config at request time -- there's nothing generated
   // ahead of time to go stale.
 
   router.get("/export/openapi.json", (req, res) => {
     const baseUrl = `${req.protocol}://${req.get("host")}`;
-    const doc = generateOpenApiDocument({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, baseUrl });
+    const doc = generateOpenApiDocument({ routeRegistry, gatewaysRegistry, authProvidersRegistry, baseUrl });
     res.setHeader("Content-Disposition", 'attachment; filename="naimix-openapi.json"');
+    res.json(doc);
+  });
+
+  // Per-App OpenAPI export (Console UI's App > Export tab) -- the same
+  // document shape as the workspace-wide export above, but scoped to just
+  // one App's own Routes, resolved directly against IntegrationRegistry
+  // (see resolveAppRoutes() in mountedRouteRegistry.ts) rather than
+  // through deployment.yaml's `mounts`. Deliberately works for an App
+  // that ISN'T currently mounted too -- "what would this App expose" is a
+  // useful question on its own, independent of whether it's live yet.
+  router.get("/apps/:appId/export/openapi.json", (req, res) => {
+    const app = appRegistry.get(req.params.appId);
+    if (!app) return res.status(404).json({ error: "NotFound", message: `No app "${req.params.appId}"` });
+    const { routes, errors } = resolveAppRoutes(app, integrationRegistry);
+    if (errors.length > 0) {
+      return res.status(409).json({ error: "Conflict", message: `Can't export "${app.id}": ${errors.join("; ")}` });
+    }
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const doc = generateOpenApiDocument({
+      routeRegistry: { list: () => routes },
+      gatewaysRegistry,
+      authProvidersRegistry,
+      baseUrl,
+    });
+    res.setHeader("Content-Disposition", `attachment; filename="naimix-${app.id}-openapi.json"`);
     res.json(doc);
   });
 

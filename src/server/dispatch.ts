@@ -4,7 +4,7 @@ import { mapResponse } from "../transform/mapper";
 import { extractParams } from "./paramExtractor";
 import { AuthError, BackendError } from "./errors";
 import type { AuthService } from "../auth/authService";
-import type { EndpointRegistry } from "./endpointRegistry";
+import type { MountedRouteRegistry } from "./mountedRouteRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { FunctionRegistry } from "../transform/functionRegistry";
 import type { Logger } from "./logger";
@@ -17,21 +17,21 @@ function bearerToken(req: Request): string | undefined {
 
 /**
  * A single Express middleware that serves EVERY configured endpoint, by
- * looking up the current EndpointRegistry on each request rather than having
+ * looking up the current MountedRouteRegistry on each request rather than having
  * one static Express handler per endpoint. This is what makes endpoints
  * created, edited, or deleted through the console API take effect immediately:
  * there's no per-endpoint handler to add/replace/remove in Express's own
  * router, just an in-memory table this middleware reads fresh every time.
  */
 export function createDynamicDispatcher(
-  endpointRegistry: EndpointRegistry,
+  routeRegistry: MountedRouteRegistry,
   gatewaysRegistry: GatewaysRegistry,
   functionRegistry: FunctionRegistry,
   authService: AuthService,
   logger: Logger
 ) {
   return async (req: Request, res: Response, next: NextFunction) => {
-    const matched = endpointRegistry.match(req.method, req.path);
+    const matched = routeRegistry.match(req.method, req.path);
     if (!matched) return next();
 
     const { endpoint, params: pathParams } = matched;

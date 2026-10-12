@@ -1,11 +1,16 @@
-import type { EndpointConfig, GatewayConfig, InputParamDef } from "../types/config";
+import type { GatewayConfig, InputParamDef } from "../types/config";
 import { getBackendGatewayName } from "../connectors";
-import type { EndpointRegistry } from "./endpointRegistry";
+import type { RouteSource, MountedRoute } from "./mountedRouteRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 
 export interface OpenApiGeneratorDeps {
-  endpointRegistry: EndpointRegistry;
+  /** Anything that can list the routes to document -- the live
+   * `MountedRouteRegistry` for "every currently mounted route", or a
+   * one-off `{ list: () => routes }` for a single App's own routes (see
+   * `resolveAppRoutes()` in mountedRouteRegistry.ts, used by the
+   * Console's per-App export). */
+  routeRegistry: RouteSource;
   gatewaysRegistry: GatewaysRegistry;
   authProvidersRegistry: AuthProvidersRegistry;
   /** e.g. `${req.protocol}://${req.get("host")}` -- the base URL callers
@@ -31,13 +36,13 @@ function openApiTypeFor(type: InputParamDef["type"]): "number" | "boolean" | "st
  * the exact same chain dispatch.ts follows at request time. Returns
  * undefined for an endpoint whose backend has no gateway, or whose gateway
  * doesn't require auth. */
-function requiredAuthProvider(endpoint: EndpointConfig, gateways: Record<string, GatewayConfig>): string | undefined {
+function requiredAuthProvider(endpoint: MountedRoute, gateways: Record<string, GatewayConfig>): string | undefined {
   const gatewayName = getBackendGatewayName(endpoint.backend);
   if (!gatewayName) return undefined;
   return gateways[gatewayName]?.requiresAuth;
 }
 
-function buildOperation(endpoint: EndpointConfig, gateways: Record<string, GatewayConfig>): Record<string, unknown> {
+function buildOperation(endpoint: MountedRoute, gateways: Record<string, GatewayConfig>): Record<string, unknown> {
   const parameters: Record<string, unknown>[] = [];
   const bodyProperties: Record<string, unknown> = {};
   const bodyRequired: string[] = [];
@@ -112,16 +117,19 @@ function buildOperation(endpoint: EndpointConfig, gateways: Record<string, Gatew
 }
 
 /**
- * Builds a full OpenAPI 3.0.3 document describing every currently-configured
- * endpoint in this workspace, plus the always-on caller-facing routes every
- * naimix instance exposes (/auth/login/{provider}, /auth/logout, /healthz,
- * /__endpoints). Reads live registry state on every call -- there's no
- * caching -- so downloading this again after an endpoint/gateway/auth-
- * provider change picks it up immediately with no separate "regenerate"
- * step. See GET /export/openapi.json in consoleApi.ts, the only caller.
+ * Builds a full OpenAPI 3.0.3 document describing every route currently
+ * mounted on this server -- every App in deployment.yaml's `mounts`, each
+ * Route's public method+path (prefixed with that App's basePath) resolved
+ * against its Integration's backend/output config -- plus the always-on
+ * caller-facing routes every naimix instance exposes (/auth/login/{provider},
+ * /auth/logout, /healthz, /__endpoints). Reads live registry state on every
+ * call -- there's no caching -- so downloading this again after an
+ * Integration/App/gateway/auth-provider change picks it up immediately with
+ * no separate "regenerate" step. See GET /export/openapi.json in
+ * consoleApi.ts, the only caller.
  */
 export function generateOpenApiDocument({
-  endpointRegistry,
+  routeRegistry,
   gatewaysRegistry,
   authProvidersRegistry,
   baseUrl,
@@ -132,7 +140,7 @@ export function generateOpenApiDocument({
 
   const paths: Record<string, Record<string, unknown>> = {};
 
-  for (const endpoint of endpointRegistry.list()) {
+  for (const endpoint of routeRegistry.list()) {
     const openApiPath = toOpenApiPath(endpoint.path);
     paths[openApiPath] = {
       ...paths[openApiPath],

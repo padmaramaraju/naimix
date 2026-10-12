@@ -4,6 +4,7 @@
 /node_modules
 setup.sh
 .env
+deployment.yaml
 /dist
 /dist-qa
 /dist-prod

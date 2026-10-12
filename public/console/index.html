@@ -10,7 +10,7 @@
   <div id="login-screen" class="login-screen">
     <form id="login-form" class="login-card">
       <h1>Naimix</h1>
-      <p class="muted">Enter the console token to manage endpoints and gateways.</p>
+      <p class="muted">Enter the console token to manage this workspace.</p>
       <input id="login-token" type="password" placeholder="Console token" autocomplete="off" required />
       <button type="submit" class="btn-primary">Sign in</button>
       <p id="login-error" class="error-text" hidden></p>
@@ -30,40 +30,45 @@
       </div>
     </header>
 
-    <div class="workspace-bar">
-      <span class="workspace-label">Workspace</span>
-      <code id="workspace-path" class="workspace-path">—</code>
-      <span id="workspace-counts" class="muted"></span>
-      <button id="change-workspace-btn" class="btn-secondary btn-sm">Change workspace…</button>
+    <div class="breadcrumb-bar">
+      <div id="breadcrumb" class="breadcrumb"></div>
+      <div class="breadcrumb-bar-right">
+        <button id="workspace-mount-warning" class="mount-warning-btn" type="button" hidden title="Click for details">⚠ mount issue(s)</button>
+        <code id="workspace-chip" class="workspace-chip">—</code>
+        <button id="change-workspace-btn" class="btn-secondary btn-sm">Change workspace…</button>
+      </div>
     </div>
 
     <div class="main-layout">
       <aside class="sidebar">
-        <div class="sidebar-section">
-          <div class="sidebar-section-header">
-            <h2>Endpoints</h2>
-            <button id="new-endpoint-btn" class="btn-primary btn-sm" type="button">+ New</button>
+        <!-- Shared Collection: centrally-maintained Auth Providers, Gateways,
+             and Integrations -- every App's Routes point into these by name.
+             See WORKSPACE_APPS_DESIGN_NOTES.md. -->
+        <div class="shared-collection-group">
+          <div class="sidebar-group-label">
+            Shared Collection
+            <button type="button" class="info-icon" data-info-key="sharedCollection" aria-label="What is this?">i</button>
           </div>
-          <div id="endpoints-tree" class="endpoint-tree"></div>
-          <p id="endpoints-empty" class="muted sidebar-empty" hidden>No endpoints yet. Click "+ New" to create one.</p>
+          <p class="nav-caption">Maintained centrally — referenced by every app</p>
+          <ul id="shared-nav-list" class="nav-list"></ul>
         </div>
 
-        <div class="sidebar-section">
-          <div class="sidebar-section-header">
-            <h2>Gateways</h2>
-            <button id="new-gateway-btn" class="btn-primary btn-sm" type="button">+ New</button>
+        <!-- Apps: team-owned flat lists of Routes, each pointing at one
+             Integration above by name. Click an App to see/edit its Routes. -->
+        <div class="apps-group">
+          <div class="sidebar-group-label">
+            Apps
+            <button type="button" class="info-icon" data-info-key="appsSection" aria-label="What is this?">i</button>
           </div>
-          <div id="gateways-list" class="gateway-list"></div>
-          <p id="gateways-empty" class="muted sidebar-empty" hidden>No gateways yet. Click "+ New" to create one.</p>
-        </div>
-
-        <div class="sidebar-section">
-          <div class="sidebar-section-header">
-            <h2>Auth providers</h2>
-            <button id="new-auth-provider-btn" class="btn-primary btn-sm" type="button">+ New</button>
+          <p class="nav-caption">Your routes — each one points into Shared Collection</p>
+          <ul id="apps-nav-list" class="nav-list"></ul>
+          <div class="new-app-row">
+            <button id="new-app-btn" class="new-app-btn" type="button">+ New App</button>
+            <div id="new-app-input-wrap" class="new-app-input-wrap" hidden>
+              <input id="new-app-input" placeholder="App name" />
+            </div>
           </div>
-          <div id="auth-providers-list" class="gateway-list"></div>
-          <p id="auth-providers-empty" class="muted sidebar-empty" hidden>No auth providers yet. Click "+ New" to create one.</p>
+          <p id="apps-empty" class="muted sidebar-empty" hidden>No apps yet.</p>
         </div>
 
         <div class="sidebar-section">
@@ -75,37 +80,42 @@
           <p id="sessions-empty" class="muted sidebar-empty" hidden>No one is currently logged in through any provider.</p>
         </div>
 
-        <div class="sidebar-section">
-          <div class="sidebar-section-header">
-            <h2>Export <button type="button" class="info-icon" data-info-key="exportSection" aria-label="What is this?">i</button></h2>
-          </div>
-          <div class="export-actions">
-            <button id="download-openapi-btn" class="btn-secondary btn-sm" type="button">Download OpenAPI spec (JSON)</button>
-            <button id="download-mcp-server-btn" class="btn-secondary btn-sm" type="button">Download MCP server</button>
-          </div>
-          <p class="muted">Reflects the current workspace -- re-download after config changes.</p>
-        </div>
       </aside>
 
       <main id="detail-panel" class="detail-panel">
         <div id="detail-empty" class="detail-empty">
           <div class="detail-empty-inner">
             <h2>Nothing selected</h2>
-            <p class="muted">Pick an endpoint or gateway on the left to view and edit its definition here — or create a new one.</p>
+            <p class="muted">Pick an App, Integration, Gateway, or Auth provider on the left to view and edit its definition here — or create a new one.</p>
           </div>
         </div>
 
-        <!-- Endpoint detail / editor -->
-        <section id="endpoint-detail" class="detail-view" hidden>
+        <!-- Shared Collection catalog -- one generic read-only table shared by
+             Auth Providers / Gateways / Integrations. Clicking a row opens
+             that item's editor below; "+ Add" opens the same editor empty. -->
+        <section id="shared-catalog-view" class="detail-view" hidden>
+          <div class="page-head">
+            <div>
+              <h2 id="shared-catalog-title">Integrations</h2>
+              <p class="muted shared-sub">Part of Shared Collection — edits here affect every app that references them</p>
+            </div>
+            <button id="shared-catalog-add-btn" class="btn-primary btn-sm" type="button">+ Add</button>
+          </div>
+          <div id="shared-catalog-table" class="catalog-table"></div>
+          <p id="shared-catalog-empty" class="muted sidebar-empty" hidden></p>
+        </section>
+
+        <!-- Integration detail / editor -->
+        <section id="integration-detail" class="detail-view" hidden>
           <div class="detail-view-header">
-            <h2 id="endpoint-editor-title">New endpoint</h2>
+            <h2 id="integration-editor-title">New integration</h2>
             <div class="detail-view-header-actions">
-              <button id="endpoint-delete-btn" class="btn-danger btn-sm" type="button" hidden>Delete</button>
-              <button id="endpoint-close-btn" class="btn-secondary btn-sm" type="button">Close</button>
+              <button id="integration-delete-btn" class="btn-danger btn-sm" type="button" hidden>Delete</button>
+              <button id="integration-close-btn" class="btn-secondary btn-sm" type="button">Close</button>
             </div>
           </div>
 
-          <form id="endpoint-form">
+          <form id="integration-form">
             <div class="editor-tabs" role="tablist">
               <button type="button" class="editor-tab-btn active" data-tab="basic">Basic</button>
               <button type="button" class="editor-tab-btn" data-tab="backend">Backend <span class="editor-tab-count" id="count-backend"></span></button>
@@ -116,27 +126,14 @@
 
             <div class="editor-tab-panel" data-tab-panel="basic">
               <section class="field-grid">
-                <label><span class="field-title">Id <button type="button" class="info-icon" data-info-key="endpointId" aria-label="What is this?">i</button></span>
+                <label><span class="field-title">Id <button type="button" class="info-icon" data-info-key="integrationId" aria-label="What is this?">i</button></span>
                   <input name="id" required pattern="[A-Za-z0-9_\-]+" title="letters, digits, _ and - only" />
                 </label>
-                <label><span class="field-title">Method <button type="button" class="info-icon" data-info-key="endpointMethod" aria-label="What is this?">i</button></span>
-                  <select name="method"></select>
-                </label>
-                <label class="span-2 inline-checkbox">
-                  <input type="checkbox" name="pathAuto" />
-                  Auto-generate path from gateway + endpoint id
-                  <button type="button" class="info-icon" data-info-key="endpointPathAuto" aria-label="What is this?">i</button>
-                </label>
-                <label class="span-2"><span class="field-title">Path <button type="button" class="info-icon" data-info-key="endpointPath" aria-label="What is this?">i</button> <span class="muted">(the URL this middleware serves — not the backend's URL)</span></span>
-                  <input name="path" required placeholder="/api/customers/:id" pattern="/.*" title="Must start with / — this is the path callers hit on this middleware, e.g. /api/customers/:id" />
-                </label>
-                <label class="span-2" id="extra-path-row"><span class="field-title">Extra path <button type="button" class="info-icon" data-info-key="endpointExtraPath" aria-label="What is this?">i</button> <span class="muted">(appended after the auto-generated base — add path params here, e.g. /:id)</span></span>
-                  <input name="extraPath" placeholder="/:id" />
-                </label>
-                <label class="span-2"><span class="field-title">Description <button type="button" class="info-icon" data-info-key="endpointDescription" aria-label="What is this?">i</button></span>
+                <label class="span-2"><span class="field-title">Description <button type="button" class="info-icon" data-info-key="integrationDescription" aria-label="What is this?">i</button></span>
                   <input name="description" placeholder="optional" />
                 </label>
               </section>
+              <p id="integration-used-by" class="muted"></p>
             </div>
 
             <div class="editor-tab-panel" data-tab-panel="backend" hidden>
@@ -180,7 +177,7 @@
             <div class="editor-tab-panel" data-tab-panel="test" hidden>
               <p class="muted">Fill in sample values for your input parameters, fetch a real backend response, then check how it maps.</p>
               <p id="tryit-bulk-note" class="muted" hidden>
-                This is an auto-generated table endpoint (list/bulk-create/bulk-update/bulk-delete) -- it reads
+                This is an auto-generated table integration (list/bulk-create/bulk-update/bulk-delete) -- it reads
                 its filters/rows/updates/keys from the real request's query string or JSON body instead of the
                 Parameters tab. Fill in the field below to match what a real caller would send.
               </p>
@@ -216,11 +213,74 @@
               </div>
             </div>
 
-            <p id="endpoint-form-error" class="error-text" hidden></p>
+            <p id="integration-form-error" class="error-text" hidden></p>
             <div class="detail-footer">
-              <button type="submit" class="btn-primary">Save endpoint</button>
+              <button type="submit" class="btn-primary">Save integration</button>
             </div>
           </form>
+        </section>
+
+        <!-- App detail / editor -->
+        <section id="app-detail" class="detail-view" hidden>
+          <div class="detail-view-header">
+            <h2 id="app-editor-title">New app</h2>
+            <div class="detail-view-header-actions">
+              <button id="app-delete-btn" class="btn-danger btn-sm" type="button" hidden>Delete</button>
+              <button id="app-close-btn" class="btn-secondary btn-sm" type="button">Close</button>
+            </div>
+          </div>
+
+          <div class="editor-tabs" role="tablist" id="app-tabs">
+            <button type="button" class="editor-tab-btn active" data-app-tab="settings">Settings</button>
+            <button type="button" class="editor-tab-btn" data-app-tab="routes" id="app-tab-routes-btn" disabled>Routes <span class="editor-tab-count" id="count-app-routes"></span></button>
+            <button type="button" class="editor-tab-btn" data-app-tab="export" id="app-tab-export-btn" disabled>Export</button>
+          </div>
+
+          <div class="app-tab-panel" data-app-tab-panel="settings">
+            <form id="app-form">
+              <div class="field-grid">
+                <label><span class="field-title">Id <button type="button" class="info-icon" data-info-key="appId" aria-label="What is this?">i</button></span>
+                  <input name="id" required pattern="[A-Za-z0-9_\-]+" title="letters, digits, _ and - only" />
+                </label>
+                <label><span class="field-title">Name <button type="button" class="info-icon" data-info-key="appName" aria-label="What is this?">i</button></span>
+                  <input name="name" required placeholder="Storefront Web" />
+                </label>
+              </div>
+              <p id="app-form-error" class="error-text" hidden></p>
+              <div class="detail-footer">
+                <button type="submit" class="btn-primary">Save app</button>
+              </div>
+            </form>
+          </div>
+
+          <div class="app-tab-panel" data-app-tab-panel="routes" hidden>
+            <section id="app-routes-section" class="editor-section">
+              <div class="section-header">
+                <h3>Routes <button type="button" class="info-icon" data-info-key="appRoutes" aria-label="What is this?">i</button></h3>
+                <button id="add-route-btn" class="btn-primary btn-sm" type="button">+ Add route</button>
+              </div>
+              <p id="app-mount-note" class="muted"></p>
+              <div id="app-routes-list" class="routes-table"></div>
+              <p id="app-routes-empty" class="muted sidebar-empty" hidden>No routes yet. Click "+ Add route" to point one at an Integration in Shared Collection.</p>
+            </section>
+          </div>
+
+          <div class="app-tab-panel" data-app-tab-panel="export" hidden>
+            <div class="export-card">
+              <div>
+                <div class="export-card-title">OpenAPI spec</div>
+                <div class="export-card-desc" id="app-export-openapi-desc">Covers only this app's own routes.</div>
+              </div>
+              <button id="download-openapi-btn" class="btn-secondary btn-sm" type="button">Download</button>
+            </div>
+            <div class="export-card">
+              <div>
+                <div class="export-card-title">MCP server</div>
+                <div class="export-card-desc">A single generic server script -- not scoped to this app. At its own startup it discovers every route currently mounted on this instance (across every app) by calling this same console API.</div>
+              </div>
+              <button id="download-mcp-server-btn" class="btn-secondary btn-sm" type="button">Download</button>
+            </div>
+          </div>
         </section>
 
         <!-- Gateway detail / editor -->
@@ -242,7 +302,7 @@
             </label>
             <div id="gateway-fields"></div>
 
-            <label class="block"><span class="field-title">Requires auth <button type="button" class="info-icon" data-info-key="gatewayRequiresAuth" aria-label="What is this?">i</button> <span class="muted">(optional — every endpoint using this gateway will require a caller session from this provider)</span></span>
+            <label class="block"><span class="field-title">Requires auth <button type="button" class="info-icon" data-info-key="gatewayRequiresAuth" aria-label="What is this?">i</button> <span class="muted">(optional — every route whose Integration calls through this gateway will require a caller session from this provider)</span></span>
               <select name="requiresAuth"><option value="">(none)</option></select>
             </label>
 
@@ -251,8 +311,8 @@
                 <h3>Common parameters <button type="button" class="info-icon" data-info-key="gatewayCommonParams" aria-label="What is this?">i</button></h3>
                 <button type="button" class="btn-secondary btn-sm" id="add-common-param-btn">+ Add parameter</button>
               </div>
-              <p class="muted">Available as <code>{name}</code> to every endpoint that uses this gateway
-                (values may reference <code>${env.VAR_NAME}</code>). An endpoint's own input parameter of the
+              <p class="muted">Available as <code>{name}</code> to every integration that uses this gateway
+                (values may reference <code>${env.VAR_NAME}</code>). An integration's own input parameter of the
                 same name takes precedence.</p>
               <div id="gateway-common-params-list" class="repeatable-list"></div>
             </section>
@@ -387,10 +447,12 @@
       <div class="drawer-body">
         <p class="muted">
           Point this instance at a workspace on this machine — a folder containing (or that will
-          contain) an <code>endpoints/</code> folder and a <code>gateways.yaml</code> file — typically
-          your local checkout of a team Git repo. Endpoints and gateways you create here are written
-          straight into that folder; committing/pushing to Git is up to you, outside this app. This
-          setting only affects this machine.
+          contain) an <code>integrations/</code> folder, an <code>apps/</code> folder, and a
+          <code>gateways.yaml</code> file — typically your local checkout of a team Git repo.
+          Integrations and Apps you create here are written straight into that folder;
+          committing/pushing to Git is up to you, outside this app. This setting only affects this
+          machine, and never touches <code>deployment.yaml</code>'s <code>mounts</code> list (which
+          app(s) are actually exposed, and at what basePath) -- that stays hand-edited.
         </p>
         <form id="workspace-form">
           <label class="block">Workspace path
@@ -404,6 +466,78 @@
             <button type="submit" class="btn-primary">Use this workspace</button>
           </div>
         </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add/edit route -- the 2-step flow: pick an Integration (step 1), then
+       its method/path/description (step 2). Also hosts the Route-level
+       "Try it" tester, shown once the route is saved (needs a real
+       appId+routeId for POST /apps/:appId/routes/:routeId/test). -->
+  <div id="route-editor" class="modal-overlay" hidden>
+    <div class="modal-overlay-backdrop" data-close="route-editor"></div>
+    <div class="modal-overlay-panel">
+      <div class="drawer-header">
+        <h2 id="route-editor-title">Add route</h2>
+        <button class="icon-btn" data-close="route-editor">✕</button>
+      </div>
+      <div class="drawer-body">
+        <!-- Step 1: pick an Integration -->
+        <div id="route-step-pick-integration">
+          <p class="muted">Pick which Integration this Route calls. Its backend/output are already defined there -- a Route is just a public method + path pointing at it.</p>
+          <input id="route-integration-search" type="text" placeholder="Search integrations…" />
+          <div id="route-integration-cards" class="integration-card-list"></div>
+          <p id="route-integration-cards-empty" class="muted" hidden>No integrations yet -- create one in the Shared Collection first.</p>
+        </div>
+
+        <!-- Step 2: method/path/description, with the chosen Integration
+             shown as a fixed read-only card up top. -->
+        <div id="route-step-details" hidden>
+          <div id="route-chosen-integration-card" class="integration-card integration-card-chosen"></div>
+          <button type="button" id="route-change-integration-btn" class="btn-secondary btn-sm">Change integration…</button>
+
+          <form id="route-form">
+            <div class="field-grid">
+              <label><span class="field-title">Id <button type="button" class="info-icon" data-info-key="routeId" aria-label="What is this?">i</button></span>
+                <input name="id" required pattern="[A-Za-z0-9_\-]+" title="letters, digits, _ and - only" />
+              </label>
+              <label><span class="field-title">Method <button type="button" class="info-icon" data-info-key="routeMethod" aria-label="What is this?">i</button></span>
+                <select name="method"></select>
+              </label>
+              <label class="span-2"><span class="field-title">Path <button type="button" class="info-icon" data-info-key="routePath" aria-label="What is this?">i</button> <span class="muted">(relative to this App's basePath in deployment.yaml)</span></span>
+                <input name="path" required placeholder="/customers/:id" pattern="/.*" title="Must start with /, e.g. /customers/:id" />
+              </label>
+              <label class="span-2"><span class="field-title">Description <button type="button" class="info-icon" data-info-key="routeDescription" aria-label="What is this?">i</button></span>
+                <input name="description" placeholder="optional" />
+              </label>
+            </div>
+            <p id="route-form-error" class="error-text" hidden></p>
+            <div class="drawer-footer">
+              <button type="button" class="btn-secondary" data-close="route-editor">Cancel</button>
+              <button type="submit" class="btn-primary">Save route</button>
+            </div>
+          </form>
+
+          <section id="route-tryit-section" class="editor-section" hidden>
+            <div class="section-header">
+              <h3>Try it <button type="button" class="info-icon" data-info-key="routeTryIt" aria-label="What is this?">i</button></h3>
+            </div>
+            <div id="route-test-params-list" class="repeatable-list"></div>
+            <div class="test-actions">
+              <button type="button" class="btn-secondary btn-sm" id="route-fetch-sample-btn">Fetch &amp; map</button>
+            </div>
+            <div class="test-results">
+              <div>
+                <h4>Raw backend response</h4>
+                <pre id="route-test-raw-output" class="code-block">—</pre>
+              </div>
+              <div>
+                <h4>Mapped output</h4>
+                <pre id="route-test-mapped-output" class="code-block">—</pre>
+              </div>
+            </div>
+          </section>
+        </div>
       </div>
     </div>
   </div>

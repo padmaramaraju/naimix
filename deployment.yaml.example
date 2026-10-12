@@ -1,0 +1,27 @@
+# Describes what THIS server instance serves: which Workspace's Shared
+# Collection to load, and which App(s) -- if any -- to mount and at what
+# public path prefix.
+#
+# Hand-edited per environment and NOT checked into Git (see .gitignore) --
+# copy this file to deployment.yaml and fill in real values, the same way
+# .env.example is copied to .env. Each environment (your local dev checkout,
+# staging, a customer's production server) gets its own deployment.yaml.
+
+# Folder containing this server's Workspace: endpoints/, gateways.yaml,
+# authProviders.yaml, transforms/, and (once the Apps feature lands) an
+# apps/ folder holding each App's routes. See "Workspace" in the README.
+# Leave unset to fall back to CONFIG_DIR / ENDPOINTS_DIR+GATEWAYS_FILE in
+# .env, exactly as today.
+configDir: /path/to/your/workspace-repo/config
+
+# Planned -- not read by the server yet. Which App(s) this instance mounts
+# and serves publicly, each under its own basePath so more than one App can
+# share a server without their routes colliding. A server serving only one
+# App should still list just that one entry below with its own basePath --
+# rather than leaving it unset -- so adding a second App later never changes
+# this App's existing public URLs.
+mounts:
+  - app: storefront-web
+    basePath: /storefront-web
+  - app: partner-mobile
+    basePath: /partner-mobile

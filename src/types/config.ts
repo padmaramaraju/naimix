@@ -166,11 +166,17 @@ export interface OutputConfig {
   postProcess?: { name: string };
 }
 
-export interface EndpointConfig {
+/**
+ * Today's "Endpoint" split in two -- see WORKSPACE_APPS_DESIGN_NOTES.md.
+ * IntegrationConfig is the Workspace-owned half: how to call a backend and
+ * shape its response. It has no `method`/`path` of its own -- those live
+ * on the Route(s) (see RouteConfig below) that point at this Integration
+ * by name; the same Integration may be called by more than one Route,
+ * across more than one App.
+ */
+export interface IntegrationConfig {
   id: string;
   description?: string;
-  method: HttpMethod;
-  path: string;
   input?: InputParamDef[];
   backend: BackendConfig;
   output: OutputConfig;
@@ -359,3 +365,68 @@ export type AuthProviderConfig =
 export interface AuthProvidersFile {
   authProviders: Record<string, AuthProviderConfig>;
 }
+
+// ---- Apps & Routes ----
+// See WORKSPACE_APPS_DESIGN_NOTES.md for the full design. An App is owned
+// by a consuming team: a flat list of Routes, each a thin pointer at an
+// Integration (today's EndpointConfig, soon renamed) already defined in
+// the shared Workspace. A Route carries no backend-calling logic of its
+// own -- "pure pointer" by design, see that doc.
+
+export interface RouteConfig {
+  /** Stable identity, independent of method/path -- see
+   * WORKSPACE_APPS_DESIGN_NOTES.md ("Route gets its own stable id"). Lets
+   * the Console edit a route in place while its method/path changes, and
+   * is what the load/save-time collision check reports against. */
+  id: string;
+  method: HttpMethod;
+  path: string;
+  description?: string;
+  /** Name of an Integration this route calls. A name with no matching
+   * Integration fails config validation -- the same "a bad reference is a
+   * load error, not a silent no-op" convention every other named reference
+   * in this project already follows (gateway names, auth provider names,
+   * transform function names). */
+  integration: string;
+}
+
+export interface AppConfig {
+  /** Stable identity (also the YAML filename: apps/<id>.yaml, and what a
+   * deployment.yaml `mounts` entry references). Independent of `name` so
+   * renaming an App's display label never breaks a mounts reference --
+   * see WORKSPACE_APPS_DESIGN_NOTES.md. */
+  id: string;
+  /** Editable display label shown in the Console. */
+  name: string;
+  routes: RouteConfig[];
+}
+
+// ---- Deployment ----
+// See WORKSPACE_APPS_DESIGN_NOTES.md. Loaded from deployment.yaml --
+// hand-edited per environment, like .env (see deployment.yaml.example and
+// .gitignore). The Console's "Change workspace..." control may still
+// update `configDir` here, same as it updates today's settings.json, but
+// never writes to `mounts` -- that list is deployment topology a person
+// decides, not something a UI control should touch.
+
+export interface DeploymentMount {
+  /** An AppConfig.id. A name with no matching App fails to boot, loudly --
+   * same convention as every other named reference here. */
+  app: string;
+  /** Prepended to every one of this App's routes once mounted, so more
+   * than one App can share a server without their routes colliding. Every
+   * App gets one, even when it's the only App on this server -- see
+   * WORKSPACE_APPS_DESIGN_NOTES.md ("every App gets a basePath"). */
+  basePath: string;
+}
+
+export interface DeploymentConfig {
+  /** Same meaning as today's WorkspaceSettings.configDir: a folder
+   * containing endpoints/ (soon integrations/), gateways.yaml,
+   * authProviders.yaml, transforms/, and an apps/ folder. */
+  configDir: string;
+  /** Which App(s) this server instance mounts and serves publicly, and at
+   * what basePath each. */
+  mounts: DeploymentMount[];
+}
+

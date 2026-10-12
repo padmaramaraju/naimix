@@ -7,7 +7,7 @@ import { requireOpsAuth } from "./opsAuth";
 import { createOpsApiRouter } from "./opsApi";
 import { AuthService } from "../auth/authService";
 import { InMemorySessionStore } from "../auth/sessionStore";
-import type { EndpointRegistry } from "./endpointRegistry";
+import type { MountedRouteRegistry } from "./mountedRouteRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 import type { FunctionRegistry } from "../transform/functionRegistry";
@@ -43,7 +43,7 @@ import type { Logger } from "./logger";
  */
 
 export interface CoreAppDeps {
-  endpointRegistry: EndpointRegistry;
+  routeRegistry: MountedRouteRegistry;
   gatewaysRegistry: GatewaysRegistry;
   authProvidersRegistry: AuthProvidersRegistry;
   logger: Logger;
@@ -64,7 +64,7 @@ export interface BaseApp {
  * full/dev app or the data-plane-only one -- that choice is made by what
  * gets mounted next, not by anything in this function.
  */
-export function createBaseApp({ endpointRegistry, gatewaysRegistry, authProvidersRegistry, logger }: CoreAppDeps): BaseApp {
+export function createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, logger }: CoreAppDeps): BaseApp {
   const authService = new AuthService(authProvidersRegistry, new InMemorySessionStore());
   const app = express();
   app.use(cors());
@@ -78,14 +78,16 @@ export function createBaseApp({ endpointRegistry, gatewaysRegistry, authProvider
   app.use(express.urlencoded({ extended: true, limit: MAX_REQUEST_BODY_SIZE }));
 
   app.get("/healthz", (_req, res) => {
-    res.json({ status: "ok", endpointCount: endpointRegistry.list().length });
+    res.json({ status: "ok", endpointCount: routeRegistry.list().length });
   });
 
-  // Introspection endpoint: lists every configured endpoint so users can see
-  // what's live without reading the YAML files.
+  // Introspection endpoint: lists every currently-mounted route (an App's
+  // Route combined with the Integration it points to -- see
+  // mountedRouteRegistry.ts) so users can see what's actually live without
+  // reading the YAML files.
   app.get("/__endpoints", (_req, res) => {
     res.json(
-      endpointRegistry.list().map((r) => ({
+      routeRegistry.list().map((r) => ({
         id: r.id,
         method: r.method,
         path: r.path,
@@ -115,13 +117,13 @@ export function createBaseApp({ endpointRegistry, gatewaysRegistry, authProvider
 export function mountDataPlaneRoutes(
   app: Express,
   {
-    endpointRegistry,
+    routeRegistry,
     gatewaysRegistry,
     functionRegistry,
     authService,
     logger,
   }: {
-    endpointRegistry: EndpointRegistry;
+    routeRegistry: MountedRouteRegistry;
     gatewaysRegistry: GatewaysRegistry;
     functionRegistry: FunctionRegistry;
     authService: AuthService;
@@ -133,10 +135,11 @@ export function mountDataPlaneRoutes(
   // below. See AUTH_DESIGN_NOTES.md.
   app.use("/auth", createAuthRouter(authService, logger));
 
-  // Every configured endpoint is served by one dynamic handler that reads the
-  // registry fresh per request (see dispatch.ts) -- this is what lets
-  // endpoints created/edited via the console API go live without a restart.
-  app.use(createDynamicDispatcher(endpointRegistry, gatewaysRegistry, functionRegistry, authService, logger));
+  // Every mounted route is served by one dynamic handler that reads
+  // routeRegistry fresh per request (see dispatch.ts/mountedRouteRegistry.ts)
+  // -- this is what lets an Integration or App created/edited via the
+  // console API go live without a restart.
+  app.use(createDynamicDispatcher(routeRegistry, gatewaysRegistry, functionRegistry, authService, logger));
 }
 
 /**

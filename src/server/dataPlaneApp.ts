@@ -55,8 +55,8 @@ export function createDataPlaneApp({
   functionRegistry,
   logger,
 }: CreateDataPlaneAppOptions): Express {
-  const { app, authService } = createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, logger });
-  mountDataPlaneRoutes(app, { routeRegistry, gatewaysRegistry, functionRegistry, authService, logger });
+  const { app, authService, pendingFlowStore } = createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, logger });
+  mountDataPlaneRoutes(app, { routeRegistry, gatewaysRegistry, authProvidersRegistry, functionRegistry, authService, pendingFlowStore, logger });
   mountTerminalHandlers(app, logger);
   return app;
 }

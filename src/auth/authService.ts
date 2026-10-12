@@ -3,7 +3,7 @@ import type { AuthProvidersRegistry } from "../server/authProvidersRegistry";
 import { AuthError, ValidationError } from "../server/errors";
 import { createAuthProvider } from "./providerFactory";
 import type { SessionStore } from "./sessionStore";
-import type { SessionRecord } from "./types";
+import type { AuthResult, SessionRecord } from "./types";
 
 // Refresh a little before expiry rather than waiting for the backend to
 // reject an about-to-expire token -- see "Refresh token handling" in
@@ -81,7 +81,22 @@ export class AuthService {
   async login(providerName: string, credentials: Record<string, unknown>): Promise<{ token: string; expiresAt?: number }> {
     const provider = this.getProvider(providerName);
     const result = await provider.login(credentials);
+    return this.createSession(providerName, result);
+  }
 
+  /**
+   * The Authorization Code flow's counterpart to login() above: the
+   * caller (GET /auth/oauth/:provider/callback) has already done its own
+   * provider-specific exchange (see oauthCodeFlow.ts) and just needs the
+   * same "mint an opaque token, store the session" bookkeeping every other
+   * grant gets -- pulled out into createSession() below so both paths
+   * share it exactly, rather than this flow re-implementing it.
+   */
+  async completeOAuthLogin(providerName: string, result: AuthResult): Promise<{ token: string; expiresAt?: number }> {
+    return this.createSession(providerName, result);
+  }
+
+  private async createSession(providerName: string, result: AuthResult): Promise<{ token: string; expiresAt?: number }> {
     const token = crypto.randomBytes(32).toString("hex");
     const record: SessionRecord = {
       providerName,

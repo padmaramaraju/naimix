@@ -12,6 +12,19 @@ authProviders:
     grantType: password
     clientId: demo-client
     clientSecret: ${env.DEMO_OAUTH_CLIENT_SECRET}
+  demoOAuthCode:
+    kind: oauth2
+    grantType: authorizationCode
+    tokenUrl: ${env.DEMO_JSON_BASE_URL}/oauth/token
+    authorizationUrl: ${env.DEMO_JSON_BASE_URL}/oauth/authorize
+    redirectUri: ${env.DEMO_OAUTH_CODE_REDIRECT_URI}
+    clientId: demo-client
+    clientSecret: ${env.DEMO_OAUTH_CLIENT_SECRET}
+    clients:
+      - id: demoWebApp
+        name: Demo Web App
+        returnTo:
+          - http://localhost:5000/echo
   demoLdap:
     kind: ldap
     url: ${env.DEMO_LDAP_URL}

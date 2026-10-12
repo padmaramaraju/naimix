@@ -216,6 +216,67 @@ export function generateOpenApiDocument({
     };
   }
 
+  // One /start + /callback pair per oauth2 provider configured for the
+  // authorizationCode grant -- a redirect flow, not a POST a caller's own
+  // code issues directly, so it's documented separately from the generic
+  // /auth/login/{provider} shape above. See AUTH_DESIGN_NOTES.md's "Client
+  // Integration Guide" for the full contract this summarizes.
+  for (const [name, provider] of Object.entries(authProviders)) {
+    if (provider.kind !== "oauth2" || provider.grantType !== "authorizationCode") continue;
+    const registeredApps = (provider.clients ?? []).map((c) => c.id);
+
+    paths[`/auth/oauth/${name}/start`] = {
+      get: {
+        operationId: `oauthStart_${name}`,
+        summary: `Begin the "${name}" Authorization Code login (redirect flow)`,
+        description:
+          'Open this URL in a browser (don\'t call it as an API/fetch request) -- it redirects to the real provider\'s own login page, then back to this server\'s callback, then on to your app\'s return_to with the resulting session token attached as a URL fragment. See AUTH_DESIGN_NOTES.md\'s "Client Integration Guide".',
+        tags: ["Auth"],
+        parameters: [
+          {
+            name: "app",
+            in: "query",
+            required: true,
+            schema: { type: "string", ...(registeredApps.length > 0 ? { enum: registeredApps } : {}) },
+            description: "One of this provider's registered client app ids.",
+          },
+          {
+            name: "return_to",
+            in: "query",
+            required: true,
+            schema: { type: "string" },
+            description: "Must exactly match one of `app`'s registered return_to destinations.",
+          },
+          {
+            name: "state",
+            in: "query",
+            required: false,
+            schema: { type: "string" },
+            description: "Your own opaque pass-through value, returned unchanged alongside the token.",
+          },
+        ],
+        responses: {
+          "302": { description: "Redirect to the real provider's login page" },
+          "400": { description: "Unknown provider, or app/return_to isn't a registered pair" },
+        },
+      },
+    };
+
+    paths[`/auth/oauth/${name}/callback`] = {
+      get: {
+        operationId: `oauthCallback_${name}`,
+        summary: `"${name}"'s own registered redirect_uri -- never called directly`,
+        description:
+          "This is the redirect_uri registered with the real provider for this flow. Nothing calls it directly -- the real provider redirects here after the user logs in, and this in turn redirects to the calling app's own return_to.",
+        tags: ["Auth"],
+        responses: {
+          "302": { description: "Redirect to the calling app's return_to, with the session token (or an error) attached as a URL fragment" },
+          "400": { description: "Unknown, expired, or already-used login attempt" },
+        },
+      },
+    };
+  }
+
   paths["/healthz"] = {
     get: {
       operationId: "healthCheck",

@@ -280,22 +280,81 @@ export interface BasicLoginProviderConfig {
   claims?: OutputFieldDef[];
 }
 
+/** One web/mobile application allowed to initiate this provider's
+ * Authorization Code flow and receive the resulting opaque session token.
+ * See AUTH_DESIGN_NOTES.md's "Client Integration Guide" -- this is the
+ * allow-list that closes the open-redirect risk inherent in "redirect the
+ * browser to whatever return_to the start request named": `GET
+ * /auth/oauth/{provider}/start` rejects any `app`/`return_to` pair that
+ * isn't an exact match against one of this provider's `clients` entries.
+ * Deliberately scoped to the provider rather than a standalone top-level
+ * registry -- the allow-list is only ever checked at that one provider's
+ * own `/start` endpoint, and a real app registering itself as an OAuth
+ * client separately with each identity provider it supports is exactly how
+ * OAuth already works, not an artificial wrinkle this adds. */
+export interface OAuthClientAppConfig {
+  /** Stable identifier the calling app passes as `?app=` on `/start`. */
+  id: string;
+  /** Display label only, e.g. for the console UI's list of registered apps. */
+  name?: string;
+  /** Exact allowed `return_to` destinations for this app -- an HTTPS
+   * origin+path for a web app, or a custom URI scheme/claimed universal
+   * link (e.g. "myapp://oauth-callback") for a mobile app. `/start` requires
+   * an exact match (no prefix/wildcard matching) against one of these. */
+  returnTo: string[];
+}
+
 /** A standard OAuth2 token endpoint (RFC 6749) -- password grant (an end
- * user's own credentials) or client_credentials grant (this middleware
- * authenticating as itself, no end user involved). Request/response field
- * names follow the spec, so unlike BasicLoginProviderConfig there's nothing
- * to configure there. Supports the standard refresh_token grant when the
- * token response includes one. */
+ * user's own credentials), client_credentials grant (this middleware
+ * authenticating as itself, no end user involved), or authorizationCode
+ * (a human authenticating on the real provider's own page via a browser
+ * redirect -- see AUTH_DESIGN_NOTES.md's "OAuth Authorization Code"
+ * section). Request/response field names follow the spec, so unlike
+ * BasicLoginProviderConfig there's nothing to configure there. Supports the
+ * standard refresh_token grant when the token response includes one,
+ * regardless of which of the three grants originally created the session.
+ *
+ * `authorizationUrl`, `redirectUri`, and `clients` are meaningful (and
+ * required, enforced in src/config/schema.ts) only for grantType
+ * "authorizationCode" -- the other two grants are a single POST to
+ * `tokenUrl` with no redirect involved, so they don't need any of the
+ * three. Two different "redirect" concepts are both present once
+ * authorizationCode is in play, and they are NOT the same URL:
+ * `redirectUri` is naimix's OWN callback -- the one URL registered with the
+ * real provider, where the provider sends the user back to after login --
+ * while each client app's `returnTo` (under `clients` below) is where
+ * NAIMIX, in turn, sends the user once ITS OWN callback has finished, per
+ * the client app's own request. */
 export interface OAuth2ProviderConfig {
   kind: "oauth2";
   tokenUrl: string;
-  grantType: "password" | "client_credentials";
+  grantType: "password" | "client_credentials" | "authorizationCode";
   clientId: string;
   clientSecret: string;
   scope?: string;
   headers?: Record<string, string>;
   /** Named claims to capture from the raw token response into the session. */
   claims?: OutputFieldDef[];
+  /** authorizationCode only: the real provider's authorization endpoint --
+   * where `GET /auth/oauth/{provider}/start` redirects the browser to. */
+  authorizationUrl?: string;
+  /** authorizationCode only: naimix's own callback URL, i.e. the exact
+   * `redirect_uri` registered with the real provider -- in practice the
+   * load balancer's/public URL's `/auth/oauth/{provider}/callback`, not any
+   * one instance's own address. */
+  redirectUri?: string;
+  /** authorizationCode only: this provider's own Issuer Identifier, used
+   * only to validate the `iss` claim IF the token response happens to
+   * include an OIDC ID token (most real providers' issuer is exactly their
+   * base origin, e.g. "https://accounts.google.com"). Defaults to
+   * `tokenUrl`'s origin when omitted -- override this when the real
+   * provider's issuer differs from that, since an ID token whose `iss`
+   * doesn't match this value fails validation even though nothing about
+   * the login itself was wrong. */
+  issuer?: string;
+  /** authorizationCode only: the allow-list of web/mobile apps permitted to
+   * use this provider's redirect flow (at least one required). */
+  clients?: OAuthClientAppConfig[];
 }
 
 /** LDAP/AD plain simple-bind provider (step 2 of AUTH_DESIGN_NOTES.md's phased

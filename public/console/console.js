@@ -261,10 +261,14 @@ const FIELD_INFO = {
   activeSessions: "Every caller session currently held in memory across all auth providers. This is a live view of the session store, showing enough to identify a session (provider, subject, claims, timestamps) and revoke it if needed. Outside production (NODE_ENV != \"production\"), opening a session also shows its real session/backend/refresh tokens for local debugging; a real deployment run with NODE_ENV=production always withholds them.",
   exportSection: "Download a standard OpenAPI (Swagger) description of every route currently MOUNTED on this server (every App named in deployment.yaml's `mounts`, basePath-prefixed) plus this workspace's auth routes, or a ready-to-run MCP server that talks to this same live instance -- both always reflect the current config, so re-download after making changes rather than reusing an older copy.",
   authProviderTokenUrl: "The OAuth2 token endpoint this provider requests tokens from, per RFC 6749, e.g. https://api.example.com/oauth/token.",
-  authProviderGrantType: "password sends the caller's own username/password (a person logging in). client_credentials authenticates this middleware itself with no end-user credentials at all -- use it when callers shouldn't need individual backend accounts.",
+  authProviderGrantType: "password sends the caller's own username/password (a person logging in). client_credentials authenticates this middleware itself with no end-user credentials at all -- use it when callers shouldn't need individual backend accounts. authorizationCode is a browser redirect: a human logs in on the real provider's own page, then naimix hands the resulting session token to one of the registered client apps below -- see AUTH_DESIGN_NOTES.md.",
   authProviderClientId: "This middleware's own OAuth2 client identifier, issued by the backend's authorization server.",
   authProviderClientSecret: "This middleware's own OAuth2 client secret. Leave blank when editing an existing provider to keep the currently stored value unchanged.",
   authProviderScope: "An optional space-separated list of OAuth2 scopes to request.",
+  authProviderAuthorizationUrl: "authorizationCode only: the real provider's authorization endpoint -- where GET /auth/oauth/{provider}/start redirects the browser to.",
+  authProviderRedirectUri: "authorizationCode only: naimix's OWN callback URL -- the exact redirect_uri you register with the real provider (in production, the load balancer's public URL, not one instance's own address). This is NOT the same thing as a client app's return_to below.",
+  authProviderIssuer: "authorizationCode only, optional: this provider's Issuer Identifier, used only to validate an OIDC ID token's iss claim if the provider happens to return one. Defaults to the Token URL's own origin -- override only if the real provider's issuer differs from that.",
+  authProviderClients: "authorizationCode only: the allow-list of web/mobile apps permitted to use this provider's redirect flow. GET /auth/oauth/{provider}/start rejects any app/return_to pair that isn't an exact match here -- this is what closes the open-redirect risk of \"redirect wherever the request says\" (see AUTH_DESIGN_NOTES.md's Client Integration Guide).",
   authProviderLdapUrl: "The LDAP/AD server URL, e.g. ldap://localhost:3389 or ldaps://ad.example.com:636.",
   authProviderLdapTlsRejectUnauthorized: "Only meaningful for ldaps:// URLs. Leave on (verify the server's TLS certificate) unless connecting to a trusted internal test directory with a self-signed certificate.",
   authProviderLdapBindMode: "Direct bind builds the DN to bind as directly from a predictable template. Search-then-bind uses a service account to look up the real user DN first, then binds as that user -- the realistic pattern for Active Directory and most enterprise directories where usernames don't map predictably to a DN.",
@@ -1340,6 +1344,53 @@ function buildFunctionPicker(initialName) {
  * select reveals buildFunctionPicker()'s inline editor in place of (not
  * in addition to) the plain enum choice.
  */
+/** One row in an oauth2 authorizationCode provider's "Authorized client
+ * apps" repeatable list -- see AUTH_DESIGN_NOTES.md's Client Integration
+ * Guide and OAuthClientAppConfig's doc comment in src/types/config.ts.
+ * returnTo is a comma-separated input, same convention renderAuthProvider-
+ * KindFields already uses for LDAP's `attributes` list, rather than a
+ * second nested repeatable list inside this one. */
+function oauthClientRow(clientApp, onChange) {
+  clientApp = clientApp || { id: "", name: "", returnTo: [] };
+  const idInput = el("input", { placeholder: "app id, e.g. webApp", value: clientApp.id || "" });
+  const nameInput = el("input", { placeholder: "display name (optional)", value: clientApp.name || "" });
+  const returnToInput = el("input", {
+    placeholder: "https://app.example.com/done, myapp://oauth-callback",
+    value: (clientApp.returnTo || []).join(", "),
+  });
+  const removeBtn = el(
+    "button",
+    {
+      type: "button",
+      class: "btn-secondary btn-sm",
+      onclick: () => {
+        row.remove();
+        if (onChange) onChange();
+      },
+    },
+    ["✕"]
+  );
+  const row = el("div", { class: "repeatable-row" }, [
+    el("label", {}, ["App id", idInput]),
+    el("label", {}, ["Display name", nameInput]),
+    el("label", { class: "span-2" }, ["Allowed return_to (comma-separated)", returnToInput]),
+    removeBtn,
+  ]);
+  row._read = () => ({
+    id: idInput.value.trim(),
+    name: nameInput.value.trim() || undefined,
+    returnTo: returnToInput.value
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean),
+  });
+  if (onChange) {
+    idInput.addEventListener("input", onChange);
+    returnToInput.addEventListener("input", onChange);
+  }
+  return row;
+}
+
 function outputFieldRow(field) {
   field = field || { target: "", source: "", default: "", transform: "" };
 
@@ -2320,7 +2371,7 @@ async function saveGateway(ev) {
  * blocked server-side while a gateway still requires this provider).
  * ------------------------------------------------------------------- */
 const AUTH_PROVIDER_KINDS = ["basicLogin", "oauth2", "ldap"];
-const OAUTH_GRANT_TYPES = ["password", "client_credentials"];
+const OAUTH_GRANT_TYPES = ["password", "client_credentials", "authorizationCode"];
 const LDAP_BIND_MODES = ["search", "direct"];
 
 function renderAuthProviderKindFields(kind, provider) {
@@ -2423,6 +2474,75 @@ function renderAuthProviderKindFields(kind, provider) {
     renderKeyValueEditor(headersContainer, provider.headers, {});
     const addHeaderBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => headersContainer._addRow("", "") }, ["+ Add header"]);
 
+    // authorizationCode-only fields -- a browser redirect flow, not a
+    // single POST, so it needs naimix's own callback URL, the real
+    // provider's login page, and the allow-list of client apps permitted
+    // to use it (see AUTH_DESIGN_NOTES.md). Built unconditionally but
+    // shown/hidden by grantTypeSelect's own change handler below, rather
+    // than re-rendering the whole kind's fields on every grant-type change.
+    const authorizationUrlInput = el("input", { value: provider.authorizationUrl || "", placeholder: "https://idp.example.com/authorize" });
+    const redirectUriInput = el("input", { value: provider.redirectUri || "", placeholder: "https://naimix.example.com/auth/oauth/<name>/callback" });
+    const issuerInput = el("input", { value: provider.issuer || "", placeholder: "optional -- defaults to the Token URL's own origin" });
+    const clientsList = el("div", { class: "repeatable-list" });
+    const addClientBtn = el(
+      "button",
+      {
+        type: "button",
+        class: "btn-secondary btn-sm",
+        onclick: () => {
+          clientsList.appendChild(oauthClientRow(undefined, syncOauthCodeTestUi));
+          syncOauthCodeTestUi();
+        },
+      },
+      ["+ Add client app"]
+    );
+    for (const c of provider.clients || []) clientsList.appendChild(oauthClientRow(c, () => syncOauthCodeTestUi()));
+    const authCodeFields = el("div", { class: "oauth-code-fields" }, [
+      el("div", { class: "field-grid" }, [
+        el("label", { class: "span-2" }, [fieldTitle("Authorization URL ", infoIcon("authProviderAuthorizationUrl")), authorizationUrlInput]),
+        el("label", { class: "span-2" }, [fieldTitle("Redirect URI (naimix's own callback) ", infoIcon("authProviderRedirectUri")), redirectUriInput]),
+        el("label", { class: "span-2" }, [fieldTitle("Issuer ", infoIcon("authProviderIssuer")), issuerInput]),
+      ]),
+      el("div", { class: "section-header" }, [el("h4", {}, ["Authorized client apps ", infoIcon("authProviderClients")]), addClientBtn]),
+      clientsList,
+    ]);
+
+    // Keeps both the Settings-side fields and the Test-login section's
+    // "try the redirect flow" link in sync with the current grant type and
+    // the first registered client app -- recomputed on every relevant
+    // change rather than once at render time, since both the grant type
+    // and the client list can change without the editor being reopened.
+    function syncOauthCodeTestUi() {
+      const isAuthCode = grantTypeSelect.value === "authorizationCode";
+      authCodeFields.style.display = isAuthCode ? "" : "none";
+
+      const passwordTestEl = document.getElementById("auth-provider-password-test");
+      const oauthTestEl = document.getElementById("auth-provider-oauth-code-test");
+      if (passwordTestEl) passwordTestEl.hidden = isAuthCode;
+      if (oauthTestEl) oauthTestEl.hidden = !isAuthCode;
+      if (!isAuthCode) return;
+
+      const linkEl = document.getElementById("auth-provider-start-link");
+      const noteEl = document.getElementById("auth-provider-start-link-note");
+      const firstClient = [...clientsList.children].map((r) => r._read()).find((c) => c.id && c.returnTo.length > 0);
+      if (!EDITING_AUTH_PROVIDER_NAME) {
+        linkEl.hidden = true;
+        noteEl.textContent = "Save this provider first -- the start URL needs its saved name.";
+      } else if (!firstClient) {
+        linkEl.hidden = true;
+        noteEl.textContent = "Add at least one client app (with an id and a return_to) above first.";
+      } else {
+        const url = new URL(`/auth/oauth/${EDITING_AUTH_PROVIDER_NAME}/start`, window.location.origin);
+        url.searchParams.set("app", firstClient.id);
+        url.searchParams.set("return_to", firstClient.returnTo[0]);
+        linkEl.href = url.href;
+        linkEl.hidden = false;
+        noteEl.textContent = `Using registered app "${firstClient.id}" / return_to "${firstClient.returnTo[0]}".`;
+      }
+    }
+    grantTypeSelect.addEventListener("change", syncOauthCodeTestUi);
+    syncOauthCodeTestUi();
+
     container.appendChild(
       el("div", { class: "field-grid" }, [
         el("label", { class: "span-2" }, [fieldTitle("Token URL ", infoIcon("authProviderTokenUrl")), tokenUrlInput]),
@@ -2434,6 +2554,7 @@ function renderAuthProviderKindFields(kind, provider) {
     );
     container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Headers ", infoIcon("backendHeaders")]), addHeaderBtn]));
     container.appendChild(headersContainer);
+    container.appendChild(authCodeFields);
     claimsSectionNodes.forEach((n) => container.appendChild(n));
 
     container._read = () => {
@@ -2446,6 +2567,13 @@ function renderAuthProviderKindFields(kind, provider) {
         headers: readKeyValueEditor(headersContainer),
       };
       if (scopeInput.value.trim()) out.scope = scopeInput.value.trim();
+      if (grantTypeSelect.value === "authorizationCode") {
+        out.authorizationUrl = authorizationUrlInput.value.trim();
+        out.redirectUri = redirectUriInput.value.trim();
+        if (issuerInput.value.trim()) out.issuer = issuerInput.value.trim();
+        const clients = [...clientsList.children].map((r) => r._read()).filter((c) => c.id && c.returnTo.length > 0);
+        out.clients = clients;
+      }
       const claims = readClaims();
       if (claims) out.claims = claims;
       return out;

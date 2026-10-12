@@ -42,3 +42,13 @@ gateways:
     kind: json
     baseUrl: ${env.DEMO_JSON_BASE_URL}
     requiresAuth: demoLdap
+
+  # Same demo backend again, behind the Authorization Code auth provider --
+  # demoes step 3 of AUTH_DESIGN_NOTES.md's phased build order. There's no
+  # POST to call directly here -- open (in a browser, not curl):
+  #   http://localhost:4000/auth/oauth/demoOAuthCode/start?app=demoWebApp&return_to=http://localhost:5000/echo
+  # and follow the redirect dance through the mock provider's login page.
+  crmJsonAuthedOAuthCode:
+    kind: json
+    baseUrl: ${env.DEMO_JSON_BASE_URL}
+    requiresAuth: demoOAuthCode

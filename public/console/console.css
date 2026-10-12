@@ -528,10 +528,18 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
 
 .shared-collection-group {
   border-left: 3px solid var(--shared-accent); padding-left: 10px;
-  display: flex; flex-direction: column; margin-bottom: 18px;
+  display: flex; flex-direction: column;
 }
 .apps-group {
   border-left: 3px solid var(--apps-accent); padding-left: 10px;
+}
+
+/* Divider between the Shared Collection and Apps groups -- makes the
+ * boundary between "centrally maintained" and "team owned" explicit,
+ * on top of the two groups' own accent-color left borders. Relies on
+ * .sidebar's flex gap for spacing above/below; no margin of its own. */
+.sidebar-divider {
+  border: none; border-top: 1px solid var(--border); margin: 0; flex-shrink: 0;
 }
 .sidebar-group-label {
   font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;

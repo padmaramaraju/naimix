@@ -74,7 +74,7 @@ export function createApp({
   deploymentFile,
   pickFolder,
 }: CreateAppOptions): Express {
-  const { app, authService } = createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, logger });
+  const { app, authService, pendingFlowStore } = createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, logger });
 
   // Console UI: a static browser app (served publicly) talking to a
   // token-gated API. The UI itself has no secrets in it; every API call it
@@ -110,7 +110,7 @@ export function createApp({
   // own comment on why the order among these particular routes doesn't
   // actually matter: dispatch.ts's middleware calls next() for anything it
   // doesn't recognize as a configured endpoint path).
-  mountDataPlaneRoutes(app, { routeRegistry, gatewaysRegistry, functionRegistry, authService, logger });
+  mountDataPlaneRoutes(app, { routeRegistry, gatewaysRegistry, authProvidersRegistry, functionRegistry, authService, pendingFlowStore, logger });
   mountTerminalHandlers(app, logger);
 
   return app;

@@ -354,12 +354,12 @@ which is scoped to just that one endpoint.
 
 ## Caller authentication (`config/authProviders.yaml`)
 
-**Status: phases 1-2 of a larger design.** This covers a bespoke backend
+**Status: phases 1-3 of a larger design.** This covers a bespoke backend
 login API (`basicLogin`), a standard OAuth2 token endpoint's password/
-client_credentials grants (`oauth2`), and LDAP/Active Directory plain simple
-bind (`ldap`). SAML and the OAuth Authorization Code (browser redirect) flow
-are designed but not yet implemented -- see `AUTH_DESIGN_NOTES.md` for the
-full design and what's still ahead.
+client_credentials/authorizationCode grants (`oauth2`), and LDAP/Active
+Directory plain simple bind (`ldap`). SAML is designed but not yet
+implemented -- see `AUTH_DESIGN_NOTES.md` for the full design and what's
+still ahead.
 
 This is authentication for the middleware's *own data endpoints* (the ones
 under `/api/...` you define) -- a separate, independent system from
@@ -384,7 +384,7 @@ server-side, and hands the caller its own opaque session token instead.
      myOAuthProvider:
        kind: oauth2                            # a standard RFC 6749 token endpoint
        tokenUrl: ${env.BACKEND_TOKEN_URL}
-       grantType: password                     # or client_credentials
+       grantType: password                     # or client_credentials, or authorizationCode (see below)
        clientId: ${env.BACKEND_CLIENT_ID}
        clientSecret: ${env.BACKEND_CLIENT_SECRET}
 
@@ -466,6 +466,60 @@ means unchanged" convention for `clientSecret`), or directly via
 editor has a **Requires auth** dropdown, populated from this list, that sets
 its `requiresAuth` field. Deleting a provider still required by a gateway is
 refused (409), same as deleting a gateway an endpoint still uses.
+
+### OAuth Authorization Code (browser redirect flow)
+
+For a real human logging in on the actual identity provider's own page --
+not a password this middleware ever sees -- set `grantType:
+authorizationCode` on an `oauth2` provider instead of `password`/
+`client_credentials`. This needs three more fields that only apply to this
+grant, plus at least one registered calling app:
+
+```yaml
+authProviders:
+  myOAuthCodeProvider:
+    kind: oauth2
+    grantType: authorizationCode
+    tokenUrl: ${env.IDP_TOKEN_URL}
+    authorizationUrl: ${env.IDP_AUTHORIZATION_URL}   # the real provider's login page
+    redirectUri: ${env.NAIMIX_OAUTH_REDIRECT_URI}    # naimix's OWN callback -- see below
+    clientId: ${env.IDP_CLIENT_ID}
+    clientSecret: ${env.IDP_CLIENT_SECRET}
+    clients:                                         # who's allowed to use this flow
+      - id: myWebApp
+        returnTo:
+          - https://app.example.com/oauth-done
+```
+
+`redirectUri` is naimix's own address -- the exact URL you register with the
+real provider as its `redirect_uri` (in production, the load balancer's
+public URL, never one instance's own address) -- which is *not* the same
+thing as a client app's `returnTo` above (where naimix, in turn, sends the
+user once its own callback has finished). `clients` is a closed allow-list:
+`GET /auth/oauth/<provider>/start` rejects any `app`/`return_to` pair that
+isn't an exact match against one of these entries, which is what stops the
+flow from being used as an open redirect.
+
+A client app (web or mobile) starts the flow by opening, in a browser (not
+calling it as a fetch/API request):
+
+```
+GET /auth/oauth/myOAuthCodeProvider/start?app=myWebApp&return_to=https://app.example.com/oauth-done&state=<your own opaque value, optional>
+```
+
+The user logs in on the real provider's own page; naimix's callback then
+exchanges the code for a token and redirects the browser back to
+`return_to`, with naimix's own opaque session token (and your `state`, if
+you sent one) attached as a URL fragment -- `#token=...&expires_at=...` --
+never as a query param or cookie, so it's visible to your app's own
+JavaScript but never sent back to any server, naimix's own access logs
+included. From there, use that token exactly like any other provider's:
+`Authorization: Bearer <token>` on calls to an endpoint whose gateway
+requires this provider. See `AUTH_DESIGN_NOTES.md`'s "Client Integration
+Guide" for the full contract (including the mobile app / native-redirect
+case), and `config/authProviders.yaml`'s `demoOAuthCode` entry plus
+`.env.example`'s matching comment for a working example against the mock
+backend.
 
 ## Auto-generated CRUD + stored-procedure endpoints
 
@@ -974,11 +1028,14 @@ test/           # vitest + supertest test suite
   JSONata/JMESPath expression mode would be the natural extension if you
   need that.
 - Caller authentication (see "Caller authentication" above) currently covers
-  a bespoke login API, an OAuth2 password/client_credentials grant, and
-  LDAP/Active Directory plain simple bind -- a gateway with no `requiresAuth`
-  is still unauthenticated, same as before. SAML and the OAuth Authorization
-  Code (browser redirect) flow are designed but not implemented -- see
-  `AUTH_DESIGN_NOTES.md`. The `ldap` provider is plain simple-bind only
+  a bespoke login API, an OAuth2 password/client_credentials/
+  authorizationCode grant, and LDAP/Active Directory plain simple bind -- a
+  gateway with no `requiresAuth` is still unauthenticated, same as before.
+  SAML is designed but not implemented -- see `AUTH_DESIGN_NOTES.md`. The
+  OAuth Authorization Code (browser redirect) flow's pending-login state is
+  in-memory only (same single-instance limitation sessions already have;
+  see `AUTH_DESIGN_NOTES.md`'s "Multi-instance / load balancing"). The
+  `ldap` provider is plain simple-bind only
   (no Kerberos/SPNEGO SSO, which `AUTH_DESIGN_NOTES.md` defers to a later
   phase); a free, self-hosted local LDAP test directory (seeded users/
   groups, no external dependency) is available to develop and try it

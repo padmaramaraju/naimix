@@ -53,6 +53,8 @@
           <ul id="shared-nav-list" class="nav-list"></ul>
         </div>
 
+        <hr class="sidebar-divider" />
+
         <!-- Apps: team-owned flat lists of Routes, each pointing at one
              Integration above by name. Click an App to see/edit its Routes. -->
         <div class="apps-group">
@@ -347,21 +349,32 @@
               <div class="section-header">
                 <h3>Test login <button type="button" class="info-icon" data-info-key="authProviderTestLogin" aria-label="What is this?">i</button></h3>
               </div>
-              <p class="muted">
-                Tries logging in through this provider's current settings above (including unsaved
-                edits) without creating a real session -- useful for checking a bind DN, filter, or
-                secret before saving.
-              </p>
-              <div class="field-grid">
-                <label class="block"><span class="field-title">Username</span>
-                  <input type="text" id="auth-provider-test-username" autocomplete="off" />
-                </label>
-                <label class="block"><span class="field-title">Password</span>
-                  <input type="password" id="auth-provider-test-password" autocomplete="off" />
-                </label>
+              <div id="auth-provider-password-test">
+                <p class="muted">
+                  Tries logging in through this provider's current settings above (including unsaved
+                  edits) without creating a real session -- useful for checking a bind DN, filter, or
+                  secret before saving.
+                </p>
+                <div class="field-grid">
+                  <label class="block"><span class="field-title">Username</span>
+                    <input type="text" id="auth-provider-test-username" autocomplete="off" />
+                  </label>
+                  <label class="block"><span class="field-title">Password</span>
+                    <input type="password" id="auth-provider-test-password" autocomplete="off" />
+                  </label>
+                </div>
+                <div class="test-actions">
+                  <button type="button" class="btn-secondary btn-sm" id="auth-provider-test-btn">Test login</button>
+                </div>
               </div>
-              <div class="test-actions">
-                <button type="button" class="btn-secondary btn-sm" id="auth-provider-test-btn">Test login</button>
+              <div id="auth-provider-oauth-code-test" hidden>
+                <p class="muted">
+                  There's no credential to test directly here -- authorizationCode is a browser
+                  redirect, not a single login call. Save this provider, then open the start URL
+                  below (in a browser, not this button) to try the real redirect flow end to end.
+                </p>
+                <p id="auth-provider-start-link-note" class="muted"></p>
+                <p><a id="auth-provider-start-link" href="#" target="_blank" rel="noopener" hidden>Open start URL in a new tab &rarr;</a></p>
               </div>
               <p id="auth-provider-test-result" class="test-result" hidden></p>
             </section>

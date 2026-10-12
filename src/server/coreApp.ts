@@ -7,6 +7,7 @@ import { requireOpsAuth } from "./opsAuth";
 import { createOpsApiRouter } from "./opsApi";
 import { AuthService } from "../auth/authService";
 import { InMemorySessionStore } from "../auth/sessionStore";
+import { InMemoryOAuthPendingFlowStore, type OAuthPendingFlowStore } from "../auth/oauthPendingFlowStore";
 import type { MountedRouteRegistry } from "./mountedRouteRegistry";
 import type { GatewaysRegistry } from "./gatewaysRegistry";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
@@ -52,6 +53,11 @@ export interface CoreAppDeps {
 export interface BaseApp {
   app: Express;
   authService: AuthService;
+  /** Short-lived Authorization Code redirect state -- see
+   * oauthPendingFlowStore.ts. Created here, alongside authService's own
+   * session store, so both apps (app.ts/dataPlaneApp.ts) get one from the
+   * same place rather than each constructing their own. */
+  pendingFlowStore: OAuthPendingFlowStore;
 }
 
 /**
@@ -66,6 +72,7 @@ export interface BaseApp {
  */
 export function createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, logger }: CoreAppDeps): BaseApp {
   const authService = new AuthService(authProvidersRegistry, new InMemorySessionStore());
+  const pendingFlowStore = new InMemoryOAuthPendingFlowStore();
   const app = express();
   app.use(cors());
   // body-parser's own default (used when no `limit` is given) is a hard
@@ -104,7 +111,7 @@ export function createBaseApp({ routeRegistry, gatewaysRegistry, authProvidersRe
   app.use("/ops", express.static(path.resolve(process.cwd(), "public/ops")));
   app.use("/ops/api", requireOpsAuth, createOpsApiRouter());
 
-  return { app, authService };
+  return { app, authService, pendingFlowStore };
 }
 
 /**
@@ -119,21 +126,25 @@ export function mountDataPlaneRoutes(
   {
     routeRegistry,
     gatewaysRegistry,
+    authProvidersRegistry,
     functionRegistry,
     authService,
+    pendingFlowStore,
     logger,
   }: {
     routeRegistry: MountedRouteRegistry;
     gatewaysRegistry: GatewaysRegistry;
+    authProvidersRegistry: AuthProvidersRegistry;
     functionRegistry: FunctionRegistry;
     authService: AuthService;
+    pendingFlowStore: OAuthPendingFlowStore;
     logger: Logger;
   }
 ): void {
   // Caller-facing login/logout -- a different audience from /console/api
   // (whoever configures this instance) and from the business endpoints
   // below. See AUTH_DESIGN_NOTES.md.
-  app.use("/auth", createAuthRouter(authService, logger));
+  app.use("/auth", createAuthRouter(authService, authProvidersRegistry, pendingFlowStore, logger));
 
   // Every mounted route is served by one dynamic handler that reads
   // routeRegistry fresh per request (see dispatch.ts/mountedRouteRegistry.ts)

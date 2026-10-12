@@ -303,15 +303,25 @@ const basicLoginProviderSchema = z.object({
   claims: z.array(outputFieldSchema).optional(),
 });
 
+const oauthClientAppSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().optional(),
+  returnTo: z.array(z.string().min(1)).min(1),
+});
+
 const oauth2ProviderSchema = z.object({
   kind: z.literal("oauth2"),
   tokenUrl: z.string().min(1),
-  grantType: z.enum(["password", "client_credentials"]),
+  grantType: z.enum(["password", "client_credentials", "authorizationCode"]),
   clientId: z.string().min(1),
   clientSecret: z.string().min(1),
   scope: z.string().optional(),
   headers: z.record(z.string()).optional(),
   claims: z.array(outputFieldSchema).optional(),
+  authorizationUrl: z.string().min(1).optional(),
+  redirectUri: z.string().min(1).optional(),
+  issuer: z.string().min(1).optional(),
+  clients: z.array(oauthClientAppSchema).optional(),
 });
 
 // LDAP/AD plain simple-bind provider -- see the matching LdapProviderConfig
@@ -345,6 +355,45 @@ const ldapProviderSchema = z.object({
 export const authProviderConfigSchema = z
   .discriminatedUnion("kind", [basicLoginProviderSchema, oauth2ProviderSchema, ldapProviderSchema])
   .superRefine((p, ctx) => {
+    if (p.kind === "oauth2") {
+      // authorizationUrl/redirectUri/clients are meaningful only for the
+      // authorizationCode grant (see the doc comment on OAuth2ProviderConfig
+      // in src/types/config.ts) -- required together when that grant is
+      // chosen, and not meaningful (so left unset) otherwise.
+      if (p.grantType === "authorizationCode") {
+        if (!p.authorizationUrl) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["authorizationUrl"],
+            message: "The authorizationCode grant requires `authorizationUrl` (the real provider's login page)",
+          });
+        }
+        if (!p.redirectUri) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["redirectUri"],
+            message:
+              "The authorizationCode grant requires `redirectUri` (naimix's own callback, registered with the real provider)",
+          });
+        }
+        if (!p.clients || p.clients.length === 0) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["clients"],
+            message:
+              "The authorizationCode grant requires at least one entry in `clients` -- " +
+              "no app is otherwise allowed to start this provider's login flow",
+          });
+        }
+      } else if (p.authorizationUrl || p.redirectUri || p.clients) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["grantType"],
+          message: "`authorizationUrl`, `redirectUri`, and `clients` only apply to the authorizationCode grant",
+        });
+      }
+      return;
+    }
     if (p.kind !== "ldap") return;
     const hasDirectBind = !!p.userDnTemplate;
     const hasSearchThenBind = !!p.bindDn && !!p.bindPassword && !!p.searchBase && !!p.searchFilter;

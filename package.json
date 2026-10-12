@@ -19,7 +19,7 @@
     "dev:prod": "tsx watch src/server/prodIndex.ts",
     "mock-backend": "tsx watch src/mock-backend/index.ts",
     "migrate:endpoints": "tsx scripts/migrateEndpointsToIntegrations.ts",
-  "test-ldap": "docker compose -f docker/openldap/docker-compose.yml up",
+    "test-ldap": "docker compose -f docker/openldap/docker-compose.yml up",
     "test-ldap:down": "docker compose -f docker/openldap/docker-compose.yml down -v",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -38,6 +38,7 @@
     "ldapts": "^9.2.0",
     "mssql": "^11.0.1",
     "mysql2": "^3.12.0",
+    "openid-client": "^6.8.8",
     "path-to-regexp": "^8.4.2",
     "pg": "^8.13.1",
     "pino": "^9.6.0",

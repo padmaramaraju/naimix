@@ -12,10 +12,23 @@ import type { AuthProvider, AuthResult, SessionRecord } from "../types";
  * (grant_type/access_token/refresh_token/expires_in), so unlike
  * basicLogin.ts there's no per-backend field-name configuration needed.
  *
+ * A third grant, authorizationCode, is also "oauth2" by kind but is NOT
+ * handled through login() below at all -- it's a browser redirect flow
+ * with no credentials to post, so it needs two separate HTTP requests
+ * (GET /auth/oauth/:provider/start and /callback) instead of one. See
+ * oauthCodeFlow.ts for that grant's implementation and AUTH_DESIGN_NOTES.md
+ * for the full design. login() below throws a clear error if called for a
+ * provider configured with that grant, rather than sending it a malformed
+ * token request.
+ *
  * Implements `refresh` via the standard refresh_token grant, since real
- * OAuth2 password-grant responses commonly include a refresh_token. If a
- * given provider doesn't return one, AuthService's own refresh handling
- * degrades gracefully (see authService.ts) -- it isn't a hard requirement.
+ * OAuth2 responses (password grant or an authorizationCode exchange)
+ * commonly include a refresh_token. If a given provider doesn't return one,
+ * AuthService's own refresh handling degrades gracefully (see
+ * authService.ts) -- it isn't a hard requirement. This is reused as-is for
+ * authorizationCode-originated sessions: a refresh_token grant request
+ * looks identical regardless of which grant originally created the
+ * session.
  */
 export function createOAuth2Provider(name: string, config: OAuth2ProviderConfig): AuthProvider {
   return {
@@ -23,6 +36,20 @@ export function createOAuth2Provider(name: string, config: OAuth2ProviderConfig)
     kind: "oauth2",
 
     async login(credentials: Record<string, unknown>): Promise<AuthResult> {
+      if (config.grantType === "authorizationCode") {
+        // Not a fit for this one-shot "POST credentials, get a token back"
+        // shape at all -- there's no credential to post, just a browser
+        // redirect to the real provider's own login page. See
+        // oauthCodeFlow.ts and GET /auth/oauth/:provider/start instead.
+        // Guards against the console UI's auth-provider "Test" tab (which
+        // calls login() directly) silently sending a malformed request to
+        // the real token endpoint for this grant.
+        throw new AuthError(
+          'The authorizationCode grant can\'t be tested with a direct login call -- open "GET /auth/oauth/<provider>/start" ' +
+            "(with a registered app's id/return_to) to try the real redirect flow instead."
+        );
+      }
+
       const form: Record<string, string> = {
         grant_type: config.grantType,
         client_id: config.clientId,

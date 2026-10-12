@@ -4,6 +4,7 @@ import path from "node:path";
 import http from "node:http";
 import express from "express";
 import * as soap from "soap";
+import crypto from "node:crypto";
 import { customers, findCustomer } from "./data";
 import { seedDb } from "./seedDb";
 
@@ -29,6 +30,10 @@ export async function startMockBackend(port: number, sqlitePath: string): Promis
   // Needed for the OAuth2 token endpoint below, which -- like every real
   // OAuth2 token endpoint (RFC 6749) -- takes a form-encoded body, not JSON.
   app.use(express.urlencoded({ extended: false }));
+
+  // In-memory authorization codes for the /oauth/authorize + /oauth/token
+  // authorizationCode-grant pair below -- single-use, process-lifetime only.
+  const pendingAuthCodes = new Map<string, { redirectUri: string; codeChallenge?: string; createdAt: number }>();
 
   // ---- Generic XML ----
   // Registered before the "/customers/:id" JSON route below: Express matches
@@ -72,8 +77,8 @@ export async function startMockBackend(port: number, sqlitePath: string): Promis
 
   // Exercises the "oauth2" auth provider: a standard RFC 6749 token
   // endpoint (form-encoded request, access_token/refresh_token/expires_in
-  // response) supporting the password, client_credentials, and
-  // refresh_token grants.
+  // response) supporting the password, client_credentials, refresh_token,
+  // and authorization_code grants.
   app.post("/oauth/token", (req, res) => {
     const body = (req.body ?? {}) as Record<string, string>;
     if (body.client_id !== "demo-client" || body.client_secret !== "demo-secret") {
@@ -87,6 +92,22 @@ export async function startMockBackend(port: number, sqlitePath: string): Promis
     } else if (body.grant_type === "refresh_token") {
       if (!body.refresh_token || !body.refresh_token.startsWith("mock-oauth-refresh-")) {
         return res.status(400).json({ error: "invalid_grant" });
+      }
+    } else if (body.grant_type === "authorization_code") {
+      const record = pendingAuthCodes.get(body.code ?? "");
+      if (!record) {
+        return res.status(400).json({ error: "invalid_grant", error_description: "unknown or already-used code" });
+      }
+      // Single-use, win or lose -- a replayed code can't be exchanged twice.
+      pendingAuthCodes.delete(body.code ?? "");
+      if (record.redirectUri !== body.redirect_uri) {
+        return res.status(400).json({ error: "invalid_grant", error_description: "redirect_uri mismatch" });
+      }
+      if (record.codeChallenge) {
+        const computed = crypto.createHash("sha256").update(body.code_verifier ?? "").digest("base64url");
+        if (computed !== record.codeChallenge) {
+          return res.status(400).json({ error: "invalid_grant", error_description: "PKCE verification failed" });
+        }
       }
     } else if (body.grant_type !== "client_credentials") {
       return res.status(400).json({ error: "unsupported_grant_type" });
@@ -102,6 +123,44 @@ export async function startMockBackend(port: number, sqlitePath: string): Promis
       expires_in: 3600,
       token_type: "Bearer",
     });
+  });
+
+  // Exercises the "oauth2" provider's authorizationCode grant end-to-end:
+  // a bare-bones stand-in for the real provider's own login page. GETting
+  // this without `confirm=1` shows a one-click "log in as demo" page (so a
+  // person testing the real redirect flow by hand via a browser sees
+  // SOMETHING resembling a provider's login screen, rather than an
+  // invisible instant bounce back); following that link re-GETs this same
+  // URL with `confirm=1` added, which is what actually mints the code and
+  // redirects back to naimix's callback (redirect_uri) with it attached.
+  // Codes are single-use and kept only in memory -- fine for a local
+  // dev/test double, not meant to resemble a real provider's persistence.
+  app.get("/oauth/authorize", (req, res) => {
+    const { response_type, client_id, redirect_uri, state, code_challenge, confirm } = req.query as Record<string, string | undefined>;
+    if (response_type !== "code" || client_id !== "demo-client" || !redirect_uri) {
+      return res.status(400).send("invalid_request: response_type must be \"code\" and client_id/redirect_uri are required");
+    }
+
+    if (confirm !== "1") {
+      const continueUrl = new URL(req.originalUrl, `http://${req.headers.host}`);
+      continueUrl.searchParams.set("confirm", "1");
+      res.type("html").send(
+        `<!doctype html><html><body style="font-family:sans-serif;max-width:420px;margin:4rem auto">` +
+          `<h2>Mock Identity Provider</h2>` +
+          `<p>This stands in for a real OAuth provider's own login page.</p>` +
+          `<p><a href="${continueUrl.pathname}?${continueUrl.searchParams.toString()}">Continue as demo &rarr;</a></p>` +
+          `</body></html>`
+      );
+      return;
+    }
+
+    const code = `mock-code-${crypto.randomBytes(16).toString("hex")}`;
+    pendingAuthCodes.set(code, { redirectUri: redirect_uri, codeChallenge: code_challenge, createdAt: Date.now() });
+
+    const dest = new URL(redirect_uri);
+    dest.searchParams.set("code", code);
+    if (state) dest.searchParams.set("state", state);
+    res.redirect(302, dest.href);
   });
 
   // ---- JSON REST ----

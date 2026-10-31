@@ -1,4 +1,5 @@
 import "dotenv/config";
+import fs from "node:fs";
 import path from "node:path";
 import { IntegrationRegistry } from "./integrationRegistry";
 import { AppRegistry } from "./appRegistry";
@@ -79,8 +80,15 @@ function resolveStartupPaths(): {
 }
 
 function main() {
+  // Debugging aid for "my route isn't showing up" -- prints exactly which
+  // file was resolved and what it actually parsed to, BEFORE anything else
+  // happens, so a wrong/stale DEPLOYMENT_FILE or an unsaved edit is obvious
+  // right away instead of needing to infer it from a downstream 404.
+  logger.info(`Deployment file: ${DEPLOYMENT_FILE} (exists: ${fs.existsSync(DEPLOYMENT_FILE)})`);
+
   const { integrationsDir, appsDir, gatewaysFile, authProvidersFile, transformsDir, configDir, mounts } =
     resolveStartupPaths();
+  logger.info(`Parsed mounts from deployment.yaml: ${JSON.stringify(mounts)}`);
   const workspace: { configDir?: string } = { configDir };
 
   // Loaded before the integration registry so a config's `transform`/
@@ -128,6 +136,15 @@ function main() {
   for (const e of routeRegistry.errors()) {
     logger.error(`Mounted route error: ${e}`);
   }
+  // Full, explicit list of every route this process actually resolved --
+  // not just the count the startup banner below prints -- so you can
+  // visually diff it against what you expect from deployment.yaml +
+  // config/apps/*.yaml without guessing.
+  const mountedRouteSummary = routeRegistry
+    .list()
+    .map((r) => `${r.method} ${r.path} -> ${r.id}`)
+    .join("\n  ");
+  logger.info(`Mounted routes (${routeRegistry.list().length}):\n  ${mountedRouteSummary || "(none)"}`);
 
   const app = createApp({
     routeRegistry,

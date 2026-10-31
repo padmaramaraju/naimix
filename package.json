@@ -18,6 +18,7 @@
     "start:prod": "node dist-prod/server.js",
     "dev:prod": "tsx watch src/server/prodIndex.ts",
     "mock-backend": "tsx watch src/mock-backend/index.ts",
+    "mock-oauth": "tsx src/mock-backend/oauthRun.ts",
     "migrate:endpoints": "tsx scripts/migrateEndpointsToIntegrations.ts",
     "test-ldap": "docker compose -f docker/openldap/docker-compose.yml up",
     "test-ldap:down": "docker compose -f docker/openldap/docker-compose.yml down -v",

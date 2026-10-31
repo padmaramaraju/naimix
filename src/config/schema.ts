@@ -321,6 +321,8 @@ const oauth2ProviderSchema = z.object({
   authorizationUrl: z.string().min(1).optional(),
   redirectUri: z.string().min(1).optional(),
   issuer: z.string().min(1).optional(),
+  jwksUri: z.string().min(1).optional(),
+  pkce: z.enum(["S256", "off"]).optional(),
   clients: z.array(oauthClientAppSchema).optional(),
 });
 
@@ -374,6 +376,13 @@ export const authProviderConfigSchema = z
             path: ["redirectUri"],
             message:
               "The authorizationCode grant requires `redirectUri` (naimix's own callback, registered with the real provider)",
+          });
+        }
+        if (p.scope?.split(/\s+/).includes("openid") && !p.jwksUri) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["jwksUri"],
+            message: "A provider requesting the `openid` scope requires `jwksUri` (where the ID token's signing keys are published)",
           });
         }
         if (!p.clients || p.clients.length === 0) {

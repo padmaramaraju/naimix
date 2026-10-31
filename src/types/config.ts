@@ -352,6 +352,12 @@ export interface OAuth2ProviderConfig {
    * doesn't match this value fails validation even though nothing about
    * the login itself was wrong. */
   issuer?: string;
+  /** PKCE method for the authorizationCode grant: `S256` (default) or `off`
+   * for providers that reject unknown parameters. `plain` is not supported. */
+  /** URL of the provider's JWKS. Required when the `openid` scope is
+   * requested: the ID token's signature is always verified against it. */
+  jwksUri?: string;
+  pkce?: "S256" | "off";
   /** authorizationCode only: the allow-list of web/mobile apps permitted to
    * use this provider's redirect flow (at least one required). */
   clients?: OAuthClientAppConfig[];

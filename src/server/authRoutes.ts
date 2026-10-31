@@ -1,6 +1,6 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { AuthService } from "../auth/authService";
-import { buildAuthorizationRequest, exchangeAuthorizationCode } from "../auth/oauthCodeFlow";
+import { buildAuthorizationRequest, codeForProviderError, exchangeAuthorizationCode, OAuthFlowError } from "../auth/oauthCodeFlow";
 import type { OAuthPendingFlowStore } from "../auth/oauthPendingFlowStore";
 import type { AuthProvidersRegistry } from "./authProvidersRegistry";
 import type { OAuth2ProviderConfig } from "../types/config";
@@ -125,10 +125,11 @@ export function createAuthRouter(
           .json({ error: "UnregisteredClient", message: `"${appClientId}"/"${returnTo}" is not a registered app/return_to pair for "${providerName}"` });
       }
 
-      const { redirectUrl, state, codeVerifier } = await buildAuthorizationRequest(config);
+      const { redirectUrl, state, codeVerifier, nonce } = await buildAuthorizationRequest(config);
       await pendingFlowStore.set(state, {
         providerName,
         codeVerifier,
+        nonce: nonce,
         appClientId,
         returnTo,
         appState,
@@ -185,9 +186,9 @@ export function createAuthRouter(
         // own return_to, per the "the callback hands off via return_to,
         // not a page of our own" decision, rather than showing naimix's
         // own error page for something the real provider reported.
-        fragment.set("error", providerError);
-        const description = query.get("error_description");
-        if (description) fragment.set("error_description", description);
+        // Fixed code set only: the provider's own error_description is
+        // never forwarded to the app.
+        fragment.set("error", codeForProviderError(providerError));
         destination.hash = fragment.toString();
         authLogger.info({ provider: providerName, error: providerError }, "oauth callback: provider reported an error");
         return res.redirect(302, destination.href);
@@ -198,6 +199,7 @@ export function createAuthRouter(
           incomingSearch: query,
           expectedState: internalState,
           codeVerifier: flow.codeVerifier,
+          expectedNonce: flow.nonce,
         });
         const { token, expiresAt } = await authService.completeOAuthLogin(providerName, result);
         fragment.set("token", token);
@@ -206,10 +208,8 @@ export function createAuthRouter(
         authLogger.info({ provider: providerName, appClientId: flow.appClientId }, "oauth login succeeded");
         res.redirect(302, destination.href);
       } catch (err) {
-        const message = err instanceof AuthError ? err.message : "Login failed";
         authLogger.error({ provider: providerName, err: err instanceof Error ? err.message : err }, "oauth callback exchange failed");
-        fragment.set("error", "login_failed");
-        fragment.set("error_description", message);
+        fragment.set("error", err instanceof OAuthFlowError ? err.code : "server_error");
         destination.hash = fragment.toString();
         res.redirect(302, destination.href);
       }

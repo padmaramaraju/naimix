@@ -305,6 +305,11 @@ input[readonly], select:disabled { background: var(--code-bg); color: var(--mute
 .editor-section { border-top: 1px solid var(--border); margin-top: 20px; padding-top: 16px; }
 .section-header { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
 .section-header h3, .section-header h4 { flex: 1; margin: 0; }
+.editor-section .section-header { margin-bottom: 2px; }
+.editor-section .section-header h3, .editor-section .section-header h4 { font-size: 15px; }
+.editor-section-desc { margin: 0 0 10px; font-size: 12.5px; color: var(--muted); }
+.editor-section .repeatable-list { border: 1px solid var(--border); border-radius: 6px; padding: 8px; }
+.editor-section .repeatable-list[data-empty]:empty::before { content: attr(data-empty); color: var(--muted); font-size: 12.5px; }
 .section-count { font-weight: 400; color: var(--muted); font-size: 12px; }
 
 /* ------------------------------------------------------------------

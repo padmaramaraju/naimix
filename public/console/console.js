@@ -268,6 +268,8 @@ const FIELD_INFO = {
   authProviderAuthorizationUrl: "authorizationCode only: the real provider's authorization endpoint -- where GET /auth/oauth/{provider}/start redirects the browser to.",
   authProviderRedirectUri: "authorizationCode only: naimix's OWN callback URL -- the exact redirect_uri you register with the real provider (in production, the load balancer's public URL, not one instance's own address). This is NOT the same thing as a client app's return_to below.",
   authProviderIssuer: "authorizationCode only, optional: this provider's Issuer Identifier, used only to validate an OIDC ID token's iss claim if the provider happens to return one. Defaults to the Token URL's own origin -- override only if the real provider's issuer differs from that.",
+  authProviderJwksUri: "authorizationCode only: URL of the provider's JWKS (its published ID-token signing keys). Required when the scope includes openid -- the ID token's signature is always verified against these keys.",
+  authProviderPkce: "authorizationCode only: PKCE method. S256 (default) is recommended and required by OAuth 2.1. Choose off only for an older provider that rejects the extra code_challenge parameters.",
   authProviderClients: "authorizationCode only: the allow-list of web/mobile apps permitted to use this provider's redirect flow. GET /auth/oauth/{provider}/start rejects any app/return_to pair that isn't an exact match here -- this is what closes the open-redirect risk of \"redirect wherever the request says\" (see AUTH_DESIGN_NOTES.md's Client Integration Guide).",
   authProviderLdapUrl: "The LDAP/AD server URL, e.g. ldap://localhost:3389 or ldaps://ad.example.com:636.",
   authProviderLdapTlsRejectUnauthorized: "Only meaningful for ldaps:// URLs. Leave on (verify the server's TLS certificate) unless connecting to a trusted internal test directory with a self-signed certificate.",
@@ -336,7 +338,8 @@ function openInfoPopup(iconEl) {
 }
 
 function infoIcon(key) {
-  return el("button", { type: "button", class: "info-icon", "data-info-key": key, "aria-label": "What is this?" }, ["i"]);
+  // tabindex -1: skipped when tabbing through a form; still clickable.
+  return el("button", { type: "button", class: "info-icon", tabindex: "-1", "data-info-key": key, "aria-label": "What is this?" }, ["i"]);
 }
 
 // A <label> is flex-direction: column (see console.css), so each of its direct
@@ -347,6 +350,24 @@ function infoIcon(key) {
 // stays right next to the title instead of landing on the line below it.
 function fieldTitle(...parts) {
   return el("span", { class: "field-title" }, parts);
+}
+
+// One titled section of an editor form: a rule above, a title (with its
+// info icon), a one-line description, an optional action button on the right
+// (e.g. "+ Add header"), then the content. `body` may be a node or an array.
+// A repeatable list given `emptyText` shows that text while it has no rows.
+function editorSection({ title, infoKey, description, action, body, emptyText }) {
+  const bodyNodes = Array.isArray(body) ? body : [body];
+  if (emptyText) {
+    for (const n of bodyNodes) if (n.classList && n.classList.contains("repeatable-list")) n.setAttribute("data-empty", emptyText);
+  }
+  const titleChildren = infoKey ? [title + " ", infoIcon(infoKey)] : [title];
+  const header = el("div", { class: "section-header" }, [el("h4", {}, titleChildren)]);
+  if (action) header.appendChild(action);
+  const children = [header];
+  if (description) children.push(el("p", { class: "editor-section-desc" }, [description]));
+  bodyNodes.forEach((n) => children.push(n));
+  return el("section", { class: "editor-section" }, children);
 }
 
 /* ---------------------------------------------------------------------
@@ -1808,13 +1829,22 @@ function renderBackendFields(type, backend) {
     renderKeyValueEditor(headersContainer, backend.headers, {});
     const addHeaderBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => headersContainer._addRow("", "") }, ["+ Add header"]);
 
+    // Plain fields first (URL, Method, Body), then the add-more sections.
     const rows = [
       el("div", { class: "field-grid" }, [
         el("label", { class: "span-2" }, [fieldTitle("URL ", infoIcon("backendUrl"), " (supports {param} placeholders)"), urlInput]),
         el("label", {}, [fieldTitle("Method ", infoIcon("backendMethod")), methodSelect]),
       ]),
-      el("div", { class: "section-header" }, [el("h4", {}, ["Headers ", infoIcon("backendHeaders")]), addHeaderBtn]),
-      headersContainer,
+    ];
+    const sectionRows = [
+      editorSection({
+        title: "Headers",
+        infoKey: "backendHeaders",
+        description: "Extra HTTP headers sent with the backend request, on top of the gateway's own. Values support {param} placeholders.",
+        action: addHeaderBtn,
+        body: headersContainer,
+        emptyText: "No headers added",
+      }),
     ];
 
     let queryContainer, bodyInput;
@@ -1822,8 +1852,16 @@ function renderBackendFields(type, backend) {
       queryContainer = el("div", { class: "repeatable-list" });
       renderKeyValueEditor(queryContainer, backend.query, {});
       const addQueryBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => queryContainer._addRow("", "") }, ["+ Add query param"]);
-      rows.push(el("div", { class: "section-header" }, [el("h4", {}, ["Query string ", infoIcon("backendQuery")]), addQueryBtn]));
-      rows.push(queryContainer);
+      sectionRows.push(
+        editorSection({
+          title: "Query string",
+          infoKey: "backendQuery",
+          description: "Query-string parameters added to the URL. Values support {param} placeholders.",
+          action: addQueryBtn,
+          body: queryContainer,
+          emptyText: "No query params added",
+        })
+      );
       bodyInput = el("textarea", { placeholder: "JSON request body (optional)" }, [
         backend.body !== undefined ? JSON.stringify(backend.body, null, 2) : "",
       ]);
@@ -1833,7 +1871,7 @@ function renderBackendFields(type, backend) {
       rows.push(el("label", { class: "block" }, [fieldTitle("Body ", infoIcon("backendBody"), " (XML string, optional)"), bodyInput]));
     }
 
-    rows.forEach((r) => container.appendChild(r));
+    rows.concat(sectionRows).forEach((r) => container.appendChild(r));
     container._read = () => {
       const base = {
         type,
@@ -1866,8 +1904,16 @@ function renderBackendFields(type, backend) {
         el("label", { class: "span-2" }, [fieldTitle("Operation ", infoIcon("soapOperation")), operationInput]),
       ])
     );
-    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Arguments ", infoIcon("soapArgs")]), addArgBtn]));
-    container.appendChild(argsContainer);
+    container.appendChild(
+      editorSection({
+        title: "Arguments",
+        infoKey: "soapArgs",
+        description: "Arguments passed to the SOAP operation. Values support {param} placeholders.",
+        action: addArgBtn,
+        body: argsContainer,
+        emptyText: "No arguments added",
+      })
+    );
 
     container._read = () => {
       const base = { type: "soap", operation: operationInput.value.trim(), args: readKeyValueEditor(argsContainer) };
@@ -2114,6 +2160,10 @@ function renderGatewayKindFields(kind, gw) {
   gw = gw || {};
   const container = document.getElementById("gateway-fields");
   container.innerHTML = "";
+  // Add-more sections render in their own container, below the plain
+  // "Requires auth" field that follows `gateway-fields` in the form.
+  const sections = document.getElementById("gateway-sections");
+  sections.innerHTML = "";
 
   if (kind === "json" || kind === "xml") {
     const baseUrlInput = el("input", { value: gw.baseUrl || "", placeholder: "https://api.example.com", required: true });
@@ -2121,8 +2171,16 @@ function renderGatewayKindFields(kind, gw) {
     renderKeyValueEditor(headersContainer, gw.headers, {});
     const addBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => headersContainer._addRow("", "") }, ["+ Add header"]);
     container.appendChild(el("label", { class: "block" }, [fieldTitle("Base URL ", infoIcon("gatewayBaseUrl"), " (required)"), baseUrlInput]));
-    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Headers ", infoIcon("backendHeaders")]), addBtn]));
-    container.appendChild(headersContainer);
+    sections.appendChild(
+      editorSection({
+        title: "Headers",
+        infoKey: "backendHeaders",
+        description: "Sent with every request made through this gateway.",
+        action: addBtn,
+        body: headersContainer,
+        emptyText: "No headers added",
+      })
+    );
     container._read = () => ({ kind, baseUrl: baseUrlInput.value.trim(), headers: readKeyValueEditor(headersContainer) });
   } else if (kind === "soap") {
     const wsdlInput = el("input", { value: gw.wsdl || "", placeholder: "https://service.example.com/Service.svc?wsdl", required: true });
@@ -2147,16 +2205,17 @@ function renderGatewayKindFields(kind, gw) {
     const testBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: testDbConnection }, ["Test connection"]);
 
     container.appendChild(el("label", { class: "block" }, [fieldTitle("Client ", infoIcon("gatewayClient")), clientSelect]));
-    container.appendChild(
-      el("div", { class: "section-header" }, [
-        el("h4", {}, ["Connection fields ", infoIcon("gatewayConnection"), el("span", { class: "muted" }, [" (e.g. host, port, user, password, database, or filename for sqlite)"])]),
-        addBtn,
-      ])
-    );
-    container.appendChild(connFieldsContainer);
     container.appendChild(el("label", { class: "checkbox-field block" }, [nullDefaultCheckbox, "useNullAsDefault ", infoIcon("gatewayUseNullAsDefault"), " (sqlite requires this)"]));
-    container.appendChild(el("div", { class: "test-actions" }, [testBtn]));
-    container.appendChild(testResult);
+    sections.appendChild(
+      editorSection({
+        title: "Connection fields",
+        infoKey: "gatewayConnection",
+        description: "What the database driver needs: e.g. host, port, user, password and database, or filename for sqlite.",
+        action: addBtn,
+        body: [connFieldsContainer, el("div", { class: "test-actions" }, [testBtn]), testResult],
+        emptyText: "No connection fields added",
+      })
+    );
 
     // Only meaningful for an already-saved gateway -- generation
     // introspects the version on disk, so a brand-new draft has nothing to
@@ -2172,23 +2231,24 @@ function renderGatewayKindFields(kind, gw) {
         { type: "button", class: "btn-secondary btn-sm", onclick: generateCrudEndpoints },
         ["Generate CRUD + procedure endpoints"]
       );
-      container.appendChild(
-        el("div", { class: "editor-section" }, [
-          el("div", { class: "section-header" }, [el("h4", {}, ["Auto-generate endpoints for this gateway"])]),
-          el("p", { class: "muted" }, [
+      sections.appendChild(
+        editorSection({
+          title: "Auto-generate endpoints for this gateway",
+          description:
             "Creates one Integration + Route (list / bulk-create / bulk-update / bulk-delete) for every table " +
               "(a table with no primary key only gets list/create), plus one Integration + Route per stored " +
               "procedure where this database supports them. Never overwrites an existing Integration or Route -- " +
               "a conflicting id is skipped and reported, so this is safe to run again later " +
               "(e.g. after adding a table). Uses the currently SAVED version of this gateway, so " +
               "save any pending edits above first.",
-          ]),
-          APPS.length > 0
-            ? el("label", { class: "block" }, [fieldTitle("Add routes to App "), appSelect])
-            : el("p", { class: "error-text" }, ["Create an App first — the generated routes need somewhere to live."]),
-          el("div", { class: "test-actions" }, [generateBtn]),
-          generateResult,
-        ])
+          body: [
+            APPS.length > 0
+              ? el("label", { class: "block" }, [fieldTitle("Add routes to App "), appSelect])
+              : el("p", { class: "error-text" }, ["Create an App first — the generated routes need somewhere to live."]),
+            el("div", { class: "test-actions" }, [generateBtn]),
+            generateResult,
+          ],
+        })
       );
     }
 
@@ -2383,11 +2443,15 @@ function renderAuthProviderKindFields(kind, provider) {
   for (const c of provider.claims || []) claimsList.appendChild(outputFieldRow(c));
   const addClaimBtn = el("button", { type: "button", class: "btn-secondary btn-sm", onclick: () => claimsList.appendChild(outputFieldRow()) }, ["+ Add claim"]);
   const claimsSectionNodes = [
-    el("div", { class: "section-header" }, [el("h4", {}, ["Claims ", infoIcon("authProviderClaims")]), addClaimBtn]),
-    el("p", { class: "muted" }, [
-      "Optional -- extracts extra fields from the login response using the same JSONPath mapping as an endpoint's Output fields (e.g. exposing a subject or display name from the login response).",
-    ]),
-    claimsList,
+    editorSection({
+      title: "Claims",
+      infoKey: "authProviderClaims",
+      description:
+        "Optional. Extracts extra fields from the login response, using the same JSONPath mapping as an endpoint's Output fields (e.g. a subject or display name).",
+      action: addClaimBtn,
+      body: claimsList,
+      emptyText: "No claims added",
+    }),
   ];
   const readClaims = () => {
     const claims = [...claimsList.children].map((r) => r._read()).filter((c) => c.target && c.source);
@@ -2413,28 +2477,48 @@ function renderAuthProviderKindFields(kind, provider) {
     const subjectPathInput = el("input", { value: provider.subjectPath || "", placeholder: "$.sub (optional)" });
 
     container.appendChild(
-      el("div", { class: "field-grid" }, [
-        el("label", { class: "span-2" }, [fieldTitle("Login URL ", infoIcon("authProviderLoginUrl")), loginUrlInput]),
-        el("label", {}, [fieldTitle("Method ", infoIcon("authProviderMethod")), methodSelect]),
-      ])
+      editorSection({
+        title: "Login request",
+        description: "Where naimix sends the login request, and the names of the username and password fields in it.",
+        body: el("div", { class: "field-grid" }, [
+          el("label", { class: "span-2" }, [fieldTitle("Login URL ", infoIcon("authProviderLoginUrl")), loginUrlInput]),
+          el("label", {}, [fieldTitle("Method ", infoIcon("authProviderMethod")), methodSelect]),
+          el("label", {}, [fieldTitle("Username field ", infoIcon("authProviderUsernameField")), usernameFieldInput]),
+          el("label", {}, [fieldTitle("Password field ", infoIcon("authProviderPasswordField")), passwordFieldInput]),
+        ]),
+      })
     );
-    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Headers ", infoIcon("backendHeaders")]), addHeaderBtn]));
-    container.appendChild(headersContainer);
     container.appendChild(
-      el("div", { class: "field-grid" }, [
-        el("label", {}, [fieldTitle("Username field ", infoIcon("authProviderUsernameField")), usernameFieldInput]),
-        el("label", {}, [fieldTitle("Password field ", infoIcon("authProviderPasswordField")), passwordFieldInput]),
-      ])
+      editorSection({
+        title: "Login response",
+        description: "Where to find the token (and optional extras) in the login response, as JSONPath.",
+        body: el("div", { class: "field-grid" }, [
+          el("label", { class: "span-2" }, [fieldTitle("Token path ", infoIcon("authProviderTokenPath"), " (JSONPath, required)"), tokenPathInput]),
+          el("label", {}, [fieldTitle("Refresh token path ", infoIcon("authProviderRefreshTokenPath")), refreshTokenPathInput]),
+          el("label", {}, [fieldTitle("Expires-in path ", infoIcon("authProviderExpiresInPath")), expiresInPathInput]),
+          el("label", { class: "span-2" }, [fieldTitle("Subject path ", infoIcon("authProviderSubjectPath")), subjectPathInput]),
+        ]),
+      })
     );
-    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Static fields ", infoIcon("authProviderStaticFields")]), addStaticFieldBtn]));
-    container.appendChild(staticFieldsContainer);
     container.appendChild(
-      el("div", { class: "field-grid" }, [
-        el("label", { class: "span-2" }, [fieldTitle("Token path ", infoIcon("authProviderTokenPath"), " (JSONPath, required)"), tokenPathInput]),
-        el("label", {}, [fieldTitle("Refresh token path ", infoIcon("authProviderRefreshTokenPath")), refreshTokenPathInput]),
-        el("label", {}, [fieldTitle("Expires-in path ", infoIcon("authProviderExpiresInPath")), expiresInPathInput]),
-        el("label", { class: "span-2" }, [fieldTitle("Subject path ", infoIcon("authProviderSubjectPath")), subjectPathInput]),
-      ])
+      editorSection({
+        title: "Headers",
+        infoKey: "backendHeaders",
+        description: "Extra HTTP headers sent with the login request.",
+        action: addHeaderBtn,
+        body: headersContainer,
+        emptyText: "No headers added",
+      })
+    );
+    container.appendChild(
+      editorSection({
+        title: "Static fields",
+        infoKey: "authProviderStaticFields",
+        description: "Fixed values sent with every login request, alongside the username and password.",
+        action: addStaticFieldBtn,
+        body: staticFieldsContainer,
+        emptyText: "No static fields added",
+      })
     );
     claimsSectionNodes.forEach((n) => container.appendChild(n));
 
@@ -2483,6 +2567,10 @@ function renderAuthProviderKindFields(kind, provider) {
     const authorizationUrlInput = el("input", { value: provider.authorizationUrl || "", placeholder: "https://idp.example.com/authorize" });
     const redirectUriInput = el("input", { value: provider.redirectUri || "", placeholder: "https://naimix.example.com/auth/oauth/<name>/callback" });
     const issuerInput = el("input", { value: provider.issuer || "", placeholder: "optional -- defaults to the Token URL's own origin" });
+    const jwksUriInput = el("input", { value: provider.jwksUri || "", placeholder: "https://idp.example.com/jwks (required when the scope includes openid)" });
+    const pkceSelect = el("select", {}, []);
+    populateSelect(pkceSelect, ["S256", "off"]);
+    pkceSelect.value = provider.pkce || "S256";
     const clientsList = el("div", { class: "repeatable-list" });
     const addClientBtn = el(
       "button",
@@ -2497,15 +2585,26 @@ function renderAuthProviderKindFields(kind, provider) {
       ["+ Add client app"]
     );
     for (const c of provider.clients || []) clientsList.appendChild(oauthClientRow(c, () => syncOauthCodeTestUi()));
-    const authCodeFields = el("div", { class: "oauth-code-fields" }, [
-      el("div", { class: "field-grid" }, [
+    const authCodeFields = editorSection({
+      title: "Authorization code flow",
+      description: "Settings for the browser redirect flow: the provider's login page, naimix's own callback, and how the ID token is verified.",
+      body: el("div", { class: "field-grid" }, [
         el("label", { class: "span-2" }, [fieldTitle("Authorization URL ", infoIcon("authProviderAuthorizationUrl")), authorizationUrlInput]),
         el("label", { class: "span-2" }, [fieldTitle("Redirect URI (naimix's own callback) ", infoIcon("authProviderRedirectUri")), redirectUriInput]),
         el("label", { class: "span-2" }, [fieldTitle("Issuer ", infoIcon("authProviderIssuer")), issuerInput]),
+        el("label", { class: "span-2" }, [fieldTitle("JWKS URI ", infoIcon("authProviderJwksUri")), jwksUriInput]),
+        el("label", {}, [fieldTitle("PKCE ", infoIcon("authProviderPkce")), pkceSelect]),
       ]),
-      el("div", { class: "section-header" }, [el("h4", {}, ["Authorized client apps ", infoIcon("authProviderClients")]), addClientBtn]),
-      clientsList,
-    ]);
+    });
+    authCodeFields.classList.add("oauth-code-fields");
+    const clientsSection = editorSection({
+      title: "Authorized client apps",
+      infoKey: "authProviderClients",
+      description: "Apps allowed to start this provider's login flow. Each needs an id and at least one return_to URL.",
+      action: addClientBtn,
+      body: clientsList,
+      emptyText: "No client apps added",
+    });
 
     // Keeps both the Settings-side fields and the Test-login section's
     // "try the redirect flow" link in sync with the current grant type and
@@ -2515,6 +2614,7 @@ function renderAuthProviderKindFields(kind, provider) {
     function syncOauthCodeTestUi() {
       const isAuthCode = grantTypeSelect.value === "authorizationCode";
       authCodeFields.style.display = isAuthCode ? "" : "none";
+      clientsSection.style.display = isAuthCode ? "" : "none";
 
       const passwordTestEl = document.getElementById("auth-provider-password-test");
       const oauthTestEl = document.getElementById("auth-provider-oauth-code-test");
@@ -2552,9 +2652,18 @@ function renderAuthProviderKindFields(kind, provider) {
         el("label", { class: "span-2" }, [fieldTitle("Scope ", infoIcon("authProviderScope")), scopeInput]),
       ])
     );
-    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Headers ", infoIcon("backendHeaders")]), addHeaderBtn]));
-    container.appendChild(headersContainer);
     container.appendChild(authCodeFields);
+    container.appendChild(
+      editorSection({
+        title: "Headers",
+        infoKey: "backendHeaders",
+        description: "Extra HTTP headers sent with the token request.",
+        action: addHeaderBtn,
+        body: headersContainer,
+        emptyText: "No headers added",
+      })
+    );
+    container.appendChild(clientsSection);
     claimsSectionNodes.forEach((n) => container.appendChild(n));
 
     container._read = () => {
@@ -2571,6 +2680,8 @@ function renderAuthProviderKindFields(kind, provider) {
         out.authorizationUrl = authorizationUrlInput.value.trim();
         out.redirectUri = redirectUriInput.value.trim();
         if (issuerInput.value.trim()) out.issuer = issuerInput.value.trim();
+        if (jwksUriInput.value.trim()) out.jwksUri = jwksUriInput.value.trim();
+        out.pkce = pkceSelect.value;
         const clients = [...clientsList.children].map((r) => r._read()).filter((c) => c.id && c.returnTo.length > 0);
         out.clients = clients;
       }
@@ -2649,25 +2760,33 @@ function renderAuthProviderKindFields(kind, provider) {
     container.appendChild(searchModeFields);
     applyBindModeVisibility();
 
-    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Group lookup ", infoIcon("authProviderLdapGroupLookup")])]));
     container.appendChild(
-      el("div", { class: "field-grid" }, [
-        el("label", { class: "span-2" }, [fieldTitle("Group search base ", infoIcon("authProviderLdapGroupSearchBase")), groupSearchBaseInput]),
-        el("label", { class: "span-2" }, [fieldTitle("Group search filter ", infoIcon("authProviderLdapGroupSearchFilter")), groupSearchFilterInput]),
-        el("label", {}, [fieldTitle("Group name attribute ", infoIcon("authProviderLdapGroupNameAttribute")), groupNameAttributeInput]),
-      ])
+      editorSection({
+        title: "Group lookup",
+        infoKey: "authProviderLdapGroupLookup",
+        description: "Optional. Finds the user's groups after login, and any extra attributes to read.",
+        body: [
+          el("div", { class: "field-grid" }, [
+            el("label", { class: "span-2" }, [fieldTitle("Group search base ", infoIcon("authProviderLdapGroupSearchBase")), groupSearchBaseInput]),
+            el("label", { class: "span-2" }, [fieldTitle("Group search filter ", infoIcon("authProviderLdapGroupSearchFilter")), groupSearchFilterInput]),
+            el("label", {}, [fieldTitle("Group name attribute ", infoIcon("authProviderLdapGroupNameAttribute")), groupNameAttributeInput]),
+          ]),
+          el("div", { class: "field-grid" }, [
+            el("label", { class: "span-2" }, [fieldTitle("Extra attributes ", infoIcon("authProviderLdapAttributes"), " (comma-separated)"), attributesInput]),
+          ]),
+        ],
+      })
     );
     container.appendChild(
-      el("div", { class: "field-grid" }, [
-        el("label", { class: "span-2" }, [fieldTitle("Extra attributes ", infoIcon("authProviderLdapAttributes"), " (comma-separated)"), attributesInput]),
-      ])
-    );
-    container.appendChild(el("div", { class: "section-header" }, [el("h4", {}, ["Stand-in backend token ", infoIcon("authProviderLdapTokenSecret")])]));
-    container.appendChild(
-      el("div", { class: "field-grid" }, [
-        el("label", {}, [fieldTitle("Token secret ", infoIcon("authProviderLdapTokenSecret")), tokenSecretInput]),
-        el("label", {}, [fieldTitle("Token TTL (seconds) ", infoIcon("authProviderLdapTokenTtlSeconds")), tokenTtlInput]),
-      ])
+      editorSection({
+        title: "Stand-in backend token",
+        infoKey: "authProviderLdapTokenSecret",
+        description: "LDAP has no token of its own, so naimix issues one it signs with this secret.",
+        body: el("div", { class: "field-grid" }, [
+          el("label", {}, [fieldTitle("Token secret ", infoIcon("authProviderLdapTokenSecret")), tokenSecretInput]),
+          el("label", {}, [fieldTitle("Token TTL (seconds) ", infoIcon("authProviderLdapTokenTtlSeconds")), tokenTtlInput]),
+        ]),
+      })
     );
 
     container._read = () => {

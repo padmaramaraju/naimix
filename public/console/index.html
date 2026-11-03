@@ -47,7 +47,7 @@
         <div class="shared-collection-group">
           <div class="sidebar-group-label">
             Shared Collection
-            <button type="button" class="info-icon" data-info-key="sharedCollection" aria-label="What is this?">i</button>
+            <button type="button" class="info-icon" tabindex="-1" data-info-key="sharedCollection" aria-label="What is this?">i</button>
           </div>
           <p class="nav-caption">Maintained centrally — referenced by every app</p>
           <ul id="shared-nav-list" class="nav-list"></ul>
@@ -60,7 +60,7 @@
         <div class="apps-group">
           <div class="sidebar-group-label">
             Apps
-            <button type="button" class="info-icon" data-info-key="appsSection" aria-label="What is this?">i</button>
+            <button type="button" class="info-icon" tabindex="-1" data-info-key="appsSection" aria-label="What is this?">i</button>
           </div>
           <p class="nav-caption">Your routes — each one points into Shared Collection</p>
           <ul id="apps-nav-list" class="nav-list"></ul>
@@ -75,7 +75,7 @@
 
         <div class="sidebar-section">
           <div class="sidebar-section-header">
-            <h2>Active sessions <button type="button" class="info-icon" data-info-key="activeSessions" aria-label="What is this?">i</button></h2>
+            <h2>Active sessions <button type="button" class="info-icon" tabindex="-1" data-info-key="activeSessions" aria-label="What is this?">i</button></h2>
             <button id="refresh-sessions-btn" class="btn-secondary btn-sm" type="button">Refresh</button>
           </div>
           <div id="sessions-list" class="gateway-list"></div>
@@ -128,10 +128,10 @@
 
             <div class="editor-tab-panel" data-tab-panel="basic">
               <section class="field-grid">
-                <label><span class="field-title">Id <button type="button" class="info-icon" data-info-key="integrationId" aria-label="What is this?">i</button></span>
+                <label><span class="field-title">Id <button type="button" class="info-icon" tabindex="-1" data-info-key="integrationId" aria-label="What is this?">i</button></span>
                   <input name="id" required pattern="[A-Za-z0-9_\-]+" title="letters, digits, _ and - only" />
                 </label>
-                <label class="span-2"><span class="field-title">Description <button type="button" class="info-icon" data-info-key="integrationDescription" aria-label="What is this?">i</button></span>
+                <label class="span-2"><span class="field-title">Description <button type="button" class="info-icon" tabindex="-1" data-info-key="integrationDescription" aria-label="What is this?">i</button></span>
                   <input name="description" placeholder="optional" />
                 </label>
               </section>
@@ -140,13 +140,13 @@
 
             <div class="editor-tab-panel" data-tab-panel="backend" hidden>
               <div class="field-grid">
-                <label><span class="field-title">Gateway <button type="button" class="info-icon" data-info-key="backendGateway" aria-label="What is this?">i</button></span>
+                <label><span class="field-title">Gateway <button type="button" class="info-icon" tabindex="-1" data-info-key="backendGateway" aria-label="What is this?">i</button></span>
                   <div class="gateway-select-row">
                     <select name="backendGateway"><option value="">(none)</option></select>
                     <button type="button" class="btn-secondary btn-sm" id="view-gateway-btn" disabled>View gateway</button>
                   </div>
                 </label>
-                <label><span class="field-title">Type <span class="muted" id="backend-type-hint" hidden>(set by the selected gateway)</span> <button type="button" class="info-icon" data-info-key="backendType" aria-label="What is this?">i</button></span>
+                <label><span class="field-title">Type <span class="muted" id="backend-type-hint" hidden>(set by the selected gateway)</span> <button type="button" class="info-icon" tabindex="-1" data-info-key="backendType" aria-label="What is this?">i</button></span>
                   <select name="backendType"></select>
                 </label>
               </div>
@@ -169,11 +169,13 @@
               </div>
               <div id="output-fields-list" class="repeatable-list"></div>
 
-              <div class="tab-panel-toolbar output-postprocess-toolbar">
-                <h4 class="tab-panel-toolbar-title">Post-process function <button type="button" class="info-icon" data-info-key="outputPostProcess" aria-label="What is this?">i</button></h4>
-              </div>
-              <p class="muted">Optional -- runs once on the ENTIRE mapped output above (add/remove fields, walk and rewrite an array), after every field above has already been extracted.</p>
-              <div id="output-postprocess-container"></div>
+              <section class="editor-section">
+                <div class="section-header">
+                  <h4>Post-process function <button type="button" class="info-icon" tabindex="-1" data-info-key="outputPostProcess" aria-label="What is this?">i</button></h4>
+                </div>
+                <p class="editor-section-desc">Optional. Runs once on the entire mapped output above (add or remove fields, walk and rewrite an array), after every field above has been extracted.</p>
+                <div id="output-postprocess-container"></div>
+              </section>
             </div>
 
             <div class="editor-tab-panel" data-tab-panel="test" hidden>
@@ -186,11 +188,11 @@
               <div id="test-params-list" class="repeatable-list"></div>
               <div id="tryit-bulk-fields">
                 <label class="block" id="test-raw-query-row" hidden>
-                  <span class="field-title">Query params <button type="button" class="info-icon" data-info-key="testRawQuery" aria-label="What is this?">i</button> <span class="muted">(JSON object -- what a caller would send as ?key=value)</span></span>
+                  <span class="field-title">Query params <button type="button" class="info-icon" tabindex="-1" data-info-key="testRawQuery" aria-label="What is this?">i</button> <span class="muted">(JSON object -- what a caller would send as ?key=value)</span></span>
                   <textarea id="test-raw-query" placeholder='{"status": "active", "limit": "20"}'></textarea>
                 </label>
                 <label class="block" id="test-raw-body-row" hidden>
-                  <span class="field-title">Request body <button type="button" class="info-icon" data-info-key="testRawBody" aria-label="What is this?">i</button> <span class="muted">(JSON -- exactly what a real caller's request body would be)</span></span>
+                  <span class="field-title">Request body <button type="button" class="info-icon" tabindex="-1" data-info-key="testRawBody" aria-label="What is this?">i</button> <span class="muted">(JSON -- exactly what a real caller's request body would be)</span></span>
                   <textarea id="test-raw-body" placeholder='{"rows": [ {"...": "..."} ]}'></textarea>
                 </label>
               </div>
@@ -241,10 +243,10 @@
           <div class="app-tab-panel" data-app-tab-panel="settings">
             <form id="app-form">
               <div class="field-grid">
-                <label><span class="field-title">Id <button type="button" class="info-icon" data-info-key="appId" aria-label="What is this?">i</button></span>
+                <label><span class="field-title">Id <button type="button" class="info-icon" tabindex="-1" data-info-key="appId" aria-label="What is this?">i</button></span>
                   <input name="id" required pattern="[A-Za-z0-9_\-]+" title="letters, digits, _ and - only" />
                 </label>
-                <label><span class="field-title">Name <button type="button" class="info-icon" data-info-key="appName" aria-label="What is this?">i</button></span>
+                <label><span class="field-title">Name <button type="button" class="info-icon" tabindex="-1" data-info-key="appName" aria-label="What is this?">i</button></span>
                   <input name="name" required placeholder="Storefront Web" />
                 </label>
               </div>
@@ -258,7 +260,7 @@
           <div class="app-tab-panel" data-app-tab-panel="routes" hidden>
             <section id="app-routes-section" class="editor-section">
               <div class="section-header">
-                <h3>Routes <button type="button" class="info-icon" data-info-key="appRoutes" aria-label="What is this?">i</button></h3>
+                <h3>Routes <button type="button" class="info-icon" tabindex="-1" data-info-key="appRoutes" aria-label="What is this?">i</button></h3>
                 <button id="add-route-btn" class="btn-primary btn-sm" type="button">+ Add route</button>
               </div>
               <p id="app-mount-note" class="muted"></p>
@@ -296,27 +298,29 @@
           </div>
 
           <form id="gateway-form">
-            <label class="block"><span class="field-title">Name <button type="button" class="info-icon" data-info-key="gatewayName" aria-label="What is this?">i</button></span>
+            <label class="block"><span class="field-title">Name <button type="button" class="info-icon" tabindex="-1" data-info-key="gatewayName" aria-label="What is this?">i</button></span>
               <input name="name" required pattern="[A-Za-z0-9_\-]+" />
             </label>
-            <label class="block"><span class="field-title">Kind <button type="button" class="info-icon" data-info-key="gatewayKind" aria-label="What is this?">i</button></span>
+            <label class="block"><span class="field-title">Kind <button type="button" class="info-icon" tabindex="-1" data-info-key="gatewayKind" aria-label="What is this?">i</button></span>
               <select name="kind"></select>
             </label>
             <div id="gateway-fields"></div>
 
-            <label class="block"><span class="field-title">Requires auth <button type="button" class="info-icon" data-info-key="gatewayRequiresAuth" aria-label="What is this?">i</button> <span class="muted">(optional — every route whose Integration calls through this gateway will require a caller session from this provider)</span></span>
+            <label class="block"><span class="field-title">Requires auth <button type="button" class="info-icon" tabindex="-1" data-info-key="gatewayRequiresAuth" aria-label="What is this?">i</button> <span class="muted">(optional — every route whose Integration calls through this gateway will require a caller session from this provider)</span></span>
               <select name="requiresAuth"><option value="">(none)</option></select>
             </label>
 
+            <div id="gateway-sections"></div>
+
             <section class="editor-section">
               <div class="section-header">
-                <h3>Common parameters <button type="button" class="info-icon" data-info-key="gatewayCommonParams" aria-label="What is this?">i</button></h3>
+                <h3>Common parameters <button type="button" class="info-icon" tabindex="-1" data-info-key="gatewayCommonParams" aria-label="What is this?">i</button></h3>
                 <button type="button" class="btn-secondary btn-sm" id="add-common-param-btn">+ Add parameter</button>
               </div>
-              <p class="muted">Available as <code>{name}</code> to every integration that uses this gateway
+              <p class="muted editor-section-desc">Available as <code>{name}</code> to every integration that uses this gateway
                 (values may reference <code>${env.VAR_NAME}</code>). An integration's own input parameter of the
                 same name takes precedence.</p>
-              <div id="gateway-common-params-list" class="repeatable-list"></div>
+              <div id="gateway-common-params-list" class="repeatable-list" data-empty="No common parameters added"></div>
             </section>
 
             <p id="gateway-form-error" class="error-text" hidden></p>
@@ -337,17 +341,17 @@
           </div>
 
           <form id="auth-provider-form">
-            <label class="block"><span class="field-title">Name <button type="button" class="info-icon" data-info-key="authProviderName" aria-label="What is this?">i</button></span>
+            <label class="block"><span class="field-title">Name <button type="button" class="info-icon" tabindex="-1" data-info-key="authProviderName" aria-label="What is this?">i</button></span>
               <input name="name" required pattern="[A-Za-z0-9_\-]+" />
             </label>
-            <label class="block"><span class="field-title">Kind <button type="button" class="info-icon" data-info-key="authProviderKind" aria-label="What is this?">i</button></span>
+            <label class="block"><span class="field-title">Kind <button type="button" class="info-icon" tabindex="-1" data-info-key="authProviderKind" aria-label="What is this?">i</button></span>
               <select name="kind"></select>
             </label>
             <div id="auth-provider-fields"></div>
 
             <section class="editor-section">
               <div class="section-header">
-                <h3>Test login <button type="button" class="info-icon" data-info-key="authProviderTestLogin" aria-label="What is this?">i</button></h3>
+                <h3>Test login <button type="button" class="info-icon" tabindex="-1" data-info-key="authProviderTestLogin" aria-label="What is this?">i</button></h3>
               </div>
               <div id="auth-provider-password-test">
                 <p class="muted">
@@ -442,7 +446,7 @@
             </label>
           </div>
 
-          <h4>Claims <button type="button" class="info-icon" data-info-key="authProviderClaims" aria-label="What is this?">i</button></h4>
+          <h4>Claims <button type="button" class="info-icon" tabindex="-1" data-info-key="authProviderClaims" aria-label="What is this?">i</button></h4>
           <pre id="session-detail-claims" class="code-block">—</pre>
         </section>
       </main>
@@ -511,16 +515,16 @@
 
           <form id="route-form">
             <div class="field-grid">
-              <label><span class="field-title">Id <button type="button" class="info-icon" data-info-key="routeId" aria-label="What is this?">i</button></span>
+              <label><span class="field-title">Id <button type="button" class="info-icon" tabindex="-1" data-info-key="routeId" aria-label="What is this?">i</button></span>
                 <input name="id" required pattern="[A-Za-z0-9_\-]+" title="letters, digits, _ and - only" />
               </label>
-              <label><span class="field-title">Method <button type="button" class="info-icon" data-info-key="routeMethod" aria-label="What is this?">i</button></span>
+              <label><span class="field-title">Method <button type="button" class="info-icon" tabindex="-1" data-info-key="routeMethod" aria-label="What is this?">i</button></span>
                 <select name="method"></select>
               </label>
-              <label class="span-2"><span class="field-title">Path <button type="button" class="info-icon" data-info-key="routePath" aria-label="What is this?">i</button> <span class="muted">(relative to this App's basePath in deployment.yaml)</span></span>
+              <label class="span-2"><span class="field-title">Path <button type="button" class="info-icon" tabindex="-1" data-info-key="routePath" aria-label="What is this?">i</button> <span class="muted">(relative to this App's basePath in deployment.yaml)</span></span>
                 <input name="path" required placeholder="/customers/:id" pattern="/.*" title="Must start with /, e.g. /customers/:id" />
               </label>
-              <label class="span-2"><span class="field-title">Description <button type="button" class="info-icon" data-info-key="routeDescription" aria-label="What is this?">i</button></span>
+              <label class="span-2"><span class="field-title">Description <button type="button" class="info-icon" tabindex="-1" data-info-key="routeDescription" aria-label="What is this?">i</button></span>
                 <input name="description" placeholder="optional" />
               </label>
             </div>
@@ -533,7 +537,7 @@
 
           <section id="route-tryit-section" class="editor-section" hidden>
             <div class="section-header">
-              <h3>Try it <button type="button" class="info-icon" data-info-key="routeTryIt" aria-label="What is this?">i</button></h3>
+              <h3>Try it <button type="button" class="info-icon" tabindex="-1" data-info-key="routeTryIt" aria-label="What is this?">i</button></h3>
             </div>
             <div id="route-test-params-list" class="repeatable-list"></div>
             <div class="test-actions">

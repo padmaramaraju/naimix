@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Caller authentication · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Caller authentication</h1>
+<p class="lead">Protect your data endpoints. naimix logs in to the real backend on the caller's behalf, keeps the backend token server-side, and hands the caller an opaque session token instead.</p>
+<figure class="video" data-src="videos/authentication.mp4" data-poster="images/authentication.png" data-captions="videos/authentication.vtt" data-title="Authentication"></figure>
+
+<div class="callout"><p>This is separate from <code>CONSOLE_TOKEN</code>, which only guards the Developer Console. Caller authentication guards the endpoints you define under <code>/api/…</code>.</p></div>
+
+<h2>How it fits together</h2>
+<ol class="steps">
+<li><b>Define a provider</b> in <code>authProviders.yaml</code>.</li>
+<li><b>Require it</b> by adding <code>requiresAuth: myProvider</code> to a gateway. Every route calling through that gateway now needs a session from that provider.</li>
+<li><b>Callers log in once:</b> <code>POST /auth/login/myProvider</code> with <code>{"username":"…","password":"…"}</code>. They get <code>{ "token": "…", "expiresAt": … }</code>.</li>
+<li><b>Callers send the token</b> as <code>Authorization: Bearer &lt;token&gt;</code> on later calls.</li>
+<li><b>Use the real token on the backend</b> through the reserved <code>{__authToken}</code> parameter, for example in a gateway header.</li>
+<li><b>Log out</b> with <code>POST /auth/logout</code>. Opaque tokens are a server-side lookup, so revocation is instant.</li>
+</ol>
+<pre><code>gateways:
+  crmJsonAuthed:
+    kind: json
+    baseUrl: ${env.CRM_BASE_URL}
+    requiresAuth: myProvider
+    headers:
+      Authorization: "Bearer {__authToken}"</code></pre>
+
+<h2>Provider kinds</h2>
+<h3>basicLogin: a bespoke login API</h3>
+<pre><code>myProvider:
+  kind: basicLogin
+  loginUrl: ${env.BACKEND_LOGIN_URL}
+  tokenPath: $.accessToken           # JSONPath into the login response
+  refreshTokenPath: $.refreshToken   # optional
+  expiresInPath: $.expiresIn         # optional, seconds</code></pre>
+<h3>oauth2: a standard RFC 6749 token endpoint</h3>
+<pre><code>myOAuthProvider:
+  kind: oauth2
+  tokenUrl: ${env.BACKEND_TOKEN_URL}
+  grantType: password       # or client_credentials, or authorizationCode
+  clientId: ${env.BACKEND_CLIENT_ID}
+  clientSecret: ${env.BACKEND_CLIENT_SECRET}</code></pre>
+<p><code>client_credentials</code> takes no end-user credentials, since it authenticates the middleware itself. Sessions refresh automatically a little before expiry via the standard <code>refresh_token</code> grant.</p>
+<h3>ldap: LDAP / Active Directory simple bind</h3>
+<pre><code>myLdapProvider:
+  kind: ldap
+  url: ${env.LDAP_URL}                  # ldap://… or ldaps://…
+  bindDn: cn=admin,dc=example,dc=com
+  bindPassword: ${env.LDAP_BIND_PASSWORD}
+  searchBase: ou=people,dc=example,dc=com
+  searchFilter: (uid={username})        # (sAMAccountName={username}) for AD
+  groupSearchBase: ou=groups,dc=example,dc=com   # optional
+  groupSearchFilter: (member={dn})
+  attributes: [mail, title]
+  tokenSecret: ${env.LDAP_TOKEN_SECRET}</code></pre>
+<p>LDAP has no native token, so on a successful bind naimix mints a signed HS256 JWT (<code>sub</code>, <code>username</code>, and <code>groups</code> when configured) as the stand-in backend token. A backend sharing the same secret can verify it. Expired LDAP sessions return a clean <code>401</code>; there is no refresh.</p>
+<p>Two modes exist: search-then-bind (shown above, the usual enterprise pattern) and direct bind via <code>userDnTemplate</code>. Configure exactly one.</p>
+
+<h2>OAuth authorization code (browser redirect)</h2>
+<p>For a human logging in on the identity provider's own page, so naimix never sees a password:</p>
+<pre><code>myOAuthCodeProvider:
+  kind: oauth2
+  grantType: authorizationCode
+  tokenUrl: ${env.IDP_TOKEN_URL}
+  authorizationUrl: ${env.IDP_AUTHORIZATION_URL}
+  redirectUri: ${env.NAIMIX_OAUTH_REDIRECT_URI}   # naimix's OWN callback
+  clientId: ${env.IDP_CLIENT_ID}
+  clientSecret: ${env.IDP_CLIENT_SECRET}
+  clients:                                        # allow-list of calling apps
+    - id: myWebApp
+      returnTo:
+        - https://app.example.com/oauth-done</code></pre>
+<p>A client app opens this in a browser (not as an API call):</p>
+<pre><code>GET /auth/oauth/myOAuthCodeProvider/start?app=myWebApp&amp;return_to=https://app.example.com/oauth-done&amp;state=&lt;optional&gt;</code></pre>
+<p>After login, naimix redirects to <code>return_to</code> with its own session token in the URL fragment (<code>#token=…&amp;expires_at=…</code>). A fragment is visible to your app's JavaScript but never sent to any server, including naimix's own logs.</p>
+<ul>
+<li><code>redirectUri</code> is naimix's address, registered with the provider. <code>returnTo</code> is where naimix sends the user afterwards. They are different things.</li>
+<li><code>clients</code> is a closed allow-list: any <code>app</code> and <code>return_to</code> pair that is not an exact match is rejected, which prevents open redirects.</li>
+</ul>
+
+<h2>Manage providers in the console</h2>
+<p>Use <b>Auth providers</b> in the Shared Collection (list, create, edit, delete). A blank <code>clientSecret</code> on edit means unchanged. A gateway's editor has a <b>Requires auth</b> dropdown. Deleting a provider that a gateway still requires is refused with a <code>409</code>.</p>
+
+<h2>Try it locally</h2>
+<ul>
+<li><code>demoLogin</code>: <code>POST /auth/login/demoLogin</code> with <code>demo</code> / <code>demo123</code>.</li>
+<li><code>demoLdap</code>: run <code>npm run test-ldap</code> (needs Docker), then log in as <code>jdoe</code>, <code>asmith</code> or <code>bwayne</code> with password <code>password123</code>.</li>
+<li><code>demoOAuthCode</code>: open the <code>/auth/oauth/demoOAuthCode/start?…</code> URL from <code>config/gateways.yaml</code> in a browser and click through the mock provider.</li>
+</ul>
+
+<div class="callout warn"><p><b>Single instance only:</b> sessions and pending OAuth logins live in one process's memory. Behind a load balancer with several instances this does not work yet. See <a href="../reference/limitations.html">Known limitations</a>.</p></div>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

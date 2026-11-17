@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Gateways · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Gateways</h1>
+<p class="lead">A gateway is a reusable connection to one backend. Integrations refer to it by name, so base URLs and credentials live in one place.</p>
+
+<figure class="video" data-src="videos/xml-gateway.mp4" data-poster="images/xml-gateway.png" data-captions="videos/xml-gateway.vtt" data-title="Creating an XML gateway (about 1 minute)"></figure>
+<p>This video is also available with a step-by-step script on the <a href="../tutorials/xml-gateway.html">tutorial page</a>.</p>
+
+<h2>Gateway kinds</h2>
+<table>
+<tr><th>kind</th><th>Required field</th><th>Notes</th></tr>
+<tr><td><code>json</code></td><td><code>baseUrl</code></td><td>JSON REST APIs. A relative integration <code>url</code> is appended to <code>baseUrl</code>.</td></tr>
+<tr><td><code>xml</code></td><td><code>baseUrl</code></td><td>Plain XML-over-HTTP. Responses are parsed by <code>fast-xml-parser</code>.</td></tr>
+<tr><td><code>soap</code></td><td><code>wsdl</code></td><td>SOAP operations via the WSDL.</td></tr>
+<tr><td><code>sql</code></td><td><code>client</code>, <code>connection</code></td><td>Clients: <code>pg</code>, <code>mysql2</code>, <code>mssql</code>, <code>sqlite3</code>, <code>better-sqlite3</code>.</td></tr>
+</table>
+<p>A gateway without a <code>baseUrl</code> or <code>wsdl</code> is not useful, so both the schema and the console enforce it. An integration can still call a fully custom absolute URL without any gateway.</p>
+
+<h2>Example <code>gateways.yaml</code></h2>
+<pre><code>gateways:
+  crmJson:
+    kind: json
+    baseUrl: ${env.CRM_BASE_URL}
+    headers:
+      Authorization: "Bearer ${env.CRM_TOKEN}"
+    commonParams:               # available as {name} in every integration on this gateway
+      tenant: acme
+      region: ${env.DEPLOY_REGION}
+
+  crmSoap:
+    kind: soap
+    wsdl: ${env.CRM_WSDL_URL}
+
+  mainDb:
+    kind: sql
+    client: pg
+    connection:
+      host: ${env.DB_HOST}
+      user: ${env.DB_USER}
+      password: ${env.DB_PASSWORD}
+      database: ${env.DB_NAME}
+
+  crmJsonAuthed:
+    kind: json
+    baseUrl: ${env.CRM_BASE_URL}
+    requiresAuth: myProvider    # see Caller authentication</code></pre>
+
+<h2>Keep secrets out of config</h2>
+<p><code>${env.VAR_NAME}</code> is resolved once at startup from <code>process.env</code> (loaded from <code>.env</code>). Only the variable name is committed, never the secret.</p>
+
+<h2>Common parameters</h2>
+<p><code>commonParams</code> are defaults every integration on the gateway can use as <code>{name}</code> in its URL, headers, query, SOAP args or SQL bindings. They sit underneath an integration's own input, so an integration that declares a parameter with the same name overrides the default for that call. Use them for things every call needs, such as a tenant id or region.</p>
+
+<h2>Creating one in the console</h2>
+<ol class="steps">
+<li>Open <b>Gateways</b> in the Shared Collection and click <b>+ Add</b>.</li>
+<li>Enter a name and choose the kind. The fields below change to match.</li>
+<li>Fill in the base URL (or WSDL, or connection), optional headers, and common parameters.</li>
+<li>Click <b>Save gateway</b>. It is immediately available to every integration.</li>
+</ol>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

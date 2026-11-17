@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>How it works · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>How it works</h1>
+<p class="lead">The mental model: a shared collection of building blocks, and apps that expose them.</p>
+<figure class="video" data-src="videos/how-it-works.mp4" data-poster="images/how-it-works.png" data-captions="videos/how-it-works.vtt" data-title="How naimix works"></figure>
+
+
+<h2>The request flow</h2>
+<pre><code>incoming request
+   │
+   ▼  route match (method + path)         ← defined in an App
+   ▼  extract &amp; validate input params    ← path / query / header / body / env
+   ▼  caller authentication (if required) ← gateway's requiresAuth
+   ▼  call the backend                    ← json | xml | soap | sql, via a Gateway
+   ▼  map response onto output shape      ← JSONPath in, dot-path out, transforms
+   ▼
+JSON response</code></pre>
+
+<h2>The building blocks</h2>
+<table>
+<tr><th>Concept</th><th>Owned by</th><th>What it is</th></tr>
+<tr><td><b>Gateway</b></td><td>Shared Collection</td><td>A reusable connection to one backend: base URL or WSDL, database connection, headers, common parameters, and optionally <code>requiresAuth</code>.</td></tr>
+<tr><td><b>Integration</b></td><td>Shared Collection</td><td>How to call a backend and shape its response: <code>input</code>, <code>backend</code> and <code>output</code>. It has no public URL of its own.</td></tr>
+<tr><td><b>Auth provider</b></td><td>Shared Collection</td><td>How callers log in: a bespoke login API, OAuth2, or LDAP/AD.</td></tr>
+<tr><td><b>Function</b></td><td>Shared Collection</td><td>A custom transform function referenced by name from an integration's output mapping.</td></tr>
+<tr><td><b>Route</b></td><td>App</td><td>A public <code>method</code> + <code>path</code> that points at one integration by name.</td></tr>
+<tr><td><b>App</b></td><td>Consuming team</td><td>A list of routes. Think of it as a backend-for-frontend (BFF) assembled from the shared catalog.</td></tr>
+</table>
+
+<h2>Shared Collection vs. App</h2>
+<p>This split mirrors patterns from API gateways such as Kong (Service and Route) and AWS API Gateway (Integration and Resource).</p>
+<ul>
+<li>The <b>Shared Collection</b> (called the <i>Workspace</i> in config and code) is maintained centrally. It holds gateways, auth providers, integrations and functions.</li>
+<li>An <b>App</b> belongs to a team that consumes the collection. It contains no backend-calling logic. It only assembles routes out of what the collection already offers.</li>
+<li>A route is a pure pointer. If a team needs different call or mapping behavior, the answer is to define a different integration.</li>
+</ul>
+<p>Authentication composes automatically: <code>requiresAuth</code> lives on the gateway, so every route whose integration calls through that gateway requires a session from that provider.</p>
+
+<h2>Where things live on disk</h2>
+<pre><code>&lt;workspace&gt;/            # one folder, typically its own Git repo
+  gateways.yaml
+  authProviders.yaml
+  integrations/         # one YAML file per integration
+  apps/                 # one YAML file per app (id, name, routes)
+  transforms/           # custom functions (.ts source + compiled .js)</code></pre>
+<div class="callout"><p>The bundled demo in <code>config/</code> still contains a legacy <code>endpoints/</code> folder alongside <code>integrations/</code> and <code>apps/</code>. The server reads integrations and apps. A migration script (<code>npm run migrate:endpoints</code>) converts the old combined format into the split one.</p></div>
+
+<h2>Three build targets, one core</h2>
+<p>naimix builds as <code>dev</code>, <code>qa</code> or <code>prod</code>. All three share the same request-handling core. Only <code>dev</code> includes the Developer Console, and the QA and Production bundles are checked at build time to prove none of that code leaked in. See <a href="../deployment/qa-production.html">QA &amp; Production</a>.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

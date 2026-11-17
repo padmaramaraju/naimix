@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.264 --> 00:00:05.138
+The Ops Console is for operators.
+
+00:00:05.138 --> 00:00:12.710
+Open /ops and enter OPS_TOKEN.
+
+00:00:12.710 --> 00:00:17.718
+System: instance, uptime, memory and CPU, updated live.
+
+00:00:17.718 --> 00:00:20.985
+Env: every environment variable, with values masked.
+
+00:00:20.985 --> 00:00:25.356
+Filter by name.
+
+00:00:25.356 --> 00:00:28.667
+Refresh re-reads the process environment.
+
+00:00:29.491 --> 00:00:42.930
+Safe to expose to operators.

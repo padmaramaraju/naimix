@@ -131,7 +131,7 @@ export function startDataPlaneServer(environment: DataPlaneEnvironment): void {
   const app = createDataPlaneApp({ routeRegistry, gatewaysRegistry, authProvidersRegistry, functionRegistry, logger });
 
   const server = app.listen(PORT, () => {
-    logger.info(`Naimix (${label} data-plane) listening on http://localhost:${PORT}`);
+    logger.info(`naimix (${label} data-plane) listening on http://localhost:${PORT}`);
     logger.info(
       `Loaded ${integrationRegistry.list().length} integration(s) from ${integrationsDir}, ` +
         `${appRegistry.list().length} app(s) from ${appsDir} ` +

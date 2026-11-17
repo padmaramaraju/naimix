@@ -1,4 +1,4 @@
-# Naimix — Technical Documentation
+# naimix — Technical Documentation
 
 This is the internals reference for `naimix`: how the system is actually built, why it's
 built that way, and a running log of every enhancement and fix made to it. It's meant to be
@@ -1449,8 +1449,8 @@ place for that difference to live instead of it being threaded into one shared t
 
 Renamed/split accordingly: `src/server/dataPlaneIndex.ts`'s startup logic moved into a new
 `src/server/dataPlaneServer.ts`, exporting `startDataPlaneServer(environment: "qa" | "prod")` --
-identical to before except the startup log line now says `Naimix (QA data-plane) listening...` or
-`Naimix (Production data-plane) listening...` depending on which target called it. Two new one-line entry
+identical to before except the startup log line now says `naimix (QA data-plane) listening...` or
+`naimix (Production data-plane) listening...` depending on which target called it. Two new one-line entry
 files, `src/server/qaIndex.ts` and `src/server/prodIndex.ts`, each just call `startDataPlaneServer("qa")`/
 `startDataPlaneServer("prod")` -- the old `dataPlaneIndex.ts` is deleted, replaced by these two plus the
 shared function. `dataPlaneApp.ts` (the actual Express app -- still exactly one file, still console-free)

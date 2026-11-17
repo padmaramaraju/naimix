@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:00.774 --> 00:00:04.502
+Environment variables.
+
+00:00:04.502 --> 00:00:17.006
+The settings you will touch most.
+
+00:00:17.006 --> 00:00:24.776
+Your .env, with values hidden.
+
+00:00:25.013 --> 00:00:53.013
+Config refers to secrets by name.

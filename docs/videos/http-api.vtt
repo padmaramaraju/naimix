@@ -1,0 +1,25 @@
+WEBVTT
+
+00:00:00.156 --> 00:00:04.572
+The HTTP surface of naimix.
+
+00:00:04.572 --> 00:00:07.966
+Call a mounted route.
+
+00:00:07.966 --> 00:00:10.446
+Unknown paths return a JSON 404.
+
+00:00:10.446 --> 00:00:15.136
+Protected routes need a session.
+
+00:00:15.136 --> 00:00:18.808
+Log in to get an opaque session token.
+
+00:00:18.808 --> 00:00:22.888
+Send it as a bearer token.
+
+00:00:22.888 --> 00:00:27.810
+The Ops Console API uses its own token.
+
+00:00:27.812 --> 00:00:38.023
+The main prefixes at a glance.

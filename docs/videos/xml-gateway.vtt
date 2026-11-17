@@ -1,0 +1,37 @@
+WEBVTT
+
+00:00:00.171 --> 00:00:03.978
+Creating an XML gateway — A gateway is a reusable connection to a backend.
+
+00:00:03.978 --> 00:00:10.534
+Sign in to the console with your console token.
+
+00:00:10.534 --> 00:00:15.313
+Open Gateways in the Shared Collection. This lists the gateways that already exist.
+
+00:00:15.313 --> 00:00:18.402
+Click Add to create a new gateway.
+
+00:00:18.402 --> 00:00:22.548
+Give the gateway a name. Integrations will refer to it by this name.
+
+00:00:22.548 --> 00:00:26.198
+Set the kind to xml. The fields below change to match.
+
+00:00:26.198 --> 00:00:31.774
+Base URL: the root address every integration on this gateway will call.
+
+00:00:31.774 --> 00:00:39.341
+Headers (optional) are sent with every request through this gateway.
+
+00:00:39.341 --> 00:00:46.366
+Common parameters become {name} placeholders for every integration on this gateway.
+
+00:00:46.366 --> 00:00:50.434
+Click Save gateway. It is ready to use from any integration.
+
+00:00:50.434 --> 00:00:55.495
+It now appears in the Gateways list, with type xml.
+
+00:00:55.503 --> 00:01:04.115
+Create an integration — Next: build an integration that calls this gateway.

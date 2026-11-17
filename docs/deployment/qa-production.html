@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>QA & Production · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>QA &amp; Production</h1>
+<p class="lead">The Developer Console is a development-only tool. QA and Production use separate builds that never contain that code at all.</p>
+<figure class="video" data-src="videos/qa-production.mp4" data-poster="images/qa-production.png" data-captions="videos/qa-production.vtt" data-title="QA and production builds"></figure>
+
+
+<h2>Three targets, one core</h2>
+<table>
+<tr><th>Target</th><th>Entry point</th><th>npm scripts</th><th>Developer Console</th></tr>
+<tr><td><code>dev</code></td><td><code>src/server/index.ts</code></td><td><code>npm run dev</code>, or <code>npm run build &amp;&amp; npm start</code></td><td>Present, gated by <code>CONSOLE_TOKEN</code></td></tr>
+<tr><td><code>qa</code></td><td><code>src/server/qaIndex.ts</code></td><td><code>npm run dev:qa</code>, or <code>build:qa</code> then <code>start:qa</code></td><td>Not present</td></tr>
+<tr><td><code>prod</code></td><td><code>src/server/prodIndex.ts</code></td><td><code>npm run dev:prod</code>, or <code>build:prod</code> then <code>start:prod</code></td><td>Not present</td></tr>
+</table>
+<p><code>qa</code> and <code>prod</code> run identical code today. They differ only in their startup log line. They are kept as separate entry files so they can diverge later without threading conditionals through shared code.</p>
+
+<h2>Build and run</h2>
+<pre><code>npm run build:qa     # → dist-qa/server.js
+npm run build:prod   # → dist-prod/server.js
+
+npm run start:qa
+npm run start:prod</code></pre>
+<p>Each build bundles first-party code with esbuild (<code>node_modules</code> stays external, so it must be installed next to the bundle) and then runs <code>scripts/checkDataPlaneBundle.js</code>. That script searches the bundle for console-only identifiers such as <code>requireConsoleAuth</code> and <code>createConsoleApiRouter</code> and <b>fails the build</b> if any appear. It is a structural proof that the separation holds, not just a comment saying so.</p>
+
+<h2>Configuring an instance</h2>
+<ol class="steps">
+<li>Put the workspace on the server, typically a shared volume populated by your promotion pipeline, and set <code>CONFIG_DIR</code> to it (or the legacy variables).</li>
+<li>Place this environment's own <code>deployment.yaml</code> with its <code>mounts</code>. With no mounts the server starts with <b>zero routes</b> and logs a warning. <code>DEPLOYMENT_FILE</code> overrides its location.</li>
+<li>Set secrets (<code>${env.*}</code> values) in the server's environment or secrets manager.</li>
+<li>Set <code>OPS_TOKEN</code> if you want the <a href="ops-console.html">Ops Console</a>.</li>
+</ol>
+<p><code>CONSOLE_TOKEN</code> and the console's "Change workspace" feature do not exist in these builds.</p>
+
+<h2>The promotion model</h2>
+<p>The design notes recommend this flow, which fits the file-based config model:</p>
+<ol class="steps">
+<li>A developer changes config in a dev instance. It is written to the workspace files.</li>
+<li>The workspace is a Git repo, so the change is committed and tested in dev and QA like any code change.</li>
+<li>When ready, the change is merged to a <code>Production</code> branch.</li>
+<li>Ops pulls that branch onto the volume the production instances mount.</li>
+<li>Instances are restarted, ideally in a rolling manner, to pick up the new files.</li>
+</ol>
+<p>A full restart is the only update mechanism in production. There is no live reload, which keeps "config went live" an explicit, auditable action and makes rollback the same mechanism as rollout.</p>
+<div class="callout"><p>Parts of <code>DEPLOYMENT_ARCHITECTURE_NOTES.md</code> (shared network volume, Redis-backed sessions across instances) are design notes and not implemented. Sessions are currently in-process memory, so run a single instance or use sticky routing until that lands. See <a href="../reference/limitations.html">Known limitations</a>.</p></div>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

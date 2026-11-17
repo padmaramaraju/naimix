@@ -160,7 +160,7 @@ function main() {
   });
 
   const server = app.listen(PORT, () => {
-    logger.info(`Naimix listening on http://localhost:${PORT}`);
+    logger.info(`naimix listening on http://localhost:${PORT}`);
     logger.info(
       `Loaded ${integrationRegistry.list().length} integration(s) from ${integrationsDir}, ` +
         `${appRegistry.list().length} app(s) from ${appsDir} ` +

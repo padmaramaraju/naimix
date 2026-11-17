@@ -1,0 +1,37 @@
+WEBVTT
+
+00:00:00.263 --> 00:00:05.251
+An integration describes one backend call.
+
+00:00:05.251 --> 00:00:13.134
+Open the Developer Console and sign in with your console token.
+
+00:00:13.134 --> 00:00:18.186
+Integrations live in the Shared Collection. Open one.
+
+00:00:18.186 --> 00:00:20.389
+Basic: an id and a description.
+
+00:00:20.389 --> 00:00:24.955
+Backend: the gateway, the URL and the method.
+
+00:00:24.955 --> 00:00:30.093
+Parameters: what callers send, and where it comes from.
+
+00:00:30.093 --> 00:00:34.023
+Output: map backend fields onto your own JSON, with JSONPath.
+
+00:00:34.023 --> 00:00:41.496
+Add a field. Target is your name, source is the JSONPath.
+
+00:00:41.496 --> 00:00:44.052
+Optionally apply a transform, such as upper.
+
+00:00:44.052 --> 00:00:52.010
+Test it against the real backend before saving.
+
+00:00:52.010 --> 00:00:56.992
+Apply the mapping to see exactly what callers receive.
+
+00:00:56.992 --> 00:00:59.429
+We will close without saving. Saving writes a YAML file in your workspace.

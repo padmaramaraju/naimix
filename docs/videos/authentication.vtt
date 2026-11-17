@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.185 --> 00:00:03.938
+Protect routes with caller authentication.
+
+00:00:03.938 --> 00:00:10.841
+Three kinds of auth provider.
+
+00:00:10.841 --> 00:00:17.696
+Open the Developer Console and sign in with your console token.
+
+00:00:17.696 --> 00:00:23.303
+Auth providers are defined once in the Shared Collection.
+
+00:00:23.303 --> 00:00:32.600
+Test the login right here, using the provider's own settings.
+
+00:00:32.600 --> 00:00:38.381
+A gateway opts in with Requires auth.
+
+00:00:38.381 --> 00:00:44.491
+Callers then send the session as a Bearer token. Active sessions are listed on the left.
+
+00:00:44.491 --> 00:00:47.858
+Without a token, the route answers 401.
+
+00:00:47.858 --> 00:00:53.234
+Log in, then send the token.

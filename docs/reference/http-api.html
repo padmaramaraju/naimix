@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>HTTP API · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>HTTP API</h1>
+<p class="lead">The routes naimix itself provides, besides the ones you define.</p>
+<figure class="video" data-src="videos/http-api.mp4" data-poster="images/http-api.png" data-captions="videos/http-api.vtt" data-title="HTTP API"></figure>
+
+
+<h2>Always available</h2>
+<table>
+<tr><th>Route</th><th>Description</th></tr>
+<tr><td><code>GET /healthz</code></td><td>Status and how many routes loaded.</td></tr>
+<tr><td><code>GET /__endpoints</code></td><td>Lists every registered route: id, method, path, description, backend type. Useful to confirm a change took effect.</td></tr>
+<tr><td><code>POST /auth/login/{provider}</code></td><td>Log in. Body <code>{"username","password"}</code>. Returns <code>{"token","expiresAt"}</code>.</td></tr>
+<tr><td><code>POST /auth/logout</code></td><td>Invalidate the session for the bearer token.</td></tr>
+<tr><td><code>GET /auth/oauth/{provider}/start</code></td><td>Begin an OAuth authorization-code login. Open in a browser. Parameters: <code>app</code>, <code>return_to</code>, optional <code>state</code>.</td></tr>
+<tr><td><code>/ops</code>, <code>/ops/api/system</code>, <code>/ops/api/env</code></td><td>Ops Console. Requires <code>OPS_TOKEN</code>.</td></tr>
+</table>
+
+<h2>Dev build only: <code>/console</code></h2>
+<p>The Developer Console UI is at <code>/console</code>. Its REST API at <code>/console/api/*</code> requires <code>Authorization: Bearer &lt;CONSOLE_TOKEN&gt;</code>.</p>
+<table>
+<tr><th>Resource</th><th>Routes</th></tr>
+<tr><td>Integrations</td><td><code>GET/POST /integrations</code>, <code>GET/PUT/DELETE /integrations/:id</code></td></tr>
+<tr><td>Gateways</td><td><code>GET/POST /gateways</code>, <code>GET/PUT/DELETE /gateways/:name</code>, plus connection test and CRUD generation actions</td></tr>
+<tr><td>Auth providers</td><td><code>GET/POST /auth-providers</code>, <code>GET/PUT/DELETE /auth-providers/:name</code></td></tr>
+<tr><td>Apps and routes</td><td><code>GET/POST /apps</code>, <code>GET/PUT/DELETE /apps/:id</code>, route create/update/delete under <code>/apps/:appId/routes</code></td></tr>
+<tr><td>Functions</td><td><code>GET/POST /functions</code>, <code>GET/PUT/DELETE /functions/:name</code></td></tr>
+<tr><td>Settings</td><td><code>GET/PUT /settings</code>, folder browsing for the workspace picker</td></tr>
+<tr><td>Sessions</td><td>List and revoke active caller sessions</td></tr>
+<tr><td>Export</td><td><code>GET /export/openapi.json</code>, <code>GET /apps/:appId/export/openapi.json</code>, <code>GET /export/mcp-server</code></td></tr>
+<tr><td>Other</td><td><code>GET /meta</code>, <code>POST /test-mapping</code>, <code>POST /reload</code></td></tr>
+</table>
+<p>The exact routes are defined in <code>src/server/consoleApi.ts</code>.</p>
+
+<h2>Errors</h2>
+<p>All errors have the shape <code>{ "error", "message", "backendBody"? }</code>.</p>
+<table>
+<tr><th>Status</th><th>When</th></tr>
+<tr><td><code>400</code></td><td>Bad or missing input (<code>ValidationError</code>).</td></tr>
+<tr><td><code>401</code></td><td>Missing, invalid or expired caller session on an auth-required route.</td></tr>
+<tr><td><code>409</code></td><td>Console only: deleting something that is still referenced.</td></tr>
+<tr><td>backend status</td><td>A backend HTTP error is passed through with its original status where available.</td></tr>
+<tr><td><code>502</code></td><td>Backend error with no usable status.</td></tr>
+<tr><td><code>503</code></td><td>Console or Ops API called with no token configured.</td></tr>
+<tr><td><code>500</code></td><td>Anything unexpected.</td></tr>
+</table>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

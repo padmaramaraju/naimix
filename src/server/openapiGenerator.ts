@@ -331,7 +331,7 @@ export function generateOpenApiDocument({
   return {
     openapi: "3.0.3",
     info: {
-      title: "Naimix Workspace API",
+      title: "naimix Workspace API",
       description:
         "Auto-generated from this naimix workspace's live endpoint, gateway, and auth-provider configuration. Download it again after any config change to pick up the current shape -- there is no separate regeneration step.",
       version: new Date().toISOString(),

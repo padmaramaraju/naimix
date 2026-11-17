@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Environment variables · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Environment variables</h1>
+<p class="lead">Set these in <code>.env</code> (copied from <code>.env.example</code>) or in the server's environment.</p>
+<figure class="video" data-src="videos/env-vars.mp4" data-poster="images/env-vars.png" data-captions="videos/env-vars.vtt" data-title="Environment variables"></figure>
+
+
+<h2>Server</h2>
+<table>
+<tr><th>Variable</th><th>Purpose</th></tr>
+<tr><td><code>PORT</code></td><td>Port to listen on. Default <code>4000</code>.</td></tr>
+<tr><td><code>LOG_LEVEL</code></td><td><code>fatal</code>, <code>error</code>, <code>warn</code>, <code>info</code>, <code>debug</code> or <code>trace</code>.</td></tr>
+<tr><td><code>MAX_REQUEST_BODY_SIZE</code></td><td>Maximum JSON or urlencoded body size. Default <code>10mb</code>. Raise it if a real payload trips "request entity too large".</td></tr>
+<tr><td><code>INSTANCE_ID</code></td><td>Label returned by the Ops API. Defaults to <code>hostname:pid</code>.</td></tr>
+</table>
+
+<h2>Console tokens</h2>
+<table>
+<tr><th>Variable</th><th>Purpose</th></tr>
+<tr><td><code>CONSOLE_TOKEN</code></td><td>Dev build only. Enables the Developer Console and is the bearer token for <code>/console/api/*</code>. Unset means the console API returns <code>503</code>. Not read at all by QA and Production.</td></tr>
+<tr><td><code>OPS_TOKEN</code></td><td>Bearer token for the Ops Console (<code>/ops/api/*</code>). Read by all builds. Unset means <code>503</code>.</td></tr>
+</table>
+
+<h2>Where config is loaded from</h2>
+<table>
+<tr><th>Variable</th><th>Purpose</th></tr>
+<tr><td><code>DEPLOYMENT_FILE</code></td><td>Path to <code>deployment.yaml</code>. Default <code>deployment.yaml</code> in the working directory.</td></tr>
+<tr><td><code>CONFIG_DIR</code></td><td>Workspace folder holding <code>integrations/</code>, <code>apps/</code>, <code>gateways.yaml</code>, <code>authProviders.yaml</code>, <code>transforms/</code>. Used when <code>deployment.yaml</code> has no <code>configDir</code>.</td></tr>
+<tr><td><code>INTEGRATIONS_DIR</code>, <code>APPS_DIR</code>, <code>GATEWAYS_FILE</code>, <code>AUTH_PROVIDERS_FILE</code>, <code>TRANSFORMS_DIR</code></td><td>Legacy per-piece overrides, used only when neither of the above is set. Defaults are under <code>config/</code>.</td></tr>
+</table>
+<p>Priority in the dev build: <code>configDir</code> in <code>deployment.yaml</code>, then <code>CONFIG_DIR</code>, then the legacy variables. QA and Production skip the <code>deployment.yaml</code> <code>configDir</code> and start from <code>CONFIG_DIR</code> or the legacy variables, but still read <code>mounts</code> from <code>deployment.yaml</code>.</p>
+
+<h2>Demo settings</h2>
+<p>Variables starting with <code>DEMO_</code> only feed the bundled demo config. Replace them with your real backends' variables.</p>
+<table>
+<tr><th>Variable</th><th>Used for</th></tr>
+<tr><td><code>DEMO_JSON_BASE_URL</code>, <code>DEMO_XML_BASE_URL</code>, <code>DEMO_SOAP_WSDL_URL</code>, <code>DEMO_SQLITE_PATH</code></td><td>The mock backend's four formats.</td></tr>
+<tr><td><code>DEMO_OAUTH_CLIENT_SECRET</code>, <code>DEMO_OAUTH_CODE_REDIRECT_URI</code></td><td>The mock OAuth provider.</td></tr>
+<tr><td><code>DEMO_LDAP_URL</code>, <code>DEMO_LDAP_BIND_PASSWORD</code>, <code>DEMO_LDAP_TOKEN_SECRET</code></td><td>The local OpenLDAP test directory.</td></tr>
+</table>
+<div class="callout warn"><p>Never commit <code>.env</code>. It is already in <code>.gitignore</code>.</p></div>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

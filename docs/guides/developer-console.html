@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Developer Console · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Developer Console</h1>
+<p class="lead">A browser UI for creating gateways, integrations, apps and routes, then testing them against real backends. Changes take effect on the very next request, with no restart.</p>
+
+<figure class="video" data-src="videos/developer-console-tour.mp4" data-poster="images/developer-console-tour.png" data-captions="videos/developer-console-tour.vtt" data-title="Tour of the Developer Console (about 90 seconds)"></figure>
+
+<h2>Enable it</h2>
+<ol class="steps">
+<li>Set <code>CONSOLE_TOKEN</code> in <code>.env</code> to any random string. <code>.env.example</code> has a generator command.</li>
+<li>Run <code>npm run dev</code> (or <code>npm run build &amp;&amp; npm start</code>).</li>
+<li>Open <code>http://localhost:4000/console</code> and enter the token. The browser remembers it in local storage.</li>
+</ol>
+<div class="callout warn"><p>The console can configure an integration that calls any URL or SQL query the process can reach, so it is gated by a bearer token and disabled entirely (<code>503</code>) when no token is set. It exists only in the <code>dev</code> build. See <a href="../deployment/qa-production.html">QA &amp; Production</a>.</p></div>
+
+<h2>Layout</h2>
+<ul>
+<li><b>Shared Collection</b> (left sidebar): Integrations, Gateways and Auth Providers. Each opens a catalog table in the main panel, with an <i>+ Add</i> button.</li>
+<li><b>Apps</b> (left sidebar): your apps, with <i>+ New App</i> to add one. An app has three tabs: <b>Settings</b>, <b>Routes</b> and <b>Export</b>.</li>
+<li><b>Active sessions</b>: who is currently logged in through each auth provider, with a refresh button.</li>
+<li><b>Workspace bar</b>: shows which folder you are editing, with counts, and a <i>Change workspace…</i> button.</li>
+<li>A sun/moon switch toggles light and dark. By default it follows your OS.</li>
+</ul>
+
+<h2>Editing an integration</h2>
+<p>The integration editor has tabs so only one section is on screen at a time. Each tab shows a running summary, for example <i>Backend (json · crmJson)</i>.</p>
+<table>
+<tr><th>Tab</th><th>What you set</th></tr>
+<tr><td>Basic</td><td>Id and description. The <i>used by</i> line shows which routes call it.</td></tr>
+<tr><td>Backend</td><td>Pick a gateway first. The type is then set from it and greyed out, because the two can never disagree. Type stays editable only when gateway is "(none)", for calling a URL directly.</td></tr>
+<tr><td>Parameters</td><td>Input parameters: name, location (<code>path</code>, <code>query</code>, <code>header</code>, <code>body</code>, <code>env</code>), type, required, default.</td></tr>
+<tr><td>Output</td><td>Field mapping: target, source JSONPath, transform, default. Add nested arrays, and attach a post-process function.</td></tr>
+<tr><td>Test</td><td>The "Try it" panel (below).</td></tr>
+</table>
+
+<h3>The Try it panel</h3>
+<ol class="steps">
+<li>Fill in sample values for your input parameters.</li>
+<li>Click <b>Fetch sample response</b> to call the real backend now and see its raw response.</li>
+<li>Click <b>Apply mapping to sample</b> to see what your current output config produces from it.</li>
+</ol>
+<p>This works without saving first, and without re-calling the backend each time you tweak the mapping. For an <code>env</code> parameter, the value box is an optional override on top of the real environment value.</p>
+
+<h2>Other handy features</h2>
+<ul>
+<li><b>Field info icons.</b> Every field has a small "i" with a short explanation. Click it again, click elsewhere, or press Escape to close it.</li>
+<li><b>View gateway.</b> On the Backend tab, a button pops up the selected gateway's definition without leaving the editor.</li>
+<li><b>Test connection.</b> On SQL gateways, opens the database with the form's current settings and reports success or the driver's real error, without saving. A blank sensitive field tests against its stored value.</li>
+<li><b>Generate CRUD + procedure endpoints.</b> On a saved SQL gateway. See <a href="crud-generation.html">Generated CRUD endpoints</a>.</li>
+<li><b>Custom functions.</b> In an integration's Output tab, the Transform picker (and the post-process picker) has a <i>+ New function…</i> option that opens an inline code editor with a Test button. See <a href="transform-functions.html">Transform functions</a>.</li>
+<li><b>Reload from disk.</b> Re-reads the workspace after you hand-edit YAML.</li>
+<li><b>Masked secrets.</b> Fields that look sensitive (password, token, secret, apiKey) are masked once saved. Leaving one blank when editing means "unchanged".</li>
+<li><b>Dependency protection.</b> Deleting a gateway that an integration still uses is refused with a <code>409</code> listing the dependents. The same applies to auth providers used by gateways.</li>
+</ul>
+
+<h2>Things worth knowing</h2>
+<ul>
+<li>Saving through the UI rewrites <code>gateways.yaml</code> in full, so hand-written comments in that file are lost after the first UI edit. The same applies to an individual file once edited (not created) in the UI.</li>
+<li>A gateway field can hold <code>${env.VAR_NAME}</code> or a literal. A literal secret is written to disk in plain text, so prefer the env form.</li>
+<li>The console uses one shared <code>CONSOLE_TOKEN</code>, not per-user accounts. That is fine for a small team or personal use.</li>
+</ul>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

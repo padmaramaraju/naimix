@@ -1,0 +1,19 @@
+WEBVTT
+
+00:00:00.542 --> 00:00:04.664
+The configuration files, one by one.
+
+00:00:04.664 --> 00:00:12.016
+Gateways name each backend.
+
+00:00:12.016 --> 00:00:18.222
+An integration: input, backend, output.
+
+00:00:18.222 --> 00:00:24.555
+An app lists the routes it exposes.
+
+00:00:24.555 --> 00:00:30.857
+Auth providers define caller login.
+
+00:00:30.857 --> 00:01:01.413
+deployment.yaml picks the workspace and the mounts.

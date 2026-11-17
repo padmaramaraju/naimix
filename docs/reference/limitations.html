@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Known limitations · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Known limitations</h1>
+<p class="lead">What naimix does not do yet, so you can plan around it.</p>
+<figure class="video" data-src="videos/limitations.mp4" data-poster="images/limitations.png" data-captions="videos/limitations.vtt" data-title="Limitations"></figure>
+
+
+<h2>Mapping</h2>
+<ul>
+<li>Mapping is field by field. There are no built-in computed or concatenated fields or conditionals. Use a <a href="../guides/transform-functions.html">custom function</a> for those. A JSONata or JMESPath mode would be a natural extension.</li>
+<li>Custom functions must be synchronous and pure.</li>
+</ul>
+
+<h2>Authentication and scaling</h2>
+<ul>
+<li>Sessions and pending OAuth logins live in one process's memory, so this does not yet work behind a load-balanced multi-instance deployment. A shared store (Redis was considered) is designed but not built.</li>
+<li>SAML is designed but not implemented. LDAP is plain simple bind only, with no Kerberos or SPNEGO single sign-on.</li>
+<li>A gateway with no <code>requiresAuth</code> is unauthenticated.</li>
+<li>The Developer Console uses one shared <code>CONSOLE_TOKEN</code>, not per-user accounts or roles. A multi-user deployment would want real auth in front of <code>/console</code>.</li>
+</ul>
+
+<h2>Backends</h2>
+<ul>
+<li>The SOAP connector caches one client per WSDL URL. If you need several concurrent endpoints behind the same WSDL URL, split them into separate gateways.</li>
+<li>Generated CRUD filters are exact-match only, and bulk update and delete target rows strictly by primary key.</li>
+<li>The PostgreSQL, MySQL and SQL Server introspection and procedure paths were not tested against live servers in development. Test against your own.</li>
+</ul>
+
+<h2>Operations</h2>
+<ul>
+<li>QA and Production update only by restart. There is no live reload.</li>
+<li>The Ops Console currently has system and environment panels only. Metrics, logs and request capture are designed but not built.</li>
+</ul>
+
+<h2>Design notes</h2>
+<p>The repository's <code>*_DESIGN_NOTES.md</code> files record the reasoning and future plans for authentication, deployment, the Ops Console, apps and transform functions. Where they describe something as planned, treat it as not available.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

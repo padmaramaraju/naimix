@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.142 --> 00:00:04.558
+Quick start: run naimix and call it.
+
+00:00:04.558 --> 00:00:13.362
+Start the demo backend in one terminal.
+
+00:00:13.362 --> 00:00:26.522
+Start naimix in another.
+
+00:00:26.522 --> 00:00:30.529
+Call a route. The backend returns its own shape; naimix returns yours.
+
+00:00:30.529 --> 00:00:34.530
+Same route, an XML backend.
+
+00:00:34.530 --> 00:00:36.035
+Same shape, whatever the backend.
+
+00:00:36.039 --> 00:00:46.192
+Open the Developer Console next.

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Create an XML gateway · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Create an XML gateway</h1>
+<p class="lead">A gateway is a reusable connection to a backend. In about a minute you will add one for an XML-over-HTTP service.</p>
+
+<figure class="video" data-src="videos/xml-gateway.mp4" data-poster="images/xml-gateway.png" data-captions="videos/xml-gateway.vtt" data-title="Creating an XML gateway (about 1 minute)"></figure>
+
+<h2>Steps</h2>
+<ol class="steps">
+<li><b>Sign in.</b> Open the console and enter your console token.</li>
+<li><b>Open Gateways.</b> In the Shared Collection, open <b>Gateways</b>. This lists existing gateways. Click <b>+ Add</b> to create a new one.</li>
+<li><b>Name it.</b> Integrations refer to the gateway by this name. Example: <code>customerXml</code>.</li>
+<li><b>Set the kind to <code>xml</code>.</b> The fields below change to match.</li>
+<li><b>Base URL.</b> The root address every integration on this gateway will call. Example: <code>https://api.example.com/xml</code>.</li>
+<li><b>Headers (optional).</b> Sent with every request through this gateway. Example: <code>Accept</code> = <code>application/xml</code>.</li>
+<li><b>Common parameters.</b> These become <code>{name}</code> placeholders for every integration on this gateway. Example: <code>apiVersion</code> = <code>v2</code>.</li>
+<li><b>Save.</b> Click <b>Save gateway</b>. It now appears in the Gateways list with type <code>xml</code>.</li>
+</ol>
+<p><b>Next:</b> create an integration that calls this gateway. See <a href="../guides/integrations.html">Integrations</a>.</p>
+
+<h2>The same thing as YAML</h2>
+<pre><code>gateways:
+  customerXml:
+    kind: xml
+    baseUrl: https://api.example.com/xml
+    headers:
+      Accept: application/xml
+    commonParams:
+      apiVersion: v2</code></pre>
+<p class="muted">The recording shows the real console running against sample data and a stand-in API, so nothing was written to a real workspace. Turn on captions in the video player for subtitles.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Config file reference · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Config file reference</h1>
+<p class="lead">A compact summary of every config file. Details and examples are in the guides.</p>
+<figure class="video" data-src="videos/config-reference.mp4" data-poster="images/config-reference.png" data-captions="videos/config-reference.vtt" data-title="Config reference"></figure>
+
+
+<h2>Workspace layout</h2>
+<pre><code>gateways.yaml
+authProviders.yaml
+integrations/&lt;id&gt;.yaml
+apps/&lt;id&gt;.yaml
+transforms/&lt;name&gt;.ts / .js
+
+deployment.yaml          # per machine, not in the workspace, not in Git
+.env                     # per machine, not in Git</code></pre>
+<p>Any string value may contain <code>${env.VAR_NAME}</code>, resolved once at startup.</p>
+
+<h2><code>deployment.yaml</code></h2>
+<table>
+<tr><th>Key</th><th>Meaning</th></tr>
+<tr><td><code>configDir</code></td><td>Workspace folder. Relative paths resolve against the working directory.</td></tr>
+<tr><td><code>mounts[].app</code></td><td>App id to serve.</td></tr>
+<tr><td><code>mounts[].basePath</code></td><td>Public prefix for that app's routes.</td></tr>
+</table>
+
+<h2><code>gateways.yaml</code></h2>
+<table>
+<tr><th>Key</th><th>Applies to</th><th>Meaning</th></tr>
+<tr><td><code>kind</code></td><td>all</td><td><code>json</code> | <code>xml</code> | <code>soap</code> | <code>sql</code></td></tr>
+<tr><td><code>baseUrl</code></td><td>json, xml</td><td>Required.</td></tr>
+<tr><td><code>wsdl</code></td><td>soap</td><td>Required.</td></tr>
+<tr><td><code>client</code></td><td>sql</td><td><code>pg</code> | <code>mysql2</code> | <code>mssql</code> | <code>sqlite3</code> | <code>better-sqlite3</code></td></tr>
+<tr><td><code>connection</code></td><td>sql</td><td>Knex connection object (host, user, password, database, or filename).</td></tr>
+<tr><td><code>headers</code></td><td>json, xml</td><td>Sent on every request.</td></tr>
+<tr><td><code>commonParams</code></td><td>all</td><td>Default <code>{name}</code> values for every integration on the gateway.</td></tr>
+<tr><td><code>requiresAuth</code></td><td>all</td><td>Name of an auth provider callers must log in through.</td></tr>
+</table>
+
+<h2><code>authProviders.yaml</code></h2>
+<table>
+<tr><th>kind</th><th>Key fields</th></tr>
+<tr><td><code>basicLogin</code></td><td><code>loginUrl</code>, <code>method</code>, <code>tokenPath</code>, <code>refreshTokenPath</code>, <code>expiresInPath</code></td></tr>
+<tr><td><code>oauth2</code></td><td><code>tokenUrl</code>, <code>grantType</code> (<code>password</code> | <code>client_credentials</code> | <code>authorizationCode</code>), <code>clientId</code>, <code>clientSecret</code>; for authorizationCode also <code>authorizationUrl</code>, <code>redirectUri</code>, <code>clients[]</code></td></tr>
+<tr><td><code>ldap</code></td><td><code>url</code>, <code>bindDn</code>, <code>bindPassword</code>, <code>searchBase</code>, <code>searchFilter</code>, optional group and <code>attributes</code> settings, <code>tokenSecret</code>, <code>tlsRejectUnauthorized</code>; or <code>userDnTemplate</code> for direct bind</td></tr>
+</table>
+
+<h2>Integration</h2>
+<table>
+<tr><th>Key</th><th>Meaning</th></tr>
+<tr><td><code>id</code></td><td>Unique id.</td></tr>
+<tr><td><code>description</code></td><td>Optional.</td></tr>
+<tr><td><code>input[]</code></td><td><code>name</code>, <code>in</code>, <code>required</code>, <code>type</code>, <code>default</code>, <code>envVar</code>, <code>description</code></td></tr>
+<tr><td><code>backend</code></td><td>One of: json (<code>url</code>, <code>method</code>, <code>headers</code>, <code>query</code>, <code>body</code>, <code>timeoutMs</code>), xml (same, body is an XML string), soap (<code>operation</code>, <code>args</code>, <code>endpoint</code>), sql (<code>query</code>, or generated: <code>table</code>, <code>operation</code>, <code>primaryKey</code>, <code>columns</code>). All accept <code>gateway</code>.</td></tr>
+<tr><td><code>output.fields[]</code></td><td><code>target</code>, <code>source</code>, <code>default</code>, <code>transform</code>; or <code>kind: array</code> with <code>root</code> and nested <code>fields</code></td></tr>
+<tr><td><code>output.postProcess</code></td><td><code>{ name }</code> of a custom function.</td></tr>
+</table>
+
+<h2>App</h2>
+<table>
+<tr><th>Key</th><th>Meaning</th></tr>
+<tr><td><code>id</code>, <code>name</code></td><td>Stable slug and display name.</td></tr>
+<tr><td><code>routes[]</code></td><td><code>id</code>, <code>method</code>, <code>path</code>, <code>description</code>, <code>integration</code></td></tr>
+</table>
+
+<h2>Parameter substitution</h2>
+<table>
+<tr><th>Where</th><th>Syntax</th></tr>
+<tr><td>json / xml / soap fields</td><td><code>{paramName}</code></td></tr>
+<tr><td>sql queries</td><td><code>:paramName</code></td></tr>
+<tr><td>Environment values in config</td><td><code>${env.VAR}</code></td></tr>
+<tr><td>Backend token from the caller's session</td><td><code>{__authToken}</code></td></tr>
+</table>
+<p>The authoritative definitions are the TypeScript types in <code>src/types/config.ts</code> and the schemas in <code>src/config/schema.ts</code>.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

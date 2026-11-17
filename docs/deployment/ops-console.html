@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Ops Console · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Ops Console</h1>
+<p class="lead">Read-only runtime observability for a running instance, intended for QA and Production. It is deliberately separate from the Developer Console.</p>
+<figure class="video" data-src="videos/ops-console.mp4" data-poster="images/ops-console.png" data-captions="videos/ops-console.vtt" data-title="Ops Console"></figure>
+
+
+<h2>Not the Developer Console</h2>
+<table>
+<tr><th></th><th>Developer Console</th><th>Ops Console</th></tr>
+<tr><td>Environment</td><td>Development only</td><td>Present in all three builds, aimed at QA and Production</td></tr>
+<tr><td>Purpose</td><td>Change what an instance does</td><td>Observe a running instance</td></tr>
+<tr><td>URL</td><td><code>/console</code></td><td><code>/ops</code></td></tr>
+<tr><td>Token</td><td><code>CONSOLE_TOKEN</code></td><td><code>OPS_TOKEN</code></td></tr>
+</table>
+
+<h2>Enable it</h2>
+<ol class="steps">
+<li>Set <code>OPS_TOKEN</code> in the instance's environment to a long random string.</li>
+<li>Open <code>/ops</code> and enter the token.</li>
+</ol>
+<p>With no <code>OPS_TOKEN</code>, <code>/ops/api/*</code> responds <code>503</code> instead of running unauthenticated.</p>
+<div class="callout warn"><p><b>Protect it further in production.</b> The token alone is probably not enough for a surface that exposes environment details. Put <code>/ops</code> behind your network controls, VPN or an authenticating proxy.</p></div>
+
+<h2>What it shows today</h2>
+<table>
+<tr><th>Panel</th><th>API</th><th>Details</th></tr>
+<tr><td>System</td><td><code>GET /ops/api/system</code></td><td>Latest CPU and memory sample plus a short recent history, sampled on an interval.</td></tr>
+<tr><td>Environment variables</td><td><code>GET /ops/api/env</code></td><td>Current <code>process.env</code> with sensitive-looking keys masked as <code>REDACTED</code>. View-only by design, since most config is read once at startup.</td></tr>
+</table>
+<p>Every response carries an <code>instanceId</code>: <code>INSTANCE_ID</code> if set, otherwise <code>hostname:pid</code>. Data lives in that process's memory and resets on restart.</p>
+<pre><code>curl -H "Authorization: Bearer $OPS_TOKEN" http://localhost:4000/ops/api/system</code></pre>
+<p>Further panels (metrics, logs, request capture) are described in <code>OPS_CONSOLE_DESIGN_NOTES.md</code> but not implemented.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

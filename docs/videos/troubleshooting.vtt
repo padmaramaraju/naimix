@@ -1,0 +1,16 @@
+WEBVTT
+
+00:00:00.137 --> 00:00:04.551
+Common problems and how to read them.
+
+00:00:04.551 --> 00:00:09.043
+404 with a path: nothing is mounted there.
+
+00:00:09.043 --> 00:00:15.269
+Backend error: naimix tells you what it called.
+
+00:00:15.269 --> 00:00:20.296
+401 on a protected route: log in first.
+
+00:00:20.302 --> 00:00:31.537
+A short list of the usual suspects.

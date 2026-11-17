@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Generated CRUD endpoints · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Generated CRUD endpoints</h1>
+<p class="lead">For a SQL gateway, the console can introspect the real database and generate integrations for every table and stored procedure, instead of hand-writing one file per table.</p>
+<figure class="video" data-src="videos/crud-generation.mp4" data-poster="images/crud-generation.png" data-captions="videos/crud-generation.vtt" data-title="Generated CRUD endpoints"></figure>
+
+
+<h2>Generate them</h2>
+<ol class="steps">
+<li>Create and save a SQL gateway (it must already be saved).</li>
+<li>Open it and click <b>Generate CRUD + procedure endpoints</b>.</li>
+<li>Review the report. Anything that conflicted is listed as skipped.</li>
+</ol>
+<p>Generation never overwrites. An id or method+path already in use is skipped and reported, so it is always safe to run again, for example after adding a table.</p>
+
+<h2>What you get per table</h2>
+<p>At <code>/api/&lt;gateway&gt;/&lt;table&gt;</code>:</p>
+<table>
+<tr><th>Method</th><th>Id suffix</th><th>What it does</th></tr>
+<tr><td><code>GET</code></td><td><code>-list</code></td><td>List and filter rows.</td></tr>
+<tr><td><code>POST</code></td><td><code>-create</code></td><td>Bulk insert rows.</td></tr>
+<tr><td><code>PATCH</code></td><td><code>-update</code></td><td>Bulk update rows by primary key.</td></tr>
+<tr><td><code>DELETE</code></td><td><code>-delete</code></td><td>Bulk delete rows by primary key.</td></tr>
+</table>
+<p>A table with no primary key only gets <code>-list</code> and <code>-create</code>, since there is no reliable way to target a specific row.</p>
+
+<h3>Listing: query string filters</h3>
+<ul>
+<li>Any real column name does an exact-match filter, for example <code>?status=ACTIVE</code>.</li>
+<li><code>limit</code> and <code>offset</code> paginate. Default limit is 100, maximum 1000.</li>
+<li><code>sort</code> and <code>order</code> (<code>asc</code> or <code>desc</code>) order the rows.</li>
+<li>For a single-column primary key, <code>ids=1,2,3</code> fetches specific rows.</li>
+<li>Unrecognized keys are ignored, not errors.</li>
+</ul>
+
+<h3>Bulk writes: JSON body</h3>
+<pre><code>// POST /api/mainDb/customers
+{ "rows": [ { "first_name": "Ada", "status": "ACTIVE" }, { "first_name": "Grace", "status": "ACTIVE" } ] }
+// → { "insertedCount": 2, "rows": [...] }
+
+// PATCH /api/mainDb/customers
+{ "updates": [ { "key": { "id": 1 }, "fields": { "status": "INACTIVE" } } ] }
+// → { "updatedCount": 1, "results": [ { "key": {...}, "matched": 1 } ] }
+
+// DELETE /api/mainDb/customers
+{ "keys": [ { "id": 1 }, { "id": 2 } ] }
+// → { "deletedCount": 2, "results": [ ... ] }</code></pre>
+<ul>
+<li>Each <code>key</code> must contain exactly the primary key column(s). Missing or extra columns give a <code>400</code>.</li>
+<li>All rows in one request run in a single transaction, all or nothing.</li>
+<li>A missing, empty or wrongly shaped array gives a clear <code>400</code>, not a <code>500</code>.</li>
+<li>Full inserted rows come back (<code>rows</code>) only on <code>pg</code> and <code>mssql</code>. MySQL and SQLite return <code>rows: null</code> with just the count.</li>
+</ul>
+
+<h2>Stored procedures</h2>
+<p>One endpoint per procedure at <code>POST /api/&lt;gateway&gt;/proc/&lt;name&gt;</code>, with one body parameter per procedure parameter. The raw result is returned under a single <code>result</code> key. Unlike table endpoints, these work in the Try it panel.</p>
+<table>
+<tr><th>Client</th><th>Supported</th></tr>
+<tr><td><code>pg</code></td><td>Yes, via <code>CALL</code>. A <code>CALL</code> does not return a row set like a function, so a procedure that relies on <code>OUT</code> parameters may need a function wrapper.</td></tr>
+<tr><td><code>mysql2</code></td><td>Yes, via <code>CALL</code>.</td></tr>
+<tr><td><code>mssql</code></td><td>Yes, via <code>EXEC</code>.</td></tr>
+<tr><td><code>sqlite3</code> / <code>better-sqlite3</code></td><td>No. SQLite has no stored procedures.</td></tr>
+</table>
+
+<h2>Limits to know</h2>
+<ul>
+<li>Filters are exact-match only: no ranges, <code>OR</code> or <code>LIKE</code>.</li>
+<li>Table and procedure names are generated only if they match <code>[A-Za-z0-9_]+</code>. Others are skipped and reported.</li>
+<li>Generated endpoints show as a read-only summary in the editor. To pick up a schema change, regenerate rather than hand-edit.</li>
+<li>The <code>pg</code>, <code>mysql2</code> and <code>mssql</code> paths were not exercised against a live server during development (only SQLite was available). Test against your own server first.</li>
+</ul>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

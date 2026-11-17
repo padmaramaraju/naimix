@@ -1,0 +1,16 @@
+WEBVTT
+
+00:00:00.688 --> 00:00:04.448
+How naimix is organised.
+
+00:00:04.448 --> 00:00:15.259
+Four building blocks.
+
+00:00:15.259 --> 00:00:20.228
+The input says what the caller sends; the backend says where to go.
+
+00:00:20.228 --> 00:00:26.445
+The output maps backend fields into your own JSON.
+
+00:00:26.445 --> 00:00:36.606
+Raw backend response, then what naimix returns.

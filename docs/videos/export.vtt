@@ -1,0 +1,19 @@
+WEBVTT
+
+00:00:00.349 --> 00:00:05.232
+Export an app for other tools.
+
+00:00:05.232 --> 00:00:13.390
+Open the Developer Console and sign in with your console token.
+
+00:00:13.390 --> 00:00:19.554
+Open an app and go to the Export tab.
+
+00:00:19.554 --> 00:00:22.738
+Download the OpenAPI spec for this app.
+
+00:00:22.738 --> 00:00:27.714
+Or download an MCP server so AI tools can call your routes.
+
+00:00:27.714 --> 00:00:35.660
+What the spec contains: your paths and methods.

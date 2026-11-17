@@ -1,4 +1,4 @@
-# Naimix — Technology Choices
+# naimix — Technology Choices
 
 This document explains **why** each major package/framework in this project was picked, what the
 realistic alternatives were, and what was traded off. It's a companion to `TECHNICAL.md` (which

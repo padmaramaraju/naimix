@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Installation · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Installation</h1>
+<p class="lead">Set up a machine from scratch to build, test and run naimix. Written mainly for macOS, with notes for Linux and Windows.</p>
+<figure class="video" data-src="videos/installation.mp4" data-poster="images/installation.png" data-captions="videos/installation.vtt" data-title="Installing naimix"></figure>
+
+
+<h2>1. Install nvm</h2>
+<p>Use <code>nvm</code> rather than installing Node directly. naimix needs a specific Node version range and <code>nvm</code> lets you switch without conflicts.</p>
+<pre><code># Option A: Homebrew (macOS)
+brew install nvm
+# Add the lines Homebrew prints to ~/.zshrc, then restart your terminal.
+
+# Option B: official install script (macOS/Linux)
+curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash</code></pre>
+<p>On Windows use <a href="https://github.com/coreybutler/nvm-windows">nvm-windows</a> instead. Verify with <code>nvm --version</code>.</p>
+
+<h2>2. Install Node.js 22 or 24</h2>
+<pre><code>nvm install 22
+nvm use 22
+nvm alias default 22</code></pre>
+<div class="callout warn"><p><b>Do not use the newest Node release.</b> <code>better-sqlite3</code> compiles a native addon against V8, and brand-new Node versions can break it. Node 22 and 24 are known good. <code>package.json</code> declares <code>node &gt;= 24</code> as its target, and the build scripts target Node 24.</p></div>
+<p>Check with <code>node -v</code> and <code>npm -v</code>.</p>
+
+<h2>3. Native build tools</h2>
+<p><code>npm install</code> tries a prebuilt binary first and compiles from source only as a fallback. Having build tools ready means the fallback will not fail.</p>
+<table>
+<tr><th>Platform</th><th>Command</th></tr>
+<tr><td>macOS</td><td><code>xcode-select --install</code></td></tr>
+<tr><td>Debian / Ubuntu</td><td><code>sudo apt-get install -y build-essential python3</code></td></tr>
+<tr><td>Windows</td><td>"Desktop development with C++" workload from Visual Studio Build Tools, plus Python 3</td></tr>
+</table>
+
+<h2>4. Get the code and install dependencies</h2>
+<pre><code>git clone &lt;repo-url&gt; naimix
+cd naimix
+nvm use 22
+npm install
+cp .env.example .env</code></pre>
+
+<h2>5. Optional dependencies</h2>
+<ul>
+<li><b>Folder picker on Linux:</b> the console's "Browse…" button needs <code>zenity</code> (<code>sudo apt-get install -y zenity</code>). macOS and Windows need nothing.</li>
+<li><b>LDAP tests:</b> <code>npm run test-ldap</code> runs a local OpenLDAP server and needs <a href="https://www.docker.com/products/docker-desktop/">Docker Desktop</a>.</li>
+</ul>
+
+<h2>6. Verify the install</h2>
+<pre><code>npx tsc --noEmit      # typecheck
+npm run build:qa      # QA bundle
+npm run build:prod    # production bundle
+npx vitest run        # test suite
+npm run dev           # full dev server (console + data plane)</code></pre>
+<p>If all of those succeed, the install is good. Having trouble? See <a href="../reference/troubleshooting.html">Troubleshooting</a>.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

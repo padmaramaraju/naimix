@@ -9,3 +9,6 @@ deployment.yaml
 /dist-qa
 /dist-prod
 package-lock.json
+Claude outputs/logo-files.tar
+/Claude outputs
+/docs/recorder

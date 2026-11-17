@@ -1,0 +1,25 @@
+WEBVTT
+
+00:00:00.158 --> 00:00:04.601
+Everything lives in one workspace folder.
+
+00:00:04.601 --> 00:00:08.188
+deployment.yaml points at the workspace folder.
+
+00:00:08.188 --> 00:00:14.232
+Inside: apps, integrations, gateways and auth providers.
+
+00:00:15.493 --> 00:00:22.209
+The console shows which workspace you are editing.
+
+00:00:22.209 --> 00:00:25.584
+The chip at the top shows the active folder.
+
+00:00:25.584 --> 00:00:28.081
+Change workspace to switch between Git checkouts.
+
+00:00:28.081 --> 00:00:33.407
+Type or browse for a folder. We will cancel.
+
+00:00:34.175 --> 00:00:51.698
+Treat the workspace like code.

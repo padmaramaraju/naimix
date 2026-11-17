@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Apps & Routes · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Apps &amp; Routes</h1>
+<p class="lead">An App is a team's own backend-for-frontend, assembled from the Shared Collection. It is a list of routes, each pointing at an integration.</p>
+<figure class="video" data-src="videos/apps-routes.mp4" data-poster="images/apps-routes.png" data-captions="videos/apps-routes.vtt" data-title="Apps and routes"></figure>
+
+
+<h2>A route</h2>
+<pre><code># apps/default.yaml
+id: default
+name: Default App
+routes:
+  - id: json-customer-by-id
+    method: GET
+    path: /api/json/customers/:id
+    description: Fetch a single customer from the demo JSON REST backend.
+    integration: json-customer-by-id</code></pre>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>id</code></td><td>Stable identifier, separate from method and path so you can change a path without breaking references.</td></tr>
+<tr><td><code>method</code> + <code>path</code></td><td>The public URL. Express-style, with <code>:params</code>.</td></tr>
+<tr><td><code>integration</code></td><td>Name of the integration this route calls.</td></tr>
+<tr><td><code>description</code></td><td>Shown in the console and in exported specs.</td></tr>
+</table>
+<p>A route carries no input, backend or output overrides. If a team needs different behavior, create a different integration.</p>
+
+<h2>App ids and names</h2>
+<p>An app has a stable <code>id</code> (a slug) and an editable display <code>name</code>. Renaming the label never breaks anything that refers to the id.</p>
+
+<h2>Create an app and routes in the console</h2>
+<ol class="steps">
+<li>Click <b>+ New App</b> in the sidebar and type a name. Save it on the <b>Settings</b> tab; the <b>Routes</b> and <b>Export</b> tabs unlock once it exists.</li>
+<li>On the <b>Routes</b> tab, add a route: choose the method, type the path, and pick an integration.</li>
+<li>Use the route's own <b>Try it</b> tester to call it. This is separate from the integration-level Test tab.</li>
+</ol>
+<div class="callout"><p>The server checks for collisions between routes, including ones that differ only in path parameter names (for example <code>/customers/:id</code> and <code>/customers/:customerId</code>).</p></div>
+
+<h2>Mounting apps on a server</h2>
+<p>Defining an app is not enough to serve it. <code>deployment.yaml</code> describes what a given server instance serves: which workspace to load, and which apps to mount at which public path prefix. It is hand-edited per environment (like <code>.env</code>) and not committed to Git. Copy <code>deployment.yaml.example</code> to start.</p>
+<pre><code>configDir: /path/to/your/workspace-repo/config
+
+mounts:
+  - app: default          # the app's id
+    basePath: /           # public prefix
+  - app: web-bff
+    basePath: /web-bff</code></pre>
+<table>
+<tr><th>Key</th><th>Meaning</th></tr>
+<tr><td><code>configDir</code></td><td>The workspace folder (<code>integrations/</code>, <code>apps/</code>, <code>gateways.yaml</code>, <code>authProviders.yaml</code>, <code>transforms/</code>). In dev, the console's <i>Change workspace…</i> button updates this value for you.</td></tr>
+<tr><td><code>mounts[].app</code></td><td>The id of an app in the workspace.</td></tr>
+<tr><td><code>mounts[].basePath</code></td><td>Public prefix that app's route paths are served under. Several apps can share a server without colliding.</td></tr>
+</table>
+<div class="callout warn"><p><b>No mounts means no routes.</b> A missing <code>deployment.yaml</code>, or one without <code>mounts</code>, makes the server start with zero routes even though integrations and apps exist on disk. This is intentional. The server logs a warning when it happens. The comment in <code>deployment.yaml.example</code> calling mounts "planned" is out of date; the server reads it.</p></div>
+<p>Even a server serving only one app should list it with its own <code>basePath</code>, so adding a second app later never changes existing public URLs. In QA and Production, the deployment team places that environment's own <code>deployment.yaml</code> on the server as part of promotion. Set a different location with <code>DEPLOYMENT_FILE</code>.</p>
+
+<h2>Per-app OpenAPI</h2>
+<p>Each app's <b>Export</b> tab downloads an OpenAPI spec for just its routes. See <a href="export.html">OpenAPI &amp; MCP export</a>.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

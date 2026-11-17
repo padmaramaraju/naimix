@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Overview · naimix docs</title><link rel="stylesheet" href="assets/style.css"></head>
+<body><article>
+<h1>naimix documentation</h1>
+<p class="lead">A configurable middleware server that sits in front of JSON, XML, SOAP and SQL backends, reshapes their responses with a declarative mapping, and always answers with clean JSON.</p>
+<figure class="video" data-src="videos/overview.mp4" data-poster="images/overview.png" data-captions="videos/overview.vtt" data-title="What is naimix? (overview)"></figure>
+
+
+<div class="cards">
+ <a class="card" href="getting-started/installation.html"><b>Installation</b><span>Set up Node, build tools and dependencies.</span></a>
+ <a class="card" href="getting-started/quick-start.html"><b>Quick start</b><span>Run the demo and call your first endpoint in minutes.</span></a>
+ <a class="card" href="concepts/how-it-works.html"><b>How it works</b><span>Gateways, integrations, apps and routes explained.</span></a>
+ <a class="card" href="guides/developer-console.html"><b>Developer Console</b><span>Build everything visually, no YAML required.</span></a>
+ <a class="card" href="tutorials/index.html"><b>Video tutorials</b><span>Short screencasts for common tasks.</span></a>
+ <a class="card" href="reference/troubleshooting.html"><b>Troubleshooting</b><span>Fixes for common install and runtime problems.</span></a>
+</div>
+
+<h2>What naimix does</h2>
+<p>Every backend integration is defined in a config file, not code. To expose a new API you describe the backend to call, the parameters it accepts, and how to map the backend's response onto the JSON you want to return. naimix then:</p>
+<ol class="steps">
+ <li>Receives a request on a public route you defined.</li>
+ <li>Extracts and validates the input (path, query, header, body, or environment).</li>
+ <li>Calls the backend (<code>json</code>, <code>xml</code>, <code>soap</code> or <code>sql</code>), substituting your parameters.</li>
+ <li>Maps the raw response onto your output shape and returns JSON.</li>
+</ol>
+
+<h2>Key features</h2>
+<table>
+<tr><th>Feature</th><th>Summary</th></tr>
+<tr><td>Four backend types</td><td>JSON REST, XML-over-HTTP, SOAP (via WSDL), and SQL (PostgreSQL, MySQL, SQL Server, SQLite).</td></tr>
+<tr><td>Declarative mapping</td><td>JSONPath in, dot-path out, with built-in transforms and your own custom functions.</td></tr>
+<tr><td>Developer Console</td><td>Browser UI to create gateways, integrations and routes, and to test them live.</td></tr>
+<tr><td>Caller authentication</td><td>Bespoke login APIs, OAuth2 (password, client credentials, authorization code) and LDAP/Active Directory, with opaque session tokens.</td></tr>
+<tr><td>Generated CRUD</td><td>Introspect a database and generate list/create/update/delete endpoints and stored-procedure calls.</td></tr>
+<tr><td>Apps &amp; Routes</td><td>Teams assemble their own backend-for-frontend from a shared catalog of integrations.</td></tr>
+<tr><td>Export</td><td>OpenAPI 3.0.3 spec and a ready-to-run MCP server for your workspace.</td></tr>
+<tr><td>Safe deployment</td><td>QA and Production builds contain no developer console code at all; an Ops Console provides read-only observability.</td></tr>
+</table>
+
+<div class="callout"><p><b>Tip:</b> press <code>/</code> anywhere to jump to the search box and filter the sidebar.</p></div>
+</article><script src="assets/nav.js" data-root=""></script></body></html>

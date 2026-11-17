@@ -98,7 +98,7 @@ Side benefit worth naming: because the cache lives in the same shared Redis all 
 3. **Built.** OAuth Authorization Code — the redirect flow. Implemented as `kind: oauth2`, `grantType: authorizationCode` (a third grant value on the *existing* oauth2 provider, not a new provider kind — the config shape is a natural extension even though the runtime flow is handled separately, see `src/auth/oauthCodeFlow.ts`'s doc comment). Three refinements versus this document's original framing, settled during implementation rather than left as open questions:
    - **No standalone `clients:` top-level registry.** The allow-list of trusted calling apps (`OAuthClientAppConfig` in `src/types/config.ts`) is nested under the *provider* itself (a `clients` field on the oauth2 config), not a separate top-level section — it's only ever checked at that one provider's own `/start` endpoint, and a real app registering separately with each identity provider it supports is exactly how OAuth already works. No new Console "Shared Collection" category needed: it's a kind/grant-specific field group on the existing Auth Provider editor.
    - **No Redis yet.** The pending-flow store (`src/auth/oauthPendingFlowStore.ts`) ships in-memory only for now, with the exact same single-instance/dev-only limitation `InMemorySessionStore` already has — deliberately not building Redis ahead of actual need. It remains a single future feature covering sessions+pending-state+cache together, as this document's "Multi-instance / load balancing" section already recommends.
-   - **`openid-client`** (the recommended library below) handles PKCE, state, and the code exchange (`src/auth/oauthCodeFlow.ts`) — including real ID-token signature verification if a provider happens to return one, which this document called out as the main reason to prefer a library over hand-rolling it.
+   - **`openid-client`** (the recommended library below) handles PKCE, state, and the code exchange (`src/auth/oauthCodeFlow.ts`) — and validates an ID token's claims (`iss`, `aud`, `exp`) if a provider happens to return one. It does *not* verify the ID token's signature unless `enableNonRepudiationChecks()` is turned on, which it currently isn't; see "Authorization Code: what's built, plus planned changes" below.
 
    Two routes, exactly as designed: `GET /auth/oauth/:provider/start` and `GET /auth/oauth/:provider/callback` (`src/server/authRoutes.ts`), both outside the normal bearer-token gate. `AuthService.login()` was refactored to share its "mint an opaque token, store the session" bookkeeping with a new `completeOAuthLogin()` the callback route calls, so a session created via either path is identical from `resolveSession()`'s point of view — in particular, the standard `refresh_token` grant in `src/auth/providers/oauth2.ts` is reused unchanged regardless of which grant originally created the session. Demoable end to end against the mock backend: see `config/authProviders.yaml`'s `demoOAuthCode` and `.env.example`'s matching comment for the exact URL to open in a browser.
 4. SAML — likely scoped to "accept an externally-obtained assertion" rather than a full SP, unless there's a specific need otherwise.
@@ -150,6 +150,121 @@ For the *mobile* app, "embedded browser" more literally means a WebView built in
 
 Nothing about the middleware's side of the contract above changes based on this choice — `/start` → provider → our callback → redirect to `return_to` is identical either way, since the middleware never knows or cares which surface displayed the provider's page. This is purely something each mobile app configures locally, and can revisit later without touching the middleware.
 
+## Authorization Code: what's built, plus planned changes
+
+Status: the flow described in the sections above is built (commit `c9f3996`). The decided changes below come from an October 2026 brainstorm. Most are now built (nonce, required ID token, signature verification, future-`iat` check, `pkce` option, fixed error codes); the "Implementation status" paragraph under "Decided changes" lists what is not. Nothing from that work is committed yet.
+
+### Built today (before the October 2026 changes)
+
+This subsection describes the code as it was at commit `c9f3996`. The changes made since are under "Decided changes" and its "Implementation status" paragraph.
+
+- Routes `GET /auth/oauth/:provider/start` and `/callback` (`src/server/authRoutes.ts`), the flow logic in `src/auth/oauthCodeFlow.ts` on `openid-client`, and an in-memory pending-flow store (`src/auth/oauthPendingFlowStore.ts`).
+- Provider metadata is built from config (`authorizationUrl`, `tokenUrl`, and an optional `issuer` that defaults to `tokenUrl`'s origin). There is no discovery. Client authentication is `client_secret_post`.
+- PKCE: always S256, with no way to turn it off.
+- Several providers already work side by side. Each pending flow records its provider name, and the callback rejects a flow whose provider differs from the one in the URL. The calling-app allow-list (`clients`) is per provider.
+- Callback behavior:
+  - Success redirects to `return_to#token=…`.
+  - A provider-reported `error` redirects to `return_to` with `error` and `error_description` passed through.
+  - A failed exchange redirects with `error=login_failed` and the error message as `error_description`.
+  - A missing, unknown or expired `state` returns a 400 and does not redirect.
+- ID tokens: the code exchange passes only the expected `state` and the PKCE verifier. If a provider returns an ID token, `openid-client` validates its claims (`iss` against the configured issuer, `aud`, `exp`), and the session's `subject` comes from `sub` when present. There is no `nonce` (none is sent or checked), an ID token is not required even when `openid` is requested, and the ID token's **signature is not verified**. `openid-client` verifies it only if `enableNonRepudiationChecks()` is called, which it isn't (and the hand-built provider metadata has no `jwks_uri`). The library's documentation says signature checks on a token received directly from the token endpoint over TLS are not mandatory, because TLS validates the issuer (OpenID Connect Core 3.1.3.7, step 6), which is why the check is opt-in there.
+- Mock provider: `/oauth/authorize` and the `authorization_code` branch of `/oauth/token` in `src/mock-backend/index.ts`, including an S256 verifier check. It has no ID token, nonce, JWKS, second issuer or failure scenarios.
+- Tests: the config schema, `AuthService.completeOAuthLogin` and the pending-flow store. Nothing exercises `/start`, `/callback` or the code exchange itself.
+
+### Decided changes
+
+**Implementation status (October 2026, uncommitted).** Built and covered by tests in `test/oauthCodeFlow.mock.test.ts`:
+
+- `nonce`: generated at `/start` when the scope includes `openid`, stored in the pending flow, sent to the provider, and passed as `expectedNonce`. This also makes the library require an ID token, so a response with no `id_token` is rejected.
+- Signature verification: `jwks_uri` is added to the provider metadata and `enableNonRepudiationChecks()` is called when `jwksUri` is configured. The schema requires `jwksUri` whenever the scope includes `openid`.
+- `iat` in the future beyond the tolerance is rejected by naimix's own check (the library doesn't do this). The clock tolerance is a fixed 60 s, also given to the library.
+- `pkce: S256 | off` (default `S256`).
+- Failure codes: the callback sends only `access_denied`, `invalid_id_token`, `provider_unavailable` or `server_error`, with no `error_description`; detail goes to the server log. A provider `error` is mapped: `access_denied` stays, `temporarily_unavailable` / `server_error` become `provider_unavailable`, everything else becomes `server_error`. Token-endpoint OAuth errors such as `invalid_grant` become `server_error`.
+- Already enforced by `openid-client`, kept as guard tests: expected alg (`none` and HS256 confusion rejected), `sub` present, unexpected or mismatched `nonce`, RFC 9207 `iss` parameter.
+
+Not built: configurable `algorithms` (the library accepts RS256 only), configurable `clockToleranceSeconds`, an `error_id`, and any naimix-side check of `azp` or an empty `sub` (not verified whether the library covers them). The JWKS refetch-on-unknown-`kid` behavior is the library's; the rotation test passes, but the refetch cooldown was not checked. Known imprecision: the library reports several response problems under one generic code, and when `openid` is requested naimix reports all of them as `invalid_id_token`, including an RFC 9207 `iss` mismatch.
+
+The decisions as made:
+
+**ID token validation, all checks required.** On every code-flow login that returns an ID token, the callback verifies all of the following and creates no session unless every check passes:
+
+1. Signature against the provider's JWKS, with an unknown `kid` triggering a bounded refetch. **Decided: signature verification stays required**, even though OIDC Core allows skipping it for a token received directly from the token endpoint. Mechanism: turn on `openid-client`'s `enableNonRepudiationChecks()` and give each provider a `jwksUri`. A consequence is that a provider whose `scope` includes `openid` must configure `jwksUri`, since the check can't run without it.
+2. Algorithm allow-list per provider (default RS256, plus ES256 where configured). `alg: none` and HS* are always rejected.
+3. `iss` equals the provider's configured issuer (exact match; already done by the library).
+4. `aud` contains this middleware's `client_id` for that provider. When `aud` has more than one value, `azp` must equal `client_id`.
+5. `exp` not past and `iat` not in the future, each with a small clock tolerance (default 60 s, configurable per provider).
+6. `nonce` equals the value stored in the pending-flow record. New: generate it at `/start`, send it to the provider, store it in the pending flow, and pass it as `expectedNonce` (which also makes the library require an ID token).
+7. `sub` present and non-empty.
+
+Also required: if the `openid` scope was requested and the token response has no `id_token`, the login fails.
+
+RFC 9207: if the callback carries an `iss` parameter, it must equal the provider's configured issuer (checked when present).
+
+Out of v1: `at_hash` (the code flow receives the access token over a direct TLS back channel); `userinfo` (add only when a config asks for claims the ID token lacks, and then its `sub` must match the ID token's); `auth_time` / `acr` / `max_age`.
+
+`state` remains the CSRF check on the callback request. `nonce` is the matching check on the ID token.
+
+**Several providers at once.** Already supported (see above). Additions: the pending-flow record gains the `nonce`, and the provider config gains `jwksUri`, `algorithms`, `clockToleranceSeconds` and `pkce` (below). Verification keys are cached per provider.
+
+**PKCE is a per-provider option.** `pkce: S256 | off`, default `S256` (OAuth 2.1 requires PKCE for all code flows). No `plain`. `off` is for older providers that reject the extra parameters; with it, `/start` sends no `code_challenge` and the exchange sends no `code_verifier`. There is no discovery-based guard (the provider's supported PKCE methods can't be read, because the metadata comes from config).
+
+**Failures go back to the calling app with a code and no detail.** Any failure after a valid pending record is found redirects to `return_to#error=<code>&state=<the app's own state>`. This replaces today's pass-through of `error_description` and the `login_failed` code. Codes:
+
+- `access_denied`: the user declined, or the provider returned an error.
+- `invalid_id_token`: every validation failure above collapses into this, so callers can't probe which check failed.
+- `provider_unavailable`: token endpoint 5xx, timeout, or malformed response.
+- `server_error`: anything else.
+
+An optional `error_id` can be added for matching log lines. Detail goes to server logs only. As today, a missing, unknown or expired `state` returns a plain error response with no redirect, because there is no verified `return_to` to redirect to, and redirecting anywhere would reopen the open-redirect hole the allow-list closes. Errors before the flow starts (an unregistered `app` / `return_to` pair) remain a 400.
+
+**Library: stay on `openid-client`.** It is already integrated, and the earlier idea of verifying ID tokens with `jose` is dropped. A scratch check (October 2026, Node 22.22, TypeScript 5.9.3, this repo's CommonJS tsconfig) confirmed `openid-client`, `oauth4webapi` and `jose` all type-check, compile to `require()` and load through Node's `require(esm)`. This repo declares `node >=24`, which is newer than the version tested.
+
+### Testing approach: the mock provider and the flow-level harness are built
+
+**Built (October 2026): `src/mock-backend/oauthServer.ts`**, started with `startMockOAuthServer()` and checked by its own 51 self-tests in `test/oauthMockServer.test.ts`. It is a separate module beside the existing `/oauth/*` endpoints in `index.ts`, which are untouched and still serve `demoOAuth` and `demoOAuthCode`. It provides:
+
+- Several issuers in one process (path-prefixed, e.g. `/issuerA`, `/issuerB`) for the cross-provider tests.
+- RS256 ID tokens, a JWKS endpoint with key rotation, and `nonce` echo.
+- A headless `/authorize` that auto-approves a user chosen by `login_hint`.
+- A scenario API (for example: change an ID-token claim, sign with an unknown key, return a 5xx) and a request log, so tests can assert what naimix actually sent (`code_verifier`, `redirect_uri`, client authentication).
+- It reads `Date.now()`, so vitest fake timers move naimix and the mock together.
+
+**Admin UI (October 2026).** `npm run mock-oauth` runs the mock standalone (`src/mock-backend/oauthRun.ts`, default port 9100, override with `MOCK_OAUTH_PORT`) and serves a page at `/admin` for creating issuers, and adding clients and users to a running issuer. The page shows each issuer's authorize, token and JWKS URLs and a ready-to-paste naimix `authProviders.yaml` entry per client. A Requests panel on the same page shows what the server received (newest first, filterable by issuer, auto-refresh, clear), with client secrets and Authorization headers masked; the log is in memory and capped at 1000 entries when the admin UI is on. Scope is deliberately small: no edit or delete, nothing persisted (a restart clears it), no scenario or fault controls (those stay in code), no authentication (binds to 127.0.0.1). The API is covered by `test/oauthAdmin.test.ts`; the page's own script has only been syntax-checked, not exercised in a browser. Enable it in code with `startMockOAuthServer({ admin: true })`; the issuer id `admin` is reserved.
+
+Tests drive naimix with supertest acting as the browser: `/start`, follow the `Location` to the mock, follow its redirect to `/callback`. Alongside the mock, an occasional run against a real provider in Docker (Keycloak or Soluto `oidc-server-mock`, next to `docker/openldap`) guards against the mock drifting from reality.
+
+Off-the-shelf options were checked in October 2026 and none gives both strictness and fault injection: axa `oauth2-mock-server` has hooks for altering claims, responses and redirects but its docs say it validates no incoming requests; navikt `mock-oauth2-server` doesn't document PKCE or nonce handling and is JVM-oriented; Soluto `oidc-server-mock` is spec-faithful with per-client `RequirePkce` but can't forge bad tokens and defaults to an interactive login; panva `node-oidc-provider` is the strictest but can't mint bad tokens natively. If the mock passes roughly 400 lines or starts re-implementing spec rules, move the strict happy path to `node-oidc-provider` and keep only the fault-injection layer.
+
+Test matrix. Every failing row also asserts that no session is created and that the caller is redirected with the right error code (except the state row, which asserts no redirect):
+
+| Check | Should fail | Should pass |
+|---|---|---|
+| Signature | Signed by a key not in the JWKS; tampered payload; unknown `kid` that stays unknown | Unknown `kid` that appears after a JWKS refetch (rotation) |
+| Algorithm | `alg: none`; HS256 signed with the public key | The provider's configured algorithm |
+| `iss` | Different issuer | Exact match |
+| `aud` / `azp` | `client_id` absent; multi-value `aud` with a missing or wrong `azp` | Single match; array with the correct `azp` |
+| `exp` / `iat` | Expired beyond tolerance; `iat` in the future beyond tolerance | Expired within tolerance |
+| `nonce` | Missing; mismatched | Matches |
+| `sub` | Missing; empty | Present |
+| Response shape | No `id_token` with `openid` scope | Happy path |
+| PKCE | Wrong `code_verifier` (provider returns `invalid_grant`); provider requires PKCE but `pkce: off` | `S256` accepted; `off` against a provider that doesn't require it |
+| Callback | `error=access_denied`; mismatched RFC 9207 `iss`; replayed code | |
+| State | Missing, unknown or expired `state`: plain error, **no redirect** | Valid `state` |
+| Multi-provider | ID token from issuer A at provider B's callback (`iss` mismatch); code from A at B's callback (record's provider differs from the URL's) | Each provider's own flow |
+| Token endpoint | 5xx; timeout; malformed JSON, all mapped to `provider_unavailable` | |
+
+**Harness (`test/oauthCodeFlow.mock.test.ts`).** Runs naimix's real router, service and `oauthCodeFlow.ts` against the mock. It was written first with 11 tests red on purpose, one or more per planned change; all 32 tests now pass, and two `it.todo` cover the open decisions. Writing the tests first showed that `openid-client` already enforced the expected alg, `sub`, the RFC 9207 `iss` parameter and an unexpected nonce claim, so those became guard tests and the work went to the real gaps. The test group names that begin "planned:" are the ones that were red.
+
+### Planned changes: open
+
+- The mock is about 540 lines of code (about 700 with comments and types), past the roughly 400 lines at which the testing section above says to consider moving the strict happy path to `node-oidc-provider`. A good part of it is protocol behavior a strict mock needs (PKCE verification, single-use codes, `redirect_uri` matching, refresh rotation) and typed scenario options. Revisit if it keeps growing.
+- The flow-level harness exists. The older `middleware`, `dataPlane` and `opsConsole` tests still don't load (they import `src/server/endpointRegistry`, which commit `9e5db14` removed), and some `mapper`, `functionCompiler` and `functionRegistry` tests fail; all of that predates this work.
+- Library capabilities, partly answered: it sets the clock tolerance (via client metadata), checks the RFC 9207 `iss` parameter, and enforces RS256. It does not reject a future `iat` (naimix checks that). Still unconfirmed: the JWKS refetch cooldown, whether `azp` and an empty `sub` are checked, and whether a different algorithm (ES256) can be allowed per provider.
+- Provider quirks: exact `iss` matching reportedly breaks on providers that vary a trailing slash, and on Azure's multi-tenant `common` endpoint, whose tokens carry a tenant-specific issuer (both from memory, not verified). Decide whether `iss` needs a per-provider pattern or override before targeting those providers.
+- Whether the RFC 9207 `iss` parameter should be required, not just checked when present, for providers known to send it.
+- The callback deletes the pending flow before comparing its provider to the URL's, so a callback sent to the wrong provider consumes the legitimate flow. Decide whether to compare first.
+- Split the `invalid_id_token` code from RFC 9207 `iss` mismatches if callers need to tell them apart (currently they share it).
+
 ## Open questions still needing a decision
 
-None remaining for this document — see `DEPLOYMENT_ARCHITECTURE_NOTES.md` for the related, broader brainstorm on separating the developer console from the running API instances in production, and how console-made changes (not just Redis-related ones) reach every instance.
+The open items for the Authorization Code / OIDC work are listed under "Authorization Code: what's built, plus planned changes" → "Planned changes: open" above. Nothing else is open here — see `DEPLOYMENT_ARCHITECTURE_NOTES.md` for the related, broader brainstorm on separating the developer console from the running API instances in production, and how console-made changes (not just Redis-related ones) reach every instance.

@@ -1,0 +1,58 @@
+WEBVTT
+
+00:00:00.300 --> 00:00:04.110
+Developer Console tour — Build, test and organize everything from your browser.
+
+00:00:04.110 --> 00:00:10.164
+Enter your console token to sign in. It is set as CONSOLE_TOKEN in your .env file.
+
+00:00:10.164 --> 00:00:15.317
+The Shared Collection holds what every app can reuse: auth providers, gateways and integrations.
+
+00:00:15.317 --> 00:00:19.701
+Integrations describe how to call a backend and reshape its response.
+
+00:00:19.701 --> 00:00:23.111
+Open an integration to edit it.
+
+00:00:23.111 --> 00:00:26.322
+Five tabs keep each section on its own screen. Basic: the id and description.
+
+00:00:26.322 --> 00:00:30.992
+Backend: pick a gateway, and the backend type is set for you.
+
+00:00:30.992 --> 00:00:35.666
+Parameters: what callers send, and where (path, query, header, body or env).
+
+00:00:35.666 --> 00:00:39.342
+Output: map backend fields onto the JSON you want to return.
+
+00:00:39.342 --> 00:00:44.105
+Every field has an info icon. Click one for a short explanation.
+
+00:00:44.105 --> 00:00:48.435
+Test: try it against the real backend before you save.
+
+00:00:48.435 --> 00:00:53.106
+Fetch sample response calls the backend now and shows its raw response.
+
+00:00:53.106 --> 00:00:58.371
+Then apply your mapping to see exactly what callers will receive.
+
+00:00:58.371 --> 00:01:02.038
+Apps are your own backend-for-frontend. Each one is a list of routes.
+
+00:01:02.038 --> 00:01:07.310
+The Routes tab maps a public method and path to an integration.
+
+00:01:07.310 --> 00:01:12.571
+The Export tab downloads an OpenAPI spec, or an MCP server for AI tools.
+
+00:01:12.571 --> 00:01:17.419
+The workspace bar shows which folder you are editing. Change it to switch Git checkouts.
+
+00:01:17.419 --> 00:01:23.068
+Prefer a dark theme? Use the sun and moon switch.
+
+00:01:23.071 --> 00:01:33.191
+Try it yourself — Create a gateway, then an integration, then a route in an app.

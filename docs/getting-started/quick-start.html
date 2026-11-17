@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Quick start · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Quick start</h1>
+<p class="lead">Run the bundled demo and call your first endpoint.</p>
+<figure class="video" data-src="videos/quick-start.mp4" data-poster="images/quick-start.png" data-captions="videos/quick-start.vtt" data-title="Quick start"></figure>
+
+
+<h2>Create your deployment file</h2>
+<p>naimix only serves the apps listed under <code>mounts</code> in <code>deployment.yaml</code>. Without that file the server starts with <b>no routes</b> (and logs a warning). Create it once:</p>
+<pre><code>cp .env.example .env
+cp deployment.yaml.example deployment.yaml</code></pre>
+<p>Then edit <code>deployment.yaml</code> so it points at the bundled demo config and mounts the demo app:</p>
+<pre><code>configDir: config        # resolved against the folder you run npm from
+mounts:
+  - app: default
+    basePath: /</code></pre>
+<p>The file is per-machine and is not committed to Git. See <a href="../guides/apps-and-routes.html#mounting-apps-on-a-server">Mounting apps on a server</a>.</p>
+
+<h2>Start the demo</h2>
+<p>You need two terminals. The first runs a demo backend that exposes the same customer data as JSON, XML, SOAP and SQLite. The second runs naimix itself.</p>
+<pre><code># Terminal 1
+npm run mock-backend
+
+# Terminal 2
+npm run dev</code></pre>
+
+<h2>Call the bundled examples</h2>
+<pre><code>curl http://localhost:4000/api/json/customers/1
+curl http://localhost:4000/api/json/customers
+curl http://localhost:4000/api/xml/customers/2
+curl http://localhost:4000/api/soap/customers/3
+curl http://localhost:4000/api/sql/customers/1
+curl http://localhost:4000/api/sql/customers
+
+curl http://localhost:4000/__endpoints   # what is currently registered
+curl http://localhost:4000/healthz       # status + route count</code></pre>
+<p>All four backends return the same customer shape, because each integration maps its own backend's format onto a common JSON structure.</p>
+
+<h2>Try an authenticated endpoint</h2>
+<pre><code>curl -X POST http://localhost:4000/auth/login/demoLogin \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"demo","password":"demo123"}'
+# → {"token":"&lt;opaque session token&gt;","expiresAt":1234567890000}
+
+curl http://localhost:4000/api/authed/echo \
+  -H 'Authorization: Bearer &lt;token from above&gt;'</code></pre>
+<p>See <a href="../guides/authentication.html">Caller authentication</a> for how this works.</p>
+
+<h2>Open the Developer Console</h2>
+<ol class="steps">
+<li>Set <code>CONSOLE_TOKEN</code> in <code>.env</code> to any random string.</li>
+<li>Restart <code>npm run dev</code>.</li>
+<li>Open <a href="http://localhost:4000/console">http://localhost:4000/console</a> and paste the token when prompted.</li>
+</ol>
+<div class="callout"><p>If <code>CONSOLE_TOKEN</code> is unset, the console API responds <code>503</code> instead of running unauthenticated.</p></div>
+
+<h2>Compiled run and tests</h2>
+<pre><code>npm run build &amp;&amp; npm start   # compiled run of the full app
+npm test                    # automated tests (starts its own mock backend)</code></pre>
+<p>Next: learn <a href="../concepts/how-it-works.html">how naimix is put together</a>, or <a href="../tutorials/index.html">watch a tutorial</a>.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

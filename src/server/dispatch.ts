@@ -32,7 +32,19 @@ export function createDynamicDispatcher(
 ) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const matched = routeRegistry.match(req.method, req.path);
-    if (!matched) return next();
+    if (!matched) {
+      // Debugging aid for "why am I getting 404" -- shows exactly what was
+      // requested next to what this process currently has mounted, so a
+      // stale process / wrong basePath / typo'd path is obvious from the
+      // log instead of just a bare 404 downstream. Noisy on purpose (every
+      // miss, not just this one) since a real 404 for an unrelated path is
+      // just as useful to see while tracking this down.
+      const known = routeRegistry.list().map((r) => `${r.method} ${r.path}`);
+      logger.warn(
+        `No mounted route for ${req.method} ${req.path} -- currently mounted: ${known.join(", ") || "(none)"}`
+      );
+      return next();
+    }
 
     const { endpoint, params: pathParams } = matched;
     Object.assign(req.params, pathParams);

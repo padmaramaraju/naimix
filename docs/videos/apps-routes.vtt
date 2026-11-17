@@ -1,0 +1,28 @@
+WEBVTT
+
+00:00:00.144 --> 00:00:04.865
+Apps group the routes you expose.
+
+00:00:04.865 --> 00:00:10.026
+Open the Developer Console and sign in with your console token.
+
+00:00:10.026 --> 00:00:15.208
+Create an app for a client, for example a partner API.
+
+00:00:15.208 --> 00:00:20.269
+Open the Default App and its Routes tab.
+
+00:00:20.269 --> 00:00:23.216
+Each route is a public method and path pointing at an integration.
+
+00:00:23.216 --> 00:00:29.586
+Add a route: first pick the integration.
+
+00:00:29.586 --> 00:00:38.688
+Then give it an id, a method and a path.
+
+00:00:38.688 --> 00:00:41.094
+The route appears in the list.
+
+00:00:41.094 --> 00:00:45.350
+Remember: an app serves traffic only if deployment.yaml mounts it.

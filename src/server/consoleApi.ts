@@ -369,7 +369,10 @@ export function createConsoleApiRouter({
     asyncHandler(async (req, res) => {
       const app = appRegistry.get(req.params.appId);
       if (!app) return res.status(404).json({ error: "NotFound", message: `No app "${req.params.appId}"` });
-      const { config } = appRegistry.upsert({ ...app, routes: [...app.routes, req.body] });
+      const { config } = appRegistry.upsert(
+        { ...app, routes: [...app.routes, req.body] },
+        { excludeId: app.id }
+      );
       consoleLogger.info(`Added route "${req.body?.id}" to app "${app.id}"`);
       res.status(201).json({ app: config });
     })

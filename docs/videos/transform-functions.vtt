@@ -1,0 +1,34 @@
+WEBVTT
+
+00:00:00.139 --> 00:00:04.846
+Custom functions reshape a value.
+
+00:00:04.846 --> 00:00:09.814
+Open the Developer Console and sign in with your console token.
+
+00:00:09.814 --> 00:00:16.616
+Open an integration and go to Output.
+
+00:00:16.616 --> 00:00:18.412
+On a field, set Transform to Custom function.
+
+00:00:18.412 --> 00:00:22.298
+Choose New function.
+
+00:00:22.298 --> 00:00:26.382
+Write the function: data is this field's value.
+
+00:00:26.382 --> 00:00:32.244
+Test with a sample value.
+
+00:00:32.244 --> 00:00:35.008
+Save. The function is stored in your workspace transforms folder.
+
+00:00:35.008 --> 00:00:47.193
+Now test the integration to see the function applied.
+
+00:00:47.193 --> 00:00:49.724
+There is also a post-process hook on the whole output. Close without saving the integration.
+
+00:00:51.301 --> 00:00:58.518
+The function is saved as plain files.

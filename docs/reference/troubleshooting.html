@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Troubleshooting · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Troubleshooting</h1>
+<p class="lead">Fixes for the problems you are most likely to hit.</p>
+<figure class="video" data-src="videos/troubleshooting.mp4" data-poster="images/troubleshooting.png" data-captions="videos/troubleshooting.vtt" data-title="Troubleshooting"></figure>
+
+
+<h2>Installation</h2>
+<h3><code>npm install</code> fails compiling <code>better-sqlite3</code></h3>
+<p>Errors mention <code>v8::Object</code>, <code>v8::Context</code> or <code>PropertyCallbackInfo</code>. Your Node version is too new.</p>
+<pre><code>nvm use 22
+rm -rf node_modules package-lock.json
+npm install</code></pre>
+<h3><code>ERESOLVE overriding peer dependency</code> warning about <code>esbuild</code></h3>
+<p>Harmless. npm resolved a version mismatch automatically. It is a warning, not an error.</p>
+<h3><code>esbuild: cannot execute binary file</code> or <code>Exec format error</code></h3>
+<p><code>node_modules</code> was installed for a different OS or architecture (for example inside a container). Delete <code>node_modules</code> and reinstall on the machine that runs the build. Do not copy <code>node_modules</code> between machines.</p>
+<h3><code>EBADENGINE</code> warnings</h3>
+<p>Your Node is older than the version in <code>package.json</code>'s <code>engines</code> field, or a dependency raised its own minimum. Run <code>node -v</code> and upgrade with <code>nvm</code>.</p>
+
+<h2>Running</h2>
+<h3>Every route returns 404, or the log says "No mounts found"</h3>
+<p>You have no <code>deployment.yaml</code>, or it has no <code>mounts</code>. Copy <code>deployment.yaml.example</code> and list the apps to serve. See <a href="../guides/apps-and-routes.html#mounting-apps-on-a-server">Mounting apps</a>.</p>
+<h3>A route exists in the console but returns 404</h3>
+<p>The app containing it is not mounted, or the <code>basePath</code> differs from what you are calling. Check <code>GET /__endpoints</code> for what is actually registered.</p>
+<h3>A hand-edited file is ignored</h3>
+<p>A file that fails validation is logged and skipped. Read the server log for <code>Failed to load…</code>. Then click <b>Reload from disk</b> in the console, or restart.</p>
+<h3><code>EADDRINUSE</code></h3>
+<p>Something is already on the port. Change <code>PORT</code>, or stop the other process (a previous <code>npm run dev</code> is the usual cause).</p>
+<h3>Demo endpoints fail with a connection error</h3>
+<p>The mock backend is not running. Start it in another terminal with <code>npm run mock-backend</code>.</p>
+
+<h2>Console</h2>
+<h3>The console returns 503</h3>
+<p><code>CONSOLE_TOKEN</code> is not set. Set it in <code>.env</code> and restart. The same applies to <code>OPS_TOKEN</code> and <code>/ops</code>.</p>
+<h3>The console says unauthorized</h3>
+<p>The saved token does not match. Sign out and enter the current <code>CONSOLE_TOKEN</code>.</p>
+<h3>"Browse folders…" does nothing on Linux</h3>
+<p>Install <code>zenity</code>. See <a href="../getting-started/installation.html">Installation</a>.</p>
+<h3>Deleting a gateway or auth provider is refused (409)</h3>
+<p>Something still references it. The response lists the dependents. Remove or repoint them first.</p>
+<h3>Comments disappeared from <code>gateways.yaml</code></h3>
+<p>Saving through the UI rewrites the file in full. Keep notes elsewhere, or edit by hand and use <b>Reload from disk</b>.</p>
+
+<h2>Authentication</h2>
+<h3>401 on an authenticated route</h3>
+<p>The session expired, was logged out, or the server restarted (sessions are in memory). Log in again. Also confirm you logged in through the provider that the route's gateway requires.</p>
+<h3>LDAP login fails</h3>
+<p>Confirm <code>npm run test-ldap</code> is running, the URL and bind DN are right, and the user exists under <code>searchBase</code>. For Active Directory use <code>(sAMAccountName={username})</code>.</p>
+<h3>OAuth code flow rejects the request</h3>
+<p>The <code>app</code> and <code>return_to</code> must exactly match an entry under the provider's <code>clients</code>. Also check that <code>redirectUri</code> is naimix's own address as registered with the provider.</p>
+
+<h2>Mapping</h2>
+<h3>A field is empty or missing</h3>
+<p>Use <b>Fetch sample response</b> in the Try it panel and check the raw response. For XML, sources start at the outermost tag (<code>$.customer…</code>). For SQL, results are an array, so start <code>$[0]…</code>.</p>
+<h3>XML numbers come back as strings</h3>
+<p>All XML text values are strings. Add <code>transform: toNumber</code> or <code>toBoolean</code>.</p>
+<h3>An XML list returns an object when there is only one item</h3>
+<p>The parser makes an array only for tags that repeat. Ask the backend to wrap single items consistently.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

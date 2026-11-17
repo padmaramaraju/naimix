@@ -20,13 +20,18 @@ export const REDACTED = "••••••••";
  * a field's own key. */
 const NON_SENSITIVE_CONTAINER_KEYS = new Set(["commonParams"]);
 
-/** A field ending in "Path" is, by this codebase's own convention, a
+/** A field ending in "Path" (or "Url" / "Uri", below) is, by this codebase's own convention, a
  * JSONPath expression (e.g. an auth provider's tokenPath/refreshTokenPath),
  * never a literal secret value -- even though its name contains "token"
  * and would otherwise match SENSITIVE_KEY_PATTERN. Excluded so it's neither
  * redacted nor treated as "blank means unchanged". */
 function isSensitiveKey(keyHint: string): boolean {
   if (!keyHint || keyHint.endsWith("Path")) return false;
+  // Likewise a field ending in "Url" / "Uri" is an endpoint address (an auth
+  // provider's tokenUrl, say), not a secret, even though its name contains
+  // "token". An address that embeds a secret should use an ${env.X}
+  // reference, which is shown as-is either way.
+  if (/(Url|Uri)$/.test(keyHint)) return false;
   return SENSITIVE_KEY_PATTERN.test(keyHint);
 }
 

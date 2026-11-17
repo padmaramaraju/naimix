@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Integrations · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Integrations</h1>
+<p class="lead">An integration describes how to call one backend operation and how to reshape its response. It has three parts: <code>input</code>, <code>backend</code> and <code>output</code>.</p>
+<figure class="video" data-src="videos/integrations.mp4" data-poster="images/integrations.png" data-captions="videos/integrations.vtt" data-title="Building an integration"></figure>
+
+
+<h2>Anatomy</h2>
+<pre><code>id: sql-customer-by-id
+description: Fetch a single customer from the demo SQLite database.
+
+input:
+  - name: id
+    in: path            # path | query | header | body | env
+    required: true
+    type: string        # string | number | boolean
+
+backend:
+  type: sql
+  gateway: demoDb
+  query: SELECT id, first_name, last_name, city, status FROM customers WHERE id = :id
+
+output:
+  fields:
+    - target: customerId
+      source: $[0].id
+    - target: name.first
+      source: $[0].first_name
+    - target: location.city
+      source: $[0].city
+    - target: active
+      source: $[0].status
+      transform: toString</code></pre>
+
+<h2>Input parameters</h2>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>name</code></td><td>Parameter name, used as <code>{name}</code> (or <code>:name</code> in SQL).</td></tr>
+<tr><td><code>in</code></td><td><code>path</code>, <code>query</code>, <code>header</code>, <code>body</code>, or <code>env</code>.</td></tr>
+<tr><td><code>required</code></td><td>Missing required input returns a <code>400</code>.</td></tr>
+<tr><td><code>type</code></td><td><code>string</code>, <code>number</code> or <code>boolean</code>.</td></tr>
+<tr><td><code>default</code></td><td>Used when the parameter is absent.</td></tr>
+<tr><td><code>envVar</code></td><td>For <code>in: env</code>: which variable to read. Defaults to <code>name</code>.</td></tr>
+</table>
+<p><b>Environment parameters</b> (<code>in: env</code>) are never read from the caller. They come from the server's own environment, so shared secrets such as a backend API key never reach or get overridden by callers.</p>
+
+<h2>Backend types</h2>
+<h3>json</h3>
+<pre><code>backend:
+  type: json
+  gateway: crmJson
+  url: /customers/{id}
+  method: GET
+  headers: {}
+  query: {}
+  body: null
+  timeoutMs: 10000</code></pre>
+<h3>xml</h3>
+<pre><code>backend:
+  type: xml
+  gateway: crmXml
+  url: /customers/{id}/xml
+  method: GET</code></pre>
+<p>The parsed object mirrors the XML tags, rooted at the outermost tag: <code>&lt;customer&gt;&lt;id&gt;2&lt;/id&gt;&lt;/customer&gt;</code> becomes <code>{ customer: { id: "2" } }</code>, so sources start <code>$.customer…</code>. Attributes get an <code>@_</code> prefix (<code>$.customer['@_id']</code>). All values are strings; add <code>transform: toNumber</code> where needed.</p>
+<div class="callout warn"><p><b>Single-item collections:</b> the parser only produces an array when a tag repeats two or more times. If your backend can return exactly one item, make sure it still wraps it consistently.</p></div>
+<h3>soap</h3>
+<pre><code>backend:
+  type: soap
+  gateway: crmSoap
+  operation: GetCustomer
+  args:
+    CustomerId: "{id}"
+  # endpoint: https://real-service.example.com/CustomerService   # optional override</code></pre>
+<p>Many WSDLs advertise a stale <code>&lt;soap:address&gt;</code>, so the call goes to the WSDL URL with its query string stripped unless you set <code>endpoint</code>.</p>
+<h3>sql</h3>
+<pre><code>backend:
+  type: sql
+  gateway: demoDb
+  query: "SELECT id, first_name FROM customers WHERE id = :id"</code></pre>
+<p>Use named <code>:param</code> bindings matching your input names. For table-wide CRUD, see <a href="crud-generation.html">Generated CRUD endpoints</a>.</p>
+
+<h2>Output mapping</h2>
+<p>The output is one JSON object built from <code>output.fields</code>, evaluated against the whole backend response. Use <code>$[0].field</code> when the backend returns a top-level array, as SQL does.</p>
+<table>
+<tr><th>Field</th><th>Meaning</th></tr>
+<tr><td><code>target</code></td><td>Dot-path in the JSON you return. Supports nesting (<code>name.first</code>) and indices (<code>tags[0]</code>).</td></tr>
+<tr><td><code>source</code></td><td>JSONPath into the backend response.</td></tr>
+<tr><td><code>default</code></td><td>Used when <code>source</code> matches nothing.</td></tr>
+<tr><td><code>transform</code></td><td><code>toString</code>, <code>toNumber</code>, <code>toBoolean</code>, <code>trim</code>, <code>upper</code>, <code>lower</code>, or a <a href="transform-functions.html">custom function</a>.</td></tr>
+</table>
+
+<h3>Arrays</h3>
+<pre><code>output:
+  fields:
+    - kind: array
+      target: customers       # response becomes { "customers": [...] }
+      root: $[*]              # JSONPath selecting the array
+      fields:
+        - target: id
+          source: $.id
+        - target: name
+          source: $.firstName</code></pre>
+<p>A nested array's own <code>root</code> is relative to its parent item, to any depth.</p>
+
+<h2>Validation</h2>
+<p>Config files are validated on load with <code>zod</code>. A malformed file is logged and skipped, so one bad file never takes down every other integration.</p>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

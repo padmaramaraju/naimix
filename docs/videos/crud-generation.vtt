@@ -1,0 +1,22 @@
+WEBVTT
+
+00:00:00.152 --> 00:00:04.876
+Generate endpoints from a database.
+
+00:00:04.876 --> 00:00:09.914
+Open the Developer Console and sign in with your console token.
+
+00:00:09.914 --> 00:00:14.390
+Open a SQL gateway.
+
+00:00:14.390 --> 00:00:17.160
+Scroll to Auto-generate endpoints.
+
+00:00:17.160 --> 00:00:22.931
+Choose the app that should receive the routes, then generate.
+
+00:00:22.931 --> 00:00:25.934
+naimix reports what it created. Existing ids are never overwritten.
+
+00:00:25.934 --> 00:00:33.450
+The new routes now show in the app.

@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Transform functions · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Transform functions</h1>
+<p class="lead">When the built-in transforms are not enough, write a small function to modify one value, add or remove fields, or rewrite a whole mapped result.</p>
+<figure class="video" data-src="videos/transform-functions.mp4" data-poster="images/transform-functions.png" data-captions="videos/transform-functions.vtt" data-title="Custom transform functions"></figure>
+
+
+<h2>Two hook points</h2>
+<table>
+<tr><th>Hook</th><th>Where</th><th>Signature</th></tr>
+<tr><td>Field-level</td><td>A field's <code>transform</code></td><td><code>(value, ctx) =&gt; value | undefined</code>. Returning <code>undefined</code> omits the field.</td></tr>
+<tr><td>Integration-level</td><td><code>output.postProcess</code></td><td><code>(data, ctx) =&gt; data</code>. Runs once on the entire mapped result, after every field is extracted.</td></tr>
+</table>
+<p><code>ctx</code> carries <code>{ item, raw, params }</code>: the current item, the raw backend response, and the resolved input parameters.</p>
+
+<pre><code>output:
+  postProcess:
+    name: addFullName
+  fields:
+    - target: firstName
+      source: $.first
+      transform:
+        kind: function
+        name: titleCase</code></pre>
+
+<h2>Where functions live</h2>
+<p>Functions are real files in the workspace: <code>&lt;workspace&gt;/transforms/&lt;name&gt;.ts</code> (source) and <code>&lt;name&gt;.js</code> (compiled CommonJS, which is what actually runs). Configs refer to them purely by name. Because the workspace is usually its own Git repo, functions travel with integrations and gateways.</p>
+
+<h2>Writing one in the console</h2>
+<ol class="steps">
+<li>Open an integration and go to the <b>Output</b> tab.</li>
+<li>In a field's Transform picker (or the post-process picker), choose <b>+ New function…</b>.</li>
+<li>Name it, write the code, type a sample value, and click <b>Test</b>.</li>
+<li>Save. The function is written to the workspace's <code>transforms/</code> folder and can be reused by name anywhere.</li>
+</ol>
+
+<h2>Rules</h2>
+<ul>
+<li>Functions are <b>pure and synchronous</b>: no <code>async</code>/<code>await</code>, and no network or database calls.</li>
+<li>Deleting a function that an integration still references is refused with a <code>409</code>.</li>
+</ul>
+
+<h2>Dev vs. QA/Production</h2>
+<table>
+<tr><th>Build</th><th>Behavior</th></tr>
+<tr><td><b>Developer Console</b></td><td>Code editor (TypeScript or plain JS) with a <b>Test</b> button that compiles and runs your function against sample input. Changes take effect without a restart.</td></tr>
+<tr><td><b>QA / Production</b></td><td>Functions load once at startup from <code>transforms/*.js</code>. Nothing reloads them. A change requires a restart.</td></tr>
+</table>
+<div class="callout warn"><p><b>Security trade-off:</b> before this feature, pulling workspace changes and reloading could only change data, since YAML cannot execute anything. Now a pull plus restart on QA or Production can run new code. Whoever can push to the workspace repo can change what runs, so protect that branch accordingly.</p></div>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>

@@ -21,7 +21,10 @@ export interface PendingOAuthFlow {
   providerName: string;
   /** PKCE code_verifier generated at /start, sent to the token endpoint at
    * /callback alongside the authorization code. */
-  codeVerifier: string;
+  codeVerifier?: string;
+  /** OIDC nonce sent at /start (only when `openid` was requested); the ID
+   * token returned at /callback must echo it. */
+  nonce?: string;
   /** The registered client app's own id, from /start's `app` param --
    * re-validated at /callback time in case the provider config changed
    * mid-flow (e.g. the app was removed from `clients` after /start ran). */

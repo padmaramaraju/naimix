@@ -1,0 +1,19 @@
+WEBVTT
+
+00:00:00.454 --> 00:00:04.173
+Shipping to QA and production.
+
+00:00:04.173 --> 00:00:13.143
+Dev has the console; QA and production do not.
+
+00:00:13.143 --> 00:00:20.316
+Build the QA bundle. A check runs automatically.
+
+00:00:20.316 --> 00:00:24.992
+And the production bundle.
+
+00:00:24.992 --> 00:00:32.545
+Confirm the developer console is not in the bundle.
+
+00:00:32.610 --> 00:01:02.505
+Start with start:qa or start:prod.

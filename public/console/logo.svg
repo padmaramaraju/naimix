@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+<title>naimix</title>
+<rect width="120" height="120" rx="28" fill="#3b5bdb"/>
+<g fill="none" stroke-linecap="round" stroke-linejoin="round">
+<path d="M14 36 C28 36 30 54 42 56" stroke="#bcd0ff" stroke-width="5" opacity=".9"/>
+<path d="M14 62 C28 62 30 64 42 64" stroke="#bcd0ff" stroke-width="5" opacity=".9"/>
+<path d="M14 90 C28 90 30 74 42 72" stroke="#bcd0ff" stroke-width="5" opacity=".9"/>
+<path d="M44 88 V56 C44 42 53 35 64 35 C77 35 84 43 84 56 V88" stroke="#ffffff" stroke-width="14"/>
+</g></svg>

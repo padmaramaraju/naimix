@@ -1,0 +1,19 @@
+WEBVTT
+
+00:00:00.148 --> 00:00:03.859
+Let's install naimix.
+
+00:00:03.859 --> 00:00:11.193
+You need Node 24 or newer, npm and git.
+
+00:00:11.193 --> 00:00:14.157
+Install the dependencies.
+
+00:00:14.157 --> 00:00:25.308
+Copy the example settings, then compile.
+
+00:00:25.308 --> 00:00:27.871
+Check what you got.
+
+00:00:27.876 --> 00:00:41.077
+Two small settings files and a compiled server.

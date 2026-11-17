@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Workspace & Git · naimix docs</title><link rel="stylesheet" href="../assets/style.css"></head>
+<body><article>
+<h1>Workspace &amp; Git</h1>
+<p class="lead">Each person runs their own naimix instance on their own machine. Teams share work through a Git repo, not through a shared server.</p>
+<figure class="video" data-src="videos/workspace.mp4" data-poster="images/workspace.png" data-captions="videos/workspace.vtt" data-title="The workspace"></figure>
+
+
+<h2>What a workspace is</h2>
+<p>A workspace is any folder with this layout (the same as the project's own <code>config/</code> folder):</p>
+<pre><code>integrations/        # one YAML file per integration
+apps/                # one YAML file per app
+gateways.yaml
+authProviders.yaml
+transforms/          # custom functions (optional)</code></pre>
+<p>The folder must already exist (it is your Git checkout), but the files inside it do not. Each is created the first time you save something.</p>
+
+<h2>Pointing an instance at a workspace</h2>
+<p>In priority order:</p>
+<ol class="steps">
+<li><b>Console UI.</b> Click <b>Change workspace…</b> in the bar under the header, then <b>Browse folders…</b>, navigate to your folder, click <b>Select this folder</b>, and save. You can also type a path. The picker lists folders on the machine running naimix, because browsers do not expose absolute paths. The choice is written to <code>configDir</code> in <code>deployment.yaml</code> and reused on the next start. Integrations and gateways switch over immediately with no restart.</li>
+<li><b>Hand-edit <code>deployment.yaml</code>:</b> set <code>configDir</code>.</li>
+<li><b><code>CONFIG_DIR</code> env var.</b> Handy for a first run or scripted setup.</li>
+<li><b>Legacy variables</b> <code>INTEGRATIONS_DIR</code>, <code>APPS_DIR</code>, <code>GATEWAYS_FILE</code>, <code>AUTH_PROVIDERS_FILE</code>, <code>TRANSFORMS_DIR</code> point at each piece independently.</li>
+</ol>
+<div class="callout warn"><p>Choosing a workspace never changes <code>mounts</code>. Which apps are served, and where, stays a hand-edited decision. If you switch to a workspace whose apps are not mounted, you will get no routes. See <a href="../guides/apps-and-routes.html#mounting-apps-on-a-server">Mounting apps</a>.</p></div>
+
+<h2>Working with Git</h2>
+<p>naimix never runs <code>git</code> for you. Checking out or pulling a workspace, and committing or pushing your changes, is something you do with your usual tools before or after using the app. Two teammates can have different workspaces or branches open at once. Resolving differences is an ordinary Git merge.</p>
+
+<h2>Keeping a checkout self-contained</h2>
+<p>The UI always saves an absolute path. To make a checkout portable, set <code>configDir</code> in <code>deployment.yaml</code> to a relative path such as <code>config</code>. It resolves against the folder you run the app from, so moving the checkout never leaves a stale absolute path.</p>
+
+<h2>Committing safely</h2>
+<ul>
+<li>The shipped <code>config/</code> demo reads every connection detail from <code>${env.*}</code> placeholders, so it is safe to commit.</li>
+<li>If your real <code>gateways.yaml</code> contains a literal credential, do not commit it. Move the credential to an env var (recommended), or add a local-only <code>/config/</code> line to your own <code>.gitignore</code>.</li>
+<li><code>.env</code> and <code>deployment.yaml</code> are already ignored by Git.</li>
+</ul>
+</article><script src="../assets/nav.js" data-root="../"></script></body></html>
